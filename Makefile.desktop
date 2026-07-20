@@ -1,0 +1,281 @@
+# LunarNX Desktop Test Build (macOS)
+#
+# Requires: brew install sdl2 ffmpeg curl openssl
+#
+# Build: make -f Makefile.desktop
+# Run:   ./build/pc/LunarNX_Desktop
+
+CXX      = g++
+CC       = gcc
+SDK_PATH = $(shell xcrun --show-sdk-path)
+COMMON_INCLUDES = -isysroot $(SDK_PATH) \
+		           -I$(SDK_PATH)/usr/include/c++/v1 \
+		           -I$(SDK_PATH)/usr/include \
+		           -I/opt/homebrew/include \
+	           -I/opt/homebrew/include/SDL2 \
+		           -Isrc -Ilib \
+		           -idirafter lib/libpeer/include -idirafter lib/libpeer/include/sys \
+		           -Ilib/libpeer/src \
+	           -Ilib/libpeer/build/dist/include \
+	           -Ilib/libpeer/build/dist/include/srtp2 \
+	           -Ilib/libpeer/third_party/coreHTTP/source/interface
+COMMON_DEFINES = -DPLATFORM_DESKTOP -DCONFIG_USE_LWIP=0 -DCONFIG_IPV6=1 -DCONFIG_USE_USRSCTP=0 \
+		         -DCONFIG_DTLS_USE_ECDSA=1 -DCONFIG_IFACE_PREFIX=\"en0\"
+# ICE diagnostics for sdp_probe / desktop WAN debugging. Override with
+# AGENT_ICE_DEBUG=0 to silence pair/conncheck logs.
+AGENT_ICE_DEBUG ?= 0
+ifeq ($(AGENT_ICE_DEBUG),1)
+COMMON_DEFINES += -DAGENT_ENABLE_DEBUG_LOGS=1
+endif
+CXXFLAGS = -std=gnu++17 -O2 -g -Wall $(COMMON_INCLUDES) $(COMMON_DEFINES)
+CFLAGS   = -O2 $(COMMON_INCLUDES) $(COMMON_DEFINES)
+
+LDFLAGS  = -L/opt/homebrew/lib -Llib/libpeer/build/dist/lib \
+	           -lSDL2 -lavcodec -lavutil -lswresample \
+	           -lopus -lcurl -lmbedtls -lmbedcrypto -lmbedx509 -lsrtp2 \
+	           -lssl -lcrypto \
+           -framework CoreFoundation -framework CoreVideo \
+           -framework Cocoa -framework IOKit
+
+BUILD    = build/pc
+TARGET   = $(BUILD)/LunarNX_Desktop
+
+C_SRCS   = lib/cJSON.c \
+           lib/libpeer/src/address.c lib/libpeer/src/agent.c lib/libpeer/src/base64.c \
+           lib/libpeer/src/dtls_srtp.c lib/libpeer/src/ice.c lib/libpeer/src/mdns.c \
+           lib/libpeer/src/peer_connection.c lib/libpeer/src/peer.c lib/libpeer/src/ports.c \
+           lib/libpeer/src/rtcp.c lib/libpeer/src/rtp.c lib/libpeer/src/sctp.c \
+           lib/libpeer/src/sdp.c lib/libpeer/src/socket.c lib/libpeer/src/stun.c \
+           lib/libpeer/src/ssl_transport.c lib/libpeer/src/utils.c
+
+CXX_SRCS = src/platform/desktop_main.cpp \
+           src/app/ice_candidate_processor.cpp \
+           src/app/stream_controller.cpp \
+           src/app/web_rtc_transport.cpp \
+           src/app/xbox_channel_manager.cpp \
+           src/app/xbox_session_client.cpp \
+           src/app/xbox_stream_session.cpp \
+           src/auth/auth_manager.cpp src/auth/token_store.cpp src/auth/xbox_signing.cpp \
+           src/auth/xbox_auth_errors.cpp \
+           src/api/xbox_api_client.cpp src/api/http_client.cpp \
+           src/platform/network_worker.cpp \
+           src/webrtc/peer_manager.cpp src/webrtc/xbox_input_feedback.cpp \
+           src/stream/stream_backend_provider.cpp src/stream/media_pipeline.cpp \
+           src/stream/audio_packet_reorder.cpp \
+           src/stream/video_decoder.cpp src/stream/audio_decoder.cpp \
+           src/stream/video_renderer.cpp src/stream/audio_player.cpp src/stream/av_sync.cpp \
+           src/stream/software_video_frame.cpp \
+           src/input/gamepad_reader.cpp src/input/xinput_encoder.cpp src/input/rumble_controller.cpp
+
+C_OBJS   = $(C_SRCS:%.c=$(BUILD)/%.o)
+CXX_OBJS = $(CXX_SRCS:%.cpp=$(BUILD)/%.o)
+
+XCLOUD_HANDSHAKE_PROBE_OBJS = $(BUILD)/src/platform/desktop_xcloud_handshake_probe.o \
+                    $(BUILD)/src/auth/auth_manager.o $(BUILD)/src/auth/token_store.o \
+                    $(BUILD)/src/auth/xbox_signing.o \
+                    $(BUILD)/src/auth/xbox_auth_errors.o \
+                    $(BUILD)/src/api/xbox_api_client.o $(BUILD)/src/api/http_client.o \
+                    $(BUILD)/src/app/xbox_session_client.o \
+                    $(BUILD)/src/app/ice_candidate_processor.o \
+                    $(BUILD)/src/webrtc/peer_manager.o \
+                    $(BUILD)/src/webrtc/xbox_input_feedback.o \
+                    $(BUILD)/src/platform/network_worker.o \
+                    $(C_OBJS)
+
+XCLOUD_PROBE_OBJS = $(BUILD)/src/platform/desktop_xcloud_probe.o \
+                    $(BUILD)/src/auth/auth_manager.o $(BUILD)/src/auth/token_store.o \
+                    $(BUILD)/src/auth/xbox_signing.o \
+                    $(BUILD)/src/auth/xbox_auth_errors.o \
+                    $(BUILD)/src/api/xbox_api_client.o $(BUILD)/src/api/http_client.o \
+                    $(BUILD)/lib/cJSON.o
+
+AUTH_TEST_OBJS = $(BUILD)/src/platform/desktop_auth_test.o \
+                 $(BUILD)/src/auth/auth_manager.o $(BUILD)/src/auth/token_store.o \
+                 $(BUILD)/src/auth/xbox_signing.o \
+                 $(BUILD)/src/auth/xbox_auth_errors.o \
+                 $(BUILD)/src/api/xbox_api_client.o $(BUILD)/src/api/http_client.o \
+                 $(BUILD)/lib/cJSON.o
+
+STREAM_TEST_OBJS = $(BUILD)/tests/ice_candidate_processor_test.o \
+	                   $(BUILD)/src/app/ice_candidate_processor.o \
+	                   $(BUILD)/lib/cJSON.o
+
+XCLOUD_TEST_OBJS = $(BUILD)/tests/xcloud_session_support_test.o
+
+H264_RTP_TEST_OBJS = $(BUILD)/tests/h264_rtp_depacketizer_test.o \
+	                   $(BUILD)/lib/libpeer/src/rtp.o
+
+XINPUT_TEST_OBJS = $(BUILD)/tests/xinput_encoder_test.o \
+	                 $(BUILD)/src/input/xinput_encoder.o
+
+FEEDBACK_TEST_OBJS = $(BUILD)/tests/xbox_input_feedback_test.o \
+	                   $(BUILD)/src/webrtc/xbox_input_feedback.o
+
+RTP_CLOCK_TEST_OBJS = $(BUILD)/tests/rtp_clock_mapper_test.o
+
+AUDIO_REORDER_TEST_OBJS = $(BUILD)/tests/audio_packet_reorder_test.o \
+	                        $(BUILD)/src/stream/audio_packet_reorder.o
+
+AUDIO_DECODER_TEST_OBJS = $(BUILD)/tests/audio_decoder_plc_test.o \
+	                        $(BUILD)/src/stream/audio_decoder.o
+
+AUDIO_TIMING_TEST_OBJS = $(BUILD)/tests/audio_timing_test.o
+
+AV_SYNC_TEST_OBJS = $(BUILD)/tests/av_sync_test.o \
+	                  $(BUILD)/src/stream/av_sync.o
+
+STUN_ICE_TEST_OBJS = $(BUILD)/tests/stun_ice_attributes_test.o \
+	                   $(BUILD)/lib/libpeer/src/stun.o \
+	                   $(BUILD)/lib/libpeer/src/address.o \
+	                   $(BUILD)/lib/libpeer/src/utils.o
+
+AUTH_UI_TEST_OBJS = $(BUILD)/tests/auth_ui_test.o \
+	            $(BUILD)/src/ui/qr_code.o \
+	            $(BUILD)/src/auth/xbox_auth_errors.o \
+	            $(BUILD)/lib/cJSON.o
+
+SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
+                 $(BUILD)/src/auth/auth_manager.o $(BUILD)/src/auth/token_store.o \
+                 $(BUILD)/src/auth/xbox_signing.o \
+                 $(BUILD)/src/auth/xbox_auth_errors.o \
+                 $(BUILD)/src/api/xbox_api_client.o $(BUILD)/src/api/http_client.o \
+                 $(BUILD)/src/app/ice_candidate_processor.o \
+                 $(BUILD)/src/webrtc/peer_manager.o \
+                 $(BUILD)/src/webrtc/xbox_input_feedback.o \
+                 $(C_OBJS)
+
+RHO_SRCS = src/rho/rho_main.cpp
+RHO_OBJS = $(RHO_SRCS:%.cpp=$(BUILD)/%.o)
+
+.PHONY: xcloud_session_support_test all clean run auth_test stream_tests h264_rtp_tests rtp_clock_tests input_tests feedback_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
+
+all:  $(TARGET)
+	@echo "=== Desktop Build Complete ==="
+	@ls -lh $(TARGET)
+
+$(TARGET): $(CXX_OBJS) $(C_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $(CXX_OBJS) $(C_OBJS) $(LDFLAGS)
+
+$(BUILD)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -rf $(BUILD)
+
+run: $(TARGET)
+	./$(TARGET)
+
+auth_test: $(AUTH_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/lunar_auth_test $(AUTH_TEST_OBJS) $(LDFLAGS)
+	@echo "=== Auth Test Build Complete ==="
+	@ls -lh $(BUILD)/lunar_auth_test
+
+xcloud_session_support_test: $(XCLOUD_TEST_OBJS)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/$@ $(XCLOUD_TEST_OBJS)
+	$(BUILD)/$@
+
+stream_tests: $(STREAM_TEST_OBJS) h264_rtp_tests xcloud_session_support_test
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/stream_tests $(STREAM_TEST_OBJS)
+	./$(BUILD)/stream_tests
+
+h264_rtp_tests: $(H264_RTP_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -o $(BUILD)/h264_rtp_depacketizer_test $(H264_RTP_TEST_OBJS)
+	./$(BUILD)/h264_rtp_depacketizer_test
+
+input_tests: $(XINPUT_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/xinput_encoder_test $(XINPUT_TEST_OBJS)
+	./$(BUILD)/xinput_encoder_test
+
+feedback_tests: $(FEEDBACK_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/xbox_input_feedback_test $(FEEDBACK_TEST_OBJS)
+	./$(BUILD)/xbox_input_feedback_test
+
+rtp_clock_tests: $(RTP_CLOCK_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/rtp_clock_mapper_test $(RTP_CLOCK_TEST_OBJS)
+	./$(BUILD)/rtp_clock_mapper_test
+
+audio_reorder_tests: $(AUDIO_REORDER_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/audio_packet_reorder_test $(AUDIO_REORDER_TEST_OBJS)
+	./$(BUILD)/audio_packet_reorder_test
+
+audio_decoder_tests: $(AUDIO_DECODER_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/audio_decoder_plc_test $(AUDIO_DECODER_TEST_OBJS) -L/opt/homebrew/lib -lopus
+	./$(BUILD)/audio_decoder_plc_test
+
+audio_timing_tests: $(AUDIO_TIMING_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/audio_timing_test $(AUDIO_TIMING_TEST_OBJS)
+	./$(BUILD)/audio_timing_test
+
+av_sync_tests: $(AV_SYNC_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/av_sync_test $(AV_SYNC_TEST_OBJS)
+	./$(BUILD)/av_sync_test
+
+stun_ice_tests: $(STUN_ICE_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -o $(BUILD)/stun_ice_attributes_test $(STUN_ICE_TEST_OBJS) -Llib/libpeer/build/dist/lib -lmbedcrypto
+	./$(BUILD)/stun_ice_attributes_test
+
+auth_ui_tests: $(AUTH_UI_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/auth_ui_tests $(AUTH_UI_TEST_OBJS)
+	./$(BUILD)/auth_ui_tests
+
+sdp_probe: $(SDP_PROBE_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/sdp_probe $(SDP_PROBE_OBJS) $(LDFLAGS)
+	@echo "=== SDP Probe Build Complete ==="
+	@ls -lh $(BUILD)/sdp_probe
+
+rho: $(RHO_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/rho $(RHO_OBJS) -L/opt/homebrew/lib -lmpv -framework CoreFoundation -framework CoreVideo -framework Cocoa -framework IOKit
+	@echo "=== rho Build Complete ==="
+	@ls -lh $(BUILD)/rho
+
+
+
+
+.PHONY: xcloud_probe
+xcloud_probe: $(BUILD)/xcloud_probe
+
+$(BUILD)/xcloud_probe: $(XCLOUD_PROBE_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -DLUNARNX_CURL_TIMEOUT_MS=120000 -o $@ $(XCLOUD_PROBE_OBJS) $(LDFLAGS)
+	@echo "=== xcloud_probe ready: $@ ==="
+
+
+.PHONY: xcloud_handshake_probe
+xcloud_handshake_probe: $(BUILD)/xcloud_handshake_probe
+
+$(BUILD)/xcloud_handshake_probe: $(XCLOUD_HANDSHAKE_PROBE_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -DLUNARNX_CURL_TIMEOUT_MS=120000 -o $@ $(XCLOUD_HANDSHAKE_PROBE_OBJS) $(LDFLAGS)
+	@echo "=== xcloud_handshake_probe ready: $@ ==="
+
+
+.PHONY: xcloud_stream
+xcloud_stream: $(BUILD)/xcloud_stream
+
+# Full StreamController stack (same as desktop app) with cloud entrypoint.
+XCLOUD_STREAM_OBJS = $(filter-out $(BUILD)/src/platform/desktop_main.o,$(CXX_OBJS))                      $(BUILD)/src/platform/desktop_xcloud_stream.o                      $(C_OBJS)
+
+$(BUILD)/xcloud_stream: $(XCLOUD_STREAM_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -DLUNARNX_CURL_TIMEOUT_MS=120000 -o $@ $(XCLOUD_STREAM_OBJS) $(LDFLAGS)
+	@echo "=== xcloud_stream ready: $@ ==="

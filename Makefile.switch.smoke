@@ -1,0 +1,39 @@
+DEVKITPRO ?= /opt/devkitpro
+DEVKITA64  = $(DEVKITPRO)/devkitA64
+LIBNX      = $(DEVKITPRO)/libnx
+
+CC      = $(DEVKITA64)/bin/aarch64-none-elf-gcc
+OBJCOPY = $(DEVKITA64)/bin/aarch64-none-elf-objcopy
+NACP    = $(DEVKITPRO)/tools/bin/nacptool
+ELF2NRO = $(DEVKITPRO)/tools/bin/elf2nro
+
+ARCH = -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+CFLAGS = $(ARCH) -ffunction-sections -fdata-sections -D__SWITCH__ -O2 -Wall -ftls-model=local-exec
+LDFLAGS = -specs=$(LIBNX)/switch.specs -g $(ARCH)
+INCDIRS = -I$(LIBNX)/include
+LIBDIRS = -L$(LIBNX)/lib
+LIBS = -lnx
+
+BUILD = build/switch-smoke
+TARGET = $(BUILD)/LunarNXSmoke.nro
+
+.PHONY: all clean
+
+all: $(TARGET)
+	@echo "=== Switch Smoke Build Complete ===" && ls -lh $(TARGET)
+
+$(TARGET): $(BUILD)/LunarNXSmoke.elf
+	$(OBJCOPY) -O binary $< $(BUILD)/LunarNXSmoke.bin
+	$(NACP) --create LunarNXSmoke "LunarNX Team" 0.1.0 $(BUILD)/nacp.tmp
+	$(ELF2NRO) $< $@ --nacp=$(BUILD)/nacp.tmp
+
+$(BUILD)/LunarNXSmoke.elf: $(BUILD)/src/tools/switch_smoke.o
+	@mkdir -p $(BUILD)
+	$(CC) $(LDFLAGS) $< $(LIBDIRS) $(LIBS) -o $@
+
+$(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCDIRS) -c $< -o $@
+
+clean:
+	rm -rf $(BUILD)

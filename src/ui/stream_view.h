@@ -1,0 +1,35 @@
+#pragma once
+#ifdef __SWITCH__
+#include <borealis.hpp>
+#include "../app/stream_controller.h"
+#include <thread>
+#include <atomic>
+#include <chrono>
+#include <memory>
+
+namespace lunar::ui {
+
+class StreamView : public brls::Activity {
+public:
+    StreamView(std::shared_ptr<app::StreamController> ctrl);
+    ~StreamView();
+
+    brls::View* createContentView() override;
+
+private:
+    std::shared_ptr<app::StreamController> ctrl_;
+    std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
+    class StreamOverlay* overlay_ = nullptr;
+    class PerfOverlay* perf_overlay_ = nullptr;
+    brls::Box* confirm_box_ = nullptr;
+    std::thread update_thread_;
+    std::atomic<bool> running_{false};
+
+    std::chrono::steady_clock::time_point exit_press_time_;
+    std::atomic<bool> exit_pending_{false};
+
+    void runLoop();
+};
+
+} // namespace lunar::ui
+#endif

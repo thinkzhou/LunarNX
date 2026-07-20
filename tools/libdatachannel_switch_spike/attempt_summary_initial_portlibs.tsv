@@ -1,0 +1,5 @@
+attempt	configure	build	target	build_dir
+no_media_no_websocket_mbedtls	1	NA	datachannel-static	/work/tools/libdatachannel_switch_spike/build/no_media_no_websocket_mbedtls
+media_no_websocket_mbedtls	1	NA	datachannel-static	/work/tools/libdatachannel_switch_spike/build/media_no_websocket_mbedtls
+media_websocket_mbedtls	1	NA	datachannel-static	/work/tools/libdatachannel_switch_spike/build/media_websocket_mbedtls
+no_media_no_websocket_openssl	1	NA	datachannel-static	/work/tools/libdatachannel_switch_spike/build/no_media_no_websocket_openssl

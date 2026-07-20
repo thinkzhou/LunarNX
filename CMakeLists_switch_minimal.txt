@@ -1,0 +1,64 @@
+cmake_minimum_required(VERSION 3.20)
+project(LunarNX_Minimal C CXX)
+
+# Basic Switch toolchain
+set(DEVKITPRO "$ENV{DEVKITPRO}")
+set(DEVKITA64 "${DEVKITPRO}/devkitA64")
+set(CMAKE_SYSTEM_NAME Generic)
+set(CMAKE_SYSTEM_PROCESSOR aarch64)
+set(CMAKE_CROSSCOMPILING ON)
+
+# Compilers
+set(CMAKE_C_COMPILER "${DEVKITA64}/bin/aarch64-none-elf-gcc")
+set(CMAKE_CXX_COMPILER "${DEVKITA64}/bin/aarch64-none-elf-g++")
+set(CMAKE_AR "${DEVKITA64}/bin/aarch64-none-elf-ar")
+set(CMAKE_OBJCOPY "${DEVKITA64}/bin/aarch64-none-elf-objcopy")
+
+# Compiler flags
+set(ARCH_FLAGS "-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE -ftls-model=local-exec")
+set(CMAKE_C_FLAGS "${ARCH_FLAGS} -ffunction-sections -fdata-sections -D__SWITCH__" CACHE STRING "")
+set(CMAKE_CXX_FLAGS "${ARCH_FLAGS} -ffunction-sections -fdata-sections -D__SWITCH__" CACHE STRING "")
+set(CMAKE_EXE_LINKER_FLAGS "-specs=${DEVKITA64}/libnx/switch.specs -Wl,--gc-sections" CACHE STRING "")
+
+# Find libraries
+set(LIBNX_DIR "${DEVKITPRO}/libnx")
+set(PORTLIBS_DIR "${DEVKITPRO}/portlibs/switch")
+
+# The executable
+add_executable(LunarNX_Minimal
+    src/platform/switch_main.cpp
+)
+
+target_include_directories(LunarNX_Minimal PRIVATE
+    "${LIBNX_DIR}/include"
+    "${PORTLIBS_DIR}/include"
+)
+
+target_link_directories(LunarNX_Minimal PRIVATE
+    "${LIBNX_DIR}/lib"
+    "${PORTLIBS_DIR}/lib"
+)
+
+target_link_libraries(LunarNX_Minimal
+    nx
+    mbedtls
+)
+
+# After linking, convert ELF to NRO
+add_custom_command(TARGET LunarNX_Minimal POST_BUILD
+    COMMAND ${DEVKITA64}/bin/aarch64-none-elf-objcopy -O binary
+        $<TARGET_FILE:LunarNX_Minimal>
+        ${CMAKE_BINARY_DIR}/LunarNX.bin
+    COMMAND ${DEVKITPRO}/tools/bin/nacptool --create
+        "LunarNX" "LunarNX Team" "0.1.0"
+        ${CMAKE_BINARY_DIR}/nacp.tmp
+    COMMAND ${DEVKITPRO}/tools/bin/elf2nro
+        $<TARGET_FILE:LunarNX_Minimal>
+        ${CMAKE_BINARY_DIR}/LunarNX.nro
+        --nacp=${CMAKE_BINARY_DIR}/nacp.tmp
+    COMMENT "Creating LunarNX.nro ..."
+)
+
+message(STATUS "Switch minimal build configured")
+message(STATUS "  DEVKITPRO: ${DEVKITPRO}")
+message(STATUS "  LIBNX:     ${LIBNX_DIR}")

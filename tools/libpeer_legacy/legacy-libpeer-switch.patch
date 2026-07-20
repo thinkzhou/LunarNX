@@ -1,0 +1,2751 @@
+diff --git a/src/address.c b/src/address.c
+index 1618ede..67f0bfd 100644
+--- a/src/address.c
++++ b/src/address.c
+@@ -54,6 +54,13 @@ int addr_to_string(const Address* addr, char* buf, size_t len) {
+ }
+ 
+ int addr_equal(const Address* a, const Address* b) {
+-  // TODO
+-  return 1;
++  if (!a || !b || a->family != b->family || a->port != b->port) {
++    return 0;
++  }
++  if (a->family == AF_INET6) {
++    return memcmp(&a->sin6.sin6_addr,
++                  &b->sin6.sin6_addr,
++                  sizeof(a->sin6.sin6_addr)) == 0;
++  }
++  return a->sin.sin_addr.s_addr == b->sin.sin_addr.s_addr;
+ }
+diff --git a/src/agent.c b/src/agent.c
+index 6055e0f..96c9cfa 100644
+--- a/src/agent.c
++++ b/src/agent.c
+@@ -1,6 +1,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <stdarg.h>
+ #include <sys/select.h>
+ #include <unistd.h>
+ 
+@@ -13,14 +14,120 @@
+ #include "utils.h"
+ 
+ #define AGENT_POLL_TIMEOUT 1
+-#define AGENT_CONNCHECK_MAX 1000
+-#define AGENT_CONNCHECK_PERIOD 100
+-#define AGENT_STUN_RECV_MAXTIMES 1000
++#define AGENT_CHECK_PACING_MS 50
++#define AGENT_CHECK_RTO_MS 500
++#define AGENT_CHECK_MAX_RTO_MS 8000
++#define AGENT_CHECK_MAX_RETRANSMISSIONS 6
++#define AGENT_STUN_POLL_TIMEOUT_MS 50
++#define AGENT_STUN_RECV_MAXTIMES 20
++#ifndef AGENT_ENABLE_DEBUG_LOGS
++#define AGENT_ENABLE_DEBUG_LOGS 0
++#endif
++#if AGENT_ENABLE_DEBUG_LOGS
++static void agent_ice_debug_log(const char* format, ...) {
++#ifdef __SWITCH__
++  const char* path = "sdmc:/switch/LunarNX/lunarnx.log";
++#else
++  const char* path = "./lunarnx.log";
++#endif
++  FILE* log = fopen(path, "a");
++  if (!log) {
++    return;
++  }
++  fputs("[DEBUG-ice] ", log);
++  va_list args;
++  va_start(args, format);
++  vfprintf(log, format, args);
++  va_end(args);
++  fputc('\n', log);
++  fclose(log);
++}
++#else
++#define agent_ice_debug_log(...) ((void)0)
++#endif
++static int agent_candidate_pair_index(Agent* agent, IceCandidatePair* pair) {
++  if (!agent || !pair) {
++    return -1;
++  }
++  if (pair < agent->candidate_pairs ||
++      pair >= agent->candidate_pairs + agent->candidate_pairs_num) {
++    return -1;
++  }
++  return (int)(pair - agent->candidate_pairs);
++}
++
++uint64_t agent_candidate_pair_priority(Agent* agent,
++                                       IceCandidate* local,
++                                       IceCandidate* remote) {
++  uint32_t controlling = agent->mode == AGENT_MODE_CONTROLLING
++      ? local->priority
++      : remote->priority;
++  uint32_t controlled = agent->mode == AGENT_MODE_CONTROLLING
++      ? remote->priority
++      : local->priority;
++  uint32_t minimum = controlling < controlled ? controlling : controlled;
++  uint32_t maximum = controlling > controlled ? controlling : controlled;
++  return ((uint64_t)minimum << 32) + (uint64_t)maximum * 2u +
++         (controlling > controlled ? 1u : 0u);
++}
+ 
++static void agent_initialize_candidate_pair(Agent* agent,
++                                            IceCandidatePair* pair,
++                                            IceCandidate* local,
++                                            IceCandidate* remote) {
++  memset(pair, 0, sizeof(*pair));
++  pair->local = local;
++  pair->remote = remote;
++  pair->priority = agent_candidate_pair_priority(agent, local, remote);
++  pair->state = ICE_CANDIDATE_STATE_FROZEN;
++}
++
++static IceCandidatePair* agent_find_candidate_pair(Agent* agent,
++                                                   IceCandidate* local,
++                                                   IceCandidate* remote) {
++  for (int i = 0; i < agent->candidate_pairs_num; i++) {
++    IceCandidatePair* pair = &agent->candidate_pairs[i];
++    if (pair->local == local && pair->remote == remote) {
++      return pair;
++    }
++  }
++  return NULL;
++}
++
++static IceCandidatePair* agent_add_candidate_pair(Agent* agent,
++                                                  IceCandidate* local,
++                                                  IceCandidate* remote) {
++  IceCandidatePair* existing = agent_find_candidate_pair(agent, local, remote);
++  if (existing) {
++    return existing;
++  }
++  if (agent->candidate_pairs_num >= AGENT_MAX_CANDIDATE_PAIRS) {
++    LOGW("ICE candidate-pair limit reached");
++    return NULL;
++  }
++  IceCandidatePair* pair = &agent->candidate_pairs[agent->candidate_pairs_num++];
++  agent_initialize_candidate_pair(agent, pair, local, remote);
++  return pair;
++}
++
++static void agent_recalculate_pair_priorities(Agent* agent) {
++  for (int i = 0; i < agent->candidate_pairs_num; i++) {
++    IceCandidatePair* pair = &agent->candidate_pairs[i];
++    pair->priority = agent_candidate_pair_priority(agent, pair->local, pair->remote);
++  }
++}
+ void agent_clear_candidates(Agent* agent) {
+   agent->local_candidates_count = 0;
+   agent->remote_candidates_count = 0;
+   agent->candidate_pairs_num = 0;
++  agent->selected_pair = NULL;
++  agent->nominated_pair = NULL;
++  agent->last_check_time = 0;
++  agent->debug_pair_logs = 0;
++  agent->debug_select_logs = 0;
++  agent->debug_send_logs = 0;
++  agent->debug_recv_logs = 0;
++  agent->debug_stun_logs = 0;
+ }
+ 
+ int agent_create(Agent* agent) {
+@@ -33,10 +140,11 @@ int agent_create(Agent* agent) {
+ 
+ #if CONFIG_IPV6
+   if ((ret = udp_socket_open(&agent->udp_sockets[1], AF_INET6, 0)) < 0) {
+-    LOGE("Failed to create IPv6 UDP socket.");
+-    return ret;
++    agent->udp_sockets[1].fd = -1;
++    LOGW("IPv6 UDP socket unavailable; continuing with IPv4.");
++  } else {
++    LOGI("create IPv6 UDP socket: %d", agent->udp_sockets[1].fd);
+   }
+-  LOGI("create IPv6 UDP socket: %d", agent->udp_sockets[1].fd);
+ #endif
+ 
+   agent_clear_candidates(agent);
+@@ -57,7 +165,11 @@ void agent_destroy(Agent* agent) {
+ #endif
+ }
+ 
+-static int agent_socket_recv(Agent* agent, Address* addr, uint8_t* buf, int len) {
++static int agent_socket_recv_with_timeout(Agent* agent,
++                                          Address* addr,
++                                          uint8_t* buf,
++                                          int len,
++                                          int timeout_ms) {
+   int ret = -1;
+   int i = 0;
+   int maxfd = -1;
+@@ -70,7 +182,7 @@ static int agent_socket_recv(Agent* agent, Address* addr, uint8_t* buf, int len)
+   };
+ 
+   tv.tv_sec = 0;
+-  tv.tv_usec = AGENT_POLL_TIMEOUT * 1000;
++  tv.tv_usec = timeout_ms * 1000;
+   FD_ZERO(&rfds);
+ 
+   for (i = 0; i < sizeof(addr_type) / sizeof(addr_type[0]); i++) {
+@@ -88,7 +200,10 @@ static int agent_socket_recv(Agent* agent, Address* addr, uint8_t* buf, int len)
+   } else if (ret == 0) {
+     // timeout
+   } else {
+-    for (i = 0; i < 2; i++) {
++    for (i = 0; i < (int)(sizeof(addr_type) / sizeof(addr_type[0])); i++) {
++      if (agent->udp_sockets[i].fd < 0) {
++        continue;
++      }
+       if (FD_ISSET(agent->udp_sockets[i].fd, &rfds)) {
+         memset(buf, 0, len);
+         ret = udp_socket_recvfrom(&agent->udp_sockets[i], addr, buf, len);
+@@ -100,11 +215,19 @@ static int agent_socket_recv(Agent* agent, Address* addr, uint8_t* buf, int len)
+   return ret;
+ }
+ 
++static int agent_socket_recv(Agent* agent, Address* addr, uint8_t* buf, int len) {
++  return agent_socket_recv_with_timeout(agent, addr, buf, len, AGENT_POLL_TIMEOUT);
++}
++
+ static int agent_socket_recv_attempts(Agent* agent, Address* addr, uint8_t* buf, int len, int maxtimes) {
+   int ret = -1;
+   int i = 0;
+   for (i = 0; i < maxtimes; i++) {
+-    if ((ret = agent_socket_recv(agent, addr, buf, len)) != 0) {
++    if ((ret = agent_socket_recv_with_timeout(agent,
++                                              addr,
++                                              buf,
++                                              len,
++                                              AGENT_STUN_POLL_TIMEOUT_MS)) != 0) {
+       break;
+     }
+   }
+@@ -122,6 +245,59 @@ static int agent_socket_send(Agent* agent, Address* addr, const uint8_t* buf, in
+   return -1;
+ }
+ 
++static int agent_has_candidate_address(Agent* agent, const Address* addr) {
++  for (int i = 0; i < agent->local_candidates_count; i++) {
++    const Address* existing = &agent->local_candidates[i].addr;
++    if (existing->family != addr->family || existing->port != addr->port) {
++      continue;
++    }
++    if (addr->family == AF_INET6 &&
++        memcmp(&existing->sin6.sin6_addr,
++               &addr->sin6.sin6_addr,
++               sizeof(addr->sin6.sin6_addr)) == 0) {
++      return 1;
++    }
++    if (addr->family == AF_INET &&
++        existing->sin.sin_addr.s_addr == addr->sin.sin_addr.s_addr) {
++      return 1;
++    }
++  }
++  return 0;
++}
++
++static IceCandidate* agent_find_host_candidate(Agent* agent, int family) {
++  IceCandidate* best = NULL;
++  for (int i = 0; i < agent->local_candidates_count; i++) {
++    IceCandidate* candidate = &agent->local_candidates[i];
++    if (candidate->type == ICE_CANDIDATE_TYPE_HOST &&
++        candidate->addr.family == family &&
++        (!best || candidate->priority > best->priority)) {
++      best = candidate;
++    }
++  }
++  return best;
++}
++
++static int agent_address_is_usable(const Address* addr) {
++  if (!addr || addr->port == 0) {
++    return 0;
++  }
++  if (addr->family == AF_INET6) {
++    return !IN6_IS_ADDR_UNSPECIFIED(&addr->sin6.sin6_addr);
++  }
++  return addr->family == AF_INET &&
++         addr->sin.sin_addr.s_addr != htonl(INADDR_ANY);
++}
++
++static int agent_stun_transaction_matches(const StunMessage* request,
++                                          const StunMessage* response) {
++  const StunHeader* request_header = (const StunHeader*)request->buf;
++  const StunHeader* response_header = (const StunHeader*)response->buf;
++  return memcmp(request_header->transaction_id,
++                response_header->transaction_id,
++                sizeof(request_header->transaction_id)) == 0;
++}
++
+ static int agent_create_host_addr(Agent* agent) {
+   int i, j;
+   const char* iface_prefx[] = {CONFIG_IFACE_PREFIX};
+@@ -171,10 +347,29 @@ static int agent_create_stun_addr(Agent* agent, Address* serv_addr) {
+     return ret;
+   }
+ 
++  recv_msg.size = (size_t)ret;
+   stun_parse_msg_buf(&recv_msg);
++  if (recv_msg.stunclass != STUN_CLASS_RESPONSE ||
++      recv_msg.stunmethod != STUN_METHOD_BINDING ||
++      !agent_stun_transaction_matches(&send_msg, &recv_msg) ||
++      !agent_address_is_usable(&recv_msg.mapped_addr)) {
++    LOGW("Invalid STUN Binding Response");
++    return -1;
++  }
+   memcpy(&bind_addr, &recv_msg.mapped_addr, sizeof(Address));
++  if (agent_has_candidate_address(agent, &bind_addr)) {
++    return ret;
++  }
++  if (agent->local_candidates_count >= AGENT_MAX_CANDIDATES) {
++    LOGW("ICE candidate limit reached");
++    return -1;
++  }
+   IceCandidate* ice_candidate = agent->local_candidates + agent->local_candidates_count++;
+   ice_candidate_create(ice_candidate, agent->local_candidates_count, ICE_CANDIDATE_TYPE_SRFLX, &bind_addr);
++  IceCandidate* host = agent_find_host_candidate(agent, bind_addr.family);
++  if (host) {
++    ice_candidate_set_related_address(ice_candidate, &host->addr);
++  }
+   return ret;
+ }
+ 
+@@ -202,9 +397,12 @@ static int agent_create_turn_addr(Agent* agent, Address* serv_addr, const char*
+     return ret;
+   }
+ 
++  recv_msg.size = (size_t)ret;
+   stun_parse_msg_buf(&recv_msg);
+ 
+-  if (recv_msg.stunclass == STUN_CLASS_ERROR && recv_msg.stunmethod == STUN_METHOD_ALLOCATE) {
++  if (recv_msg.stunclass == STUN_CLASS_ERROR &&
++      recv_msg.stunmethod == STUN_METHOD_ALLOCATE &&
++      agent_stun_transaction_matches(&send_msg, &recv_msg)) {
+     memset(&send_msg, 0, sizeof(send_msg));
+     stun_msg_create(&send_msg, STUN_METHOD_ALLOCATE);
+     stun_msg_write_attr(&send_msg, STUN_ATTR_TYPE_REQUESTED_TRANSPORT, sizeof(attr), (char*)&attr);  // UDP
+@@ -223,13 +421,22 @@ static int agent_create_turn_addr(Agent* agent, Address* serv_addr, const char*
+     return -1;
+   }
+ 
+-  agent_socket_recv_attempts(agent, NULL, recv_msg.buf, sizeof(recv_msg.buf), AGENT_STUN_RECV_MAXTIMES);
++  memset(&recv_msg, 0, sizeof(recv_msg));
++  ret = agent_socket_recv_attempts(agent, NULL, recv_msg.buf, sizeof(recv_msg.buf), AGENT_STUN_RECV_MAXTIMES);
+   if (ret <= 0) {
+     LOGD("Failed to receive TURN Binding Response.");
+     return ret;
+   }
+ 
++  recv_msg.size = (size_t)ret;
+   stun_parse_msg_buf(&recv_msg);
++  if (recv_msg.stunclass != STUN_CLASS_RESPONSE ||
++      recv_msg.stunmethod != STUN_METHOD_ALLOCATE ||
++      !agent_stun_transaction_matches(&send_msg, &recv_msg) ||
++      !agent_address_is_usable(&recv_msg.relayed_addr)) {
++    LOGW("Invalid TURN Allocate Response");
++    return -1;
++  }
+   memcpy(&turn_addr, &recv_msg.relayed_addr, sizeof(Address));
+   IceCandidate* ice_candidate = agent->local_candidates + agent->local_candidates_count++;
+   ice_candidate_create(ice_candidate, agent->local_candidates_count, ICE_CANDIDATE_TYPE_RELAY, &turn_addr);
+@@ -251,18 +458,25 @@ void agent_gather_candidate(Agent* agent, const char* urls, const char* username
+     return;
+   }
+ 
+-  if ((pos = strstr(urls + 5, ":")) == NULL) {
+-    LOGE("Invalid URL");
+-    return;
++  pos = strrchr(urls + 5, ':');
++  size_t hostname_length;
++  if (pos) {
++    port = atoi(pos + 1);
++    if (port <= 0) {
++      LOGE("Cannot parse port");
++      return;
++    }
++    hostname_length = (size_t)(pos - (urls + 5));
++  } else {
++    port = 3478;
++    hostname_length = strlen(urls + 5);
+   }
+-
+-  port = atoi(pos + 1);
+-  if (port <= 0) {
+-    LOGE("Cannot parse port");
++  if (hostname_length == 0 || hostname_length >= sizeof(hostname)) {
++    LOGE("Invalid URL");
+     return;
+   }
+-
+-  snprintf(hostname, pos - urls - 5 + 1, "%s", urls + 5);
++  memcpy(hostname, urls + 5, hostname_length);
++  hostname[hostname_length] = '\0';
+ 
+   for (i = 0; i < sizeof(addr_type) / sizeof(addr_type[0]); i++) {
+     if (ports_resolve_addr(hostname, &resolved_addr) == 0) {
+@@ -287,6 +501,10 @@ void agent_create_ice_credential(Agent* agent) {
+ 
+   utils_random_string(agent->local_ufrag, 4);
+   utils_random_string(agent->local_upwd, 24);
++  agent->tie_breaker = ((uint64_t)(uint32_t)rand() << 32) | (uint32_t)rand();
++  if (agent->tie_breaker == 0) {
++    agent->tie_breaker = 1;
++  }
+ }
+ 
+ void agent_get_local_description(Agent* agent, char* description, int length) {
+@@ -303,7 +521,10 @@ int agent_send(Agent* agent, const uint8_t* buf, int len) {
+   return agent_socket_send(agent, &agent->nominated_pair->remote->addr, buf, len);
+ }
+ 
+-static void agent_create_binding_response(Agent* agent, StunMessage* msg, Address* addr) {
++static void agent_create_binding_response(Agent* agent,
++                                          StunMessage* msg,
++                                          Address* addr,
++                                          const uint32_t transaction_id[3]) {
+   int size = 0;
+   char username[584];
+   char mapped_address[32];
+@@ -311,45 +532,250 @@ static void agent_create_binding_response(Agent* agent, StunMessage* msg, Addres
+   StunHeader* header;
+   stun_msg_create(msg, STUN_CLASS_RESPONSE | STUN_METHOD_BINDING);
+   header = (StunHeader*)msg->buf;
+-  memcpy(header->transaction_id, agent->transaction_id, sizeof(header->transaction_id));
++  memcpy(header->transaction_id, transaction_id, sizeof(header->transaction_id));
+   snprintf(username, sizeof(username), "%s:%s", agent->local_ufrag, agent->remote_ufrag);
+   *((uint32_t*)mask) = htonl(MAGIC_COOKIE);
+-  memcpy(mask + 4, agent->transaction_id, sizeof(agent->transaction_id));
++  memcpy(mask + 4, transaction_id, sizeof(header->transaction_id));
+   size = stun_set_mapped_address(mapped_address, mask, addr);
+   stun_msg_write_attr(msg, STUN_ATTR_TYPE_XOR_MAPPED_ADDRESS, size, mapped_address);
+   stun_msg_write_attr(msg, STUN_ATTR_TYPE_USERNAME, strlen(username), username);
+   stun_msg_finish(msg, STUN_CREDENTIAL_SHORT_TERM, agent->local_upwd, strlen(agent->local_upwd));
+ }
+ 
+-static void agent_create_binding_request(Agent* agent, StunMessage* msg) {
+-  uint64_t tie_breaker = 0;  // always be controlled
++static void agent_create_binding_error(Agent* agent,
++                                       StunMessage* msg,
++                                       uint16_t error_code,
++                                       const uint32_t transaction_id[3]) {
++  uint8_t value[4] = {0, 0, (uint8_t)(error_code / 100), (uint8_t)(error_code % 100)};
++  stun_msg_create(msg, STUN_CLASS_ERROR | STUN_METHOD_BINDING);
++  StunHeader* header = (StunHeader*)msg->buf;
++  memcpy(header->transaction_id, transaction_id, sizeof(header->transaction_id));
++  stun_msg_write_attr(msg, STUN_ATTR_TYPE_ERROR_CODE, sizeof(value), (char*)value);
++  stun_msg_finish(msg, STUN_CREDENTIAL_SHORT_TERM, agent->local_upwd, strlen(agent->local_upwd));
++}
++
++static void agent_create_binding_request(Agent* agent,
++                                         IceCandidatePair* pair,
++                                         int use_candidate,
++                                         StunMessage* msg) {
++  uint32_t priority_network = htonl(pair->local->priority);
++  uint8_t tie_breaker_network[8];
++  for (int i = 0; i < 8; i++) {
++    tie_breaker_network[i] = (uint8_t)(agent->tie_breaker >> (56 - i * 8));
++  }
+   // send binding request
+   stun_msg_create(msg, STUN_CLASS_REQUEST | STUN_METHOD_BINDING);
++  StunHeader* header = (StunHeader*)msg->buf;
++  if (pair->transaction_id[0] == 0 &&
++      pair->transaction_id[1] == 0 &&
++      pair->transaction_id[2] == 0) {
++    pair->transaction_id[0] = (uint32_t)rand();
++    pair->transaction_id[1] = (uint32_t)rand();
++    pair->transaction_id[2] = (uint32_t)rand();
++    if (pair->transaction_id[0] == 0 &&
++        pair->transaction_id[1] == 0 &&
++        pair->transaction_id[2] == 0) {
++      pair->transaction_id[0] = 1;
++    }
++  }
++  memcpy(header->transaction_id,
++         pair->transaction_id,
++         sizeof(pair->transaction_id));
+   char username[584];
+   memset(username, 0, sizeof(username));
+   snprintf(username, sizeof(username), "%s:%s", agent->remote_ufrag, agent->local_ufrag);
+   stun_msg_write_attr(msg, STUN_ATTR_TYPE_USERNAME, strlen(username), username);
+-  stun_msg_write_attr(msg, STUN_ATTR_TYPE_PRIORITY, 4, (char*)&agent->nominated_pair->priority);
++  stun_msg_write_attr(msg, STUN_ATTR_TYPE_PRIORITY, 4, (char*)&priority_network);
+   if (agent->mode == AGENT_MODE_CONTROLLING) {
+-    stun_msg_write_attr(msg, STUN_ATTR_TYPE_USE_CANDIDATE, 0, NULL);
+-    stun_msg_write_attr(msg, STUN_ATTR_TYPE_ICE_CONTROLLING, 8, (char*)&tie_breaker);
++    if (use_candidate) {
++      stun_msg_write_attr(msg, STUN_ATTR_TYPE_USE_CANDIDATE, 0, NULL);
++    }
++    stun_msg_write_attr(msg, STUN_ATTR_TYPE_ICE_CONTROLLING, 8, (char*)tie_breaker_network);
+   } else {
+-    stun_msg_write_attr(msg, STUN_ATTR_TYPE_ICE_CONTROLLED, 8, (char*)&tie_breaker);
++    stun_msg_write_attr(msg, STUN_ATTR_TYPE_ICE_CONTROLLED, 8, (char*)tie_breaker_network);
+   }
++  pair->request_controlling = agent->mode == AGENT_MODE_CONTROLLING;
+   stun_msg_finish(msg, STUN_CREDENTIAL_SHORT_TERM, agent->remote_upwd, strlen(agent->remote_upwd));
+ }
+ 
++static IceCandidate* agent_find_candidate_by_address(IceCandidate* candidates,
++                                                     int count,
++                                                     const Address* addr) {
++  for (int i = 0; i < count; i++) {
++    if (addr_equal(&candidates[i].addr, addr)) {
++      return &candidates[i];
++    }
++  }
++  return NULL;
++}
++
++static IceCandidate* agent_add_remote_peer_reflexive_candidate(Agent* agent,
++                                                               const Address* addr,
++                                                               uint32_t priority) {
++  IceCandidate* existing = agent_find_candidate_by_address(
++      agent->remote_candidates, agent->remote_candidates_count, addr);
++  if (existing) {
++    return existing;
++  }
++  if (agent->remote_candidates_count >= AGENT_MAX_CANDIDATES) {
++    LOGW("ICE remote peer-reflexive candidate limit reached");
++    return NULL;
++  }
++
++  IceCandidate* remote = &agent->remote_candidates[agent->remote_candidates_count++];
++  ice_candidate_create(remote,
++                       agent->remote_candidates_count,
++                       ICE_CANDIDATE_TYPE_PRFLX,
++                       (Address*)addr);
++  if (priority != 0) {
++    remote->priority = priority;
++  }
++
++  for (int i = 0; i < agent->local_candidates_count; i++) {
++    IceCandidate* local = &agent->local_candidates[i];
++    if (local->addr.family == remote->addr.family) {
++      agent_add_candidate_pair(agent, local, remote);
++    }
++  }
++  return remote;
++}
++
++static IceCandidate* agent_add_local_peer_reflexive_candidate(Agent* agent,
++                                                              const Address* addr,
++                                                              IceCandidate* base) {
++  IceCandidate* existing = agent_find_candidate_by_address(
++      agent->local_candidates, agent->local_candidates_count, addr);
++  if (existing) {
++    return existing;
++  }
++  if (agent->local_candidates_count >= AGENT_MAX_CANDIDATES) {
++    LOGW("ICE local peer-reflexive candidate limit reached");
++    return NULL;
++  }
++
++  IceCandidate* local = &agent->local_candidates[agent->local_candidates_count++];
++  ice_candidate_create(local,
++                       agent->local_candidates_count,
++                       ICE_CANDIDATE_TYPE_PRFLX,
++                       (Address*)addr);
++  if (base) {
++    ice_candidate_set_related_address(local, &base->addr);
++  }
++  return local;
++}
++
++static IceCandidatePair* agent_find_pair_for_remote(Agent* agent,
++                                                    IceCandidate* remote) {
++  IceCandidatePair* best = NULL;
++  for (int i = 0; i < agent->candidate_pairs_num; i++) {
++    IceCandidatePair* pair = &agent->candidate_pairs[i];
++    if (pair->remote == remote && (!best || pair->priority > best->priority)) {
++      best = pair;
++    }
++  }
++  return best;
++}
++
++static void agent_regenerate_tie_breaker(Agent* agent) {
++  agent->tie_breaker = ((uint64_t)(uint32_t)rand() << 32) | (uint32_t)rand();
++  if (agent->tie_breaker == 0) {
++    agent->tie_breaker = 1;
++  }
++}
++
++static int agent_send_binding_error(Agent* agent,
++                                    Address* addr,
++                                    uint16_t error_code,
++                                    const uint32_t transaction_id[3]) {
++  StunMessage response;
++  memset(&response, 0, sizeof(response));
++  agent_create_binding_error(agent, &response, error_code, transaction_id);
++  return agent_socket_send(agent, addr, response.buf, response.size);
++}
++
++static int agent_handle_role_conflict(Agent* agent,
++                                      StunMessage* stun_msg,
++                                      Address* addr,
++                                      const uint32_t transaction_id[3]) {
++  const int remote_controlling = stun_msg->ice_controlling != 0;
++  const int remote_controlled = stun_msg->ice_controlled != 0;
++  if (remote_controlling == remote_controlled) {
++    agent_send_binding_error(agent, addr, 400, transaction_id);
++    return -1;
++  }
++
++  if (agent->mode == AGENT_MODE_CONTROLLING && remote_controlling) {
++    if (agent->tie_breaker >= stun_msg->ice_controlling) {
++      agent_send_binding_error(agent, addr, 487, transaction_id);
++      return -1;
++    }
++    agent->mode = AGENT_MODE_CONTROLLED;
++    agent_recalculate_pair_priorities(agent);
++  } else if (agent->mode == AGENT_MODE_CONTROLLED && remote_controlled) {
++    if (agent->tie_breaker < stun_msg->ice_controlled) {
++      agent_send_binding_error(agent, addr, 487, transaction_id);
++      return -1;
++    }
++    agent->mode = AGENT_MODE_CONTROLLING;
++    agent_recalculate_pair_priorities(agent);
++  }
++  return 0;
++}
++
+ void agent_process_stun_request(Agent* agent, StunMessage* stun_msg, Address* addr) {
+-  StunMessage msg;
+-  StunHeader* header;
++  StunMessage response;
++  char addr_string[ADDRSTRLEN];
+   switch (stun_msg->stunmethod) {
+     case STUN_METHOD_BINDING:
+       if (stun_msg_is_valid(stun_msg->buf, stun_msg->size, agent->local_upwd) == 0) {
+-        header = (StunHeader*)stun_msg->buf;
+-        memcpy(agent->transaction_id, header->transaction_id, sizeof(header->transaction_id));
+-        agent_create_binding_response(agent, &msg, addr);
+-        agent_socket_send(agent, addr, msg.buf, msg.size);
++        if (agent->debug_stun_logs < 32) {
++          addr_to_string(addr, addr_string, sizeof(addr_string));
++          agent_ice_debug_log("stun request valid from=%s:%d username=%s",
++                              addr_string, addr ? addr->port : 0, stun_msg->username);
++          agent->debug_stun_logs++;
++        }
++        StunHeader* header = (StunHeader*)stun_msg->buf;
++        if (agent_handle_role_conflict(agent,
++                                       stun_msg,
++                                       addr,
++                                       header->transaction_id) != 0) {
++          break;
++        }
++
++        IceCandidate* remote = agent_add_remote_peer_reflexive_candidate(
++            agent, addr, stun_msg->priority);
++        IceCandidatePair* pair = remote ? agent_find_pair_for_remote(agent, remote) : NULL;
++        if (pair) {
++          if (stun_msg->use_candidate && agent->mode == AGENT_MODE_CONTROLLED) {
++            pair->remote_nomination_pending = 1;
++            if (pair->valid && pair->state == ICE_CANDIDATE_STATE_SUCCEEDED) {
++              pair->nominated = 1;
++              pair->remote_nomination_pending = 0;
++              agent->selected_pair = pair;
++              agent->nominated_pair = pair;
++            }
++          }
++          if (!pair->nominated && pair->state != ICE_CANDIDATE_STATE_SUCCEEDED) {
++            pair->triggered = 1;
++            pair->state = ICE_CANDIDATE_STATE_FROZEN;
++            pair->conncheck = 0;
++            pair->last_check_time = 0;
++            memset(pair->transaction_id, 0, sizeof(pair->transaction_id));
++          }
++        }
++
++        memset(&response, 0, sizeof(response));
++        agent_create_binding_response(agent,
++                                      &response,
++                                      addr,
++                                      header->transaction_id);
++        agent_socket_send(agent, addr, response.buf, response.size);
+         agent->binding_request_time = ports_get_epoch_time();
++      } else if (agent->debug_stun_logs < 32) {
++        addr_to_string(addr, addr_string, sizeof(addr_string));
++        agent_ice_debug_log("stun request invalid from=%s:%d username=%s",
++                            addr_string, addr ? addr->port : 0, stun_msg->username);
++        agent->debug_stun_logs++;
+       }
+       break;
+     default:
+@@ -357,11 +783,79 @@ void agent_process_stun_request(Agent* agent, StunMessage* stun_msg, Address* ad
+   }
+ }
+ 
++static IceCandidatePair* agent_find_pair_by_transaction(Agent* agent,
++                                                        StunMessage* stun_msg) {
++  StunHeader* header = (StunHeader*)stun_msg->buf;
++  for (int i = 0; i < agent->candidate_pairs_num; i++) {
++    if (memcmp(agent->candidate_pairs[i].transaction_id,
++               header->transaction_id,
++               sizeof(agent->candidate_pairs[i].transaction_id)) == 0) {
++      return &agent->candidate_pairs[i];
++    }
++  }
++  return NULL;
++}
++
+ void agent_process_stun_response(Agent* agent, StunMessage* stun_msg) {
++  int valid;
++  IceCandidatePair* pair;
+   switch (stun_msg->stunmethod) {
+     case STUN_METHOD_BINDING:
+-      if (stun_msg_is_valid(stun_msg->buf, stun_msg->size, agent->remote_upwd) == 0) {
+-        agent->nominated_pair->state = ICE_CANDIDATE_STATE_SUCCEEDED;
++      pair = agent_find_pair_by_transaction(agent, stun_msg);
++      valid = stun_msg_is_valid(stun_msg->buf, stun_msg->size, agent->remote_upwd);
++      if (agent->debug_stun_logs < 32) {
++        agent_ice_debug_log("stun response pair=%d valid=%d username=%s",
++                            agent_candidate_pair_index(agent, pair),
++                            valid == 0,
++                            stun_msg->username);
++        agent->debug_stun_logs++;
++      }
++      if (valid == 0 && pair) {
++        const uint32_t response_time = ports_get_epoch_time();
++        const uint32_t measured_rtt = pair->last_check_time > 0
++            ? response_time - pair->last_check_time
++            : 0;
++        if (stun_msg->mapped_addr.family == pair->local->addr.family) {
++          IceCandidate* mapped = agent_add_local_peer_reflexive_candidate(
++              agent, &stun_msg->mapped_addr, pair->local);
++          if (mapped && mapped != pair->local) {
++            IceCandidatePair* mapped_pair = agent_find_candidate_pair(
++                agent, mapped, pair->remote);
++            if (mapped_pair && mapped_pair != pair) {
++              pair->state = ICE_CANDIDATE_STATE_FAILED;
++              pair = mapped_pair;
++            } else {
++              pair->local = mapped;
++              pair->priority = agent_candidate_pair_priority(
++                  agent, pair->local, pair->remote);
++            }
++            for (int i = 0; i < agent->remote_candidates_count; i++) {
++              IceCandidate* remote = &agent->remote_candidates[i];
++              if (remote != pair->remote &&
++                  mapped->addr.family == remote->addr.family) {
++                agent_add_candidate_pair(agent, mapped, remote);
++              }
++            }
++          }
++        }
++        if (measured_rtt > 0) {
++          pair->rtt_ms = measured_rtt;
++        }
++        pair->valid = 1;
++        pair->state = ICE_CANDIDATE_STATE_SUCCEEDED;
++        pair->triggered = 0;
++        if (pair->nomination_pending || pair->remote_nomination_pending) {
++          pair->nominated = 1;
++          pair->nomination_pending = 0;
++          pair->remote_nomination_pending = 0;
++          agent->selected_pair = pair;
++          agent->nominated_pair = pair;
++        } else if (agent->mode == AGENT_MODE_CONTROLLING) {
++          pair->nomination_pending = 1;
++          memset(pair->transaction_id, 0, sizeof(pair->transaction_id));
++          pair->conncheck = 0;
++          pair->last_check_time = 0;
++        }
+       }
+       break;
+     default:
+@@ -369,17 +863,50 @@ void agent_process_stun_response(Agent* agent, StunMessage* stun_msg) {
+   }
+ }
+ 
++static void agent_process_stun_error(Agent* agent, StunMessage* stun_msg) {
++  if (stun_msg->stunmethod != STUN_METHOD_BINDING || stun_msg->error_code != 487) {
++    return;
++  }
++  IceCandidatePair* pair = agent_find_pair_by_transaction(agent, stun_msg);
++  if (!pair || stun_msg_is_valid(stun_msg->buf, stun_msg->size, agent->remote_upwd) != 0) {
++    return;
++  }
++
++  agent->mode = pair->request_controlling
++      ? AGENT_MODE_CONTROLLED
++      : AGENT_MODE_CONTROLLING;
++  agent_regenerate_tie_breaker(agent);
++  agent_recalculate_pair_priorities(agent);
++  pair->triggered = 1;
++  pair->state = ICE_CANDIDATE_STATE_FROZEN;
++  pair->conncheck = 0;
++  pair->last_check_time = 0;
++  memset(pair->transaction_id, 0, sizeof(pair->transaction_id));
++}
++
+ int agent_recv(Agent* agent, uint8_t* buf, int len) {
+   int ret = -1;
+   StunMessage stun_msg;
+   Address addr;
+-
++  char addr_string[ADDRSTRLEN];
+   for (int attempts = 0; attempts < 8; attempts++) {
+     ret = agent_socket_recv(agent, &addr, buf, len);
++    if (ret > 0 && agent->debug_recv_logs < 64) {
++      addr_to_string(&addr, addr_string, sizeof(addr_string));
++      agent_ice_debug_log("recv len=%d from=%s:%d first=0x%02x stun=%d attempt=%d",
++                          ret,
++                          addr_string,
++                          addr.port,
++                          buf[0],
++                          stun_probe(buf, ret) == 0,
++                          attempts);
++      agent->debug_recv_logs++;
++    }
+     if (ret <= 0 || stun_probe(buf, ret) != 0) {
+       return ret;
+     }
+ 
++    memset(&stun_msg, 0, sizeof(stun_msg));
+     memcpy(stun_msg.buf, buf, ret);
+     stun_msg.size = ret;
+     stun_parse_msg_buf(&stun_msg);
+@@ -391,6 +918,7 @@ int agent_recv(Agent* agent, uint8_t* buf, int len) {
+       agent_process_stun_response(agent, &stun_msg);
+       break;
+     case STUN_CLASS_ERROR:
++      agent_process_stun_error(agent, &stun_msg);
+       break;
+     default:
+       break;
+@@ -442,71 +970,231 @@ void agent_set_remote_description(Agent* agent, char* description) {
+ 
+ void agent_update_candidate_pairs(Agent* agent) {
+   int i, j;
++  char local_addr[ADDRSTRLEN];
++  char remote_addr[ADDRSTRLEN];
+   // Please set gather candidates before set remote description
+   for (i = 0; i < agent->local_candidates_count; i++) {
+     for (j = 0; j < agent->remote_candidates_count; j++) {
+       if (agent->local_candidates[i].addr.family == agent->remote_candidates[j].addr.family) {
+-        agent->candidate_pairs[agent->candidate_pairs_num].local = &agent->local_candidates[i];
+-        agent->candidate_pairs[agent->candidate_pairs_num].remote = &agent->remote_candidates[j];
+-        agent->candidate_pairs[agent->candidate_pairs_num].priority = agent->local_candidates[i].priority + agent->remote_candidates[j].priority;
+-        agent->candidate_pairs[agent->candidate_pairs_num].state = ICE_CANDIDATE_STATE_FROZEN;
+-        agent->candidate_pairs_num++;
++        agent_add_candidate_pair(agent,
++                                 &agent->local_candidates[i],
++                                 &agent->remote_candidates[j]);
+       }
+     }
+   }
+   LOGD("candidate pairs num: %d", agent->candidate_pairs_num);
++  agent_ice_debug_log("candidate pairs local=%d remote=%d pairs=%d",
++                      agent->local_candidates_count,
++                      agent->remote_candidates_count,
++                      agent->candidate_pairs_num);
++  for (i = 0; i < agent->candidate_pairs_num && agent->debug_pair_logs < 32; i++) {
++    addr_to_string(&agent->candidate_pairs[i].local->addr, local_addr, sizeof(local_addr));
++    addr_to_string(&agent->candidate_pairs[i].remote->addr, remote_addr, sizeof(remote_addr));
++    agent_ice_debug_log("candidate pair index=%d local=%s:%d remote=%s:%d priority=%u",
++                        i,
++                        local_addr,
++                        agent->candidate_pairs[i].local->addr.port,
++                        remote_addr,
++                        agent->candidate_pairs[i].remote->addr.port,
++                        agent->candidate_pairs[i].priority);
++    agent->debug_pair_logs++;
++  }
+ }
+ 
+-int agent_connectivity_check(Agent* agent) {
++static uint32_t agent_check_retry_delay(const IceCandidatePair* pair) {
++  uint32_t delay = AGENT_CHECK_RTO_MS;
++  for (int attempt = 1;
++       attempt < pair->conncheck && delay < AGENT_CHECK_MAX_RTO_MS;
++       attempt++) {
++    delay *= 2;
++  }
++  if (delay > AGENT_CHECK_MAX_RTO_MS) {
++    delay = AGENT_CHECK_MAX_RTO_MS;
++  }
++  return delay;
++}
++
++static int agent_check_retries_exhausted(const IceCandidatePair* pair) {
++  return pair->conncheck > AGENT_CHECK_MAX_RETRANSMISSIONS;
++}
++
++static IceCandidatePair* agent_highest_priority_triggered_pair(Agent* agent) {
++  IceCandidatePair* best = NULL;
++  for (int i = 0; i < agent->candidate_pairs_num; i++) {
++    IceCandidatePair* pair = &agent->candidate_pairs[i];
++    if (pair->triggered && !pair->nominated &&
++        (!best || pair->priority > best->priority)) {
++      best = pair;
++    }
++  }
++  return best;
++}
++
++static IceCandidatePair* agent_highest_priority_waiting_pair(Agent* agent) {
++  IceCandidatePair* best = NULL;
++  for (int i = 0; i < agent->candidate_pairs_num; i++) {
++    IceCandidatePair* pair = &agent->candidate_pairs[i];
++    if (pair->state == ICE_CANDIDATE_STATE_FROZEN &&
++        (!best || pair->priority > best->priority)) {
++      best = pair;
++    }
++  }
++  return best;
++}
++
++static IceCandidatePair* agent_highest_priority_nomination(Agent* agent,
++                                                            uint32_t now) {
++  if (agent->mode != AGENT_MODE_CONTROLLING) {
++    return NULL;
++  }
++  IceCandidatePair* best = NULL;
++  for (int i = 0; i < agent->candidate_pairs_num; i++) {
++    IceCandidatePair* pair = &agent->candidate_pairs[i];
++    if (!pair->valid || !pair->nomination_pending || pair->nominated) {
++      continue;
++    }
++    if (pair->state == ICE_CANDIDATE_STATE_INPROGRESS &&
++        now - pair->last_check_time < agent_check_retry_delay(pair)) {
++      continue;
++    }
++    if (agent_check_retries_exhausted(pair)) {
++      pair->valid = 0;
++      pair->nomination_pending = 0;
++      pair->state = ICE_CANDIDATE_STATE_FAILED;
++      continue;
++    }
++    if (!best || pair->priority > best->priority) {
++      best = pair;
++    }
++  }
++  return best;
++}
++
++static IceCandidatePair* agent_highest_priority_retry(Agent* agent,
++                                                      uint32_t now) {
++  IceCandidatePair* best = NULL;
++  for (int i = 0; i < agent->candidate_pairs_num; i++) {
++    IceCandidatePair* pair = &agent->candidate_pairs[i];
++    if (pair->state != ICE_CANDIDATE_STATE_INPROGRESS ||
++        pair->nomination_pending ||
++        now - pair->last_check_time < agent_check_retry_delay(pair)) {
++      continue;
++    }
++    if (agent_check_retries_exhausted(pair)) {
++      pair->state = ICE_CANDIDATE_STATE_FAILED;
++      continue;
++    }
++    if (!best || pair->priority > best->priority) {
++      best = pair;
++    }
++  }
++  return best;
++}
++
++static int agent_send_connectivity_check(Agent* agent,
++                                         IceCandidatePair* pair,
++                                         int use_candidate,
++                                         uint32_t now) {
++  char local_addr[ADDRSTRLEN];
+   char addr_string[ADDRSTRLEN];
+-  uint8_t buf[1400];
+   StunMessage msg;
++  if (pair->conncheck == 0 && agent->debug_select_logs < 32) {
++    addr_to_string(&pair->local->addr, local_addr, sizeof(local_addr));
++    addr_to_string(&pair->remote->addr, addr_string, sizeof(addr_string));
++    agent_ice_debug_log("candidate select index=%d local=%s:%d remote=%s:%d priority=%llu nomination=%d",
++                        agent_candidate_pair_index(agent, pair),
++                        local_addr,
++                        pair->local->addr.port,
++                        addr_string,
++                        pair->remote->addr.port,
++                        (unsigned long long)pair->priority,
++                        use_candidate);
++    agent->debug_select_logs++;
++  }
++  memset(&msg, 0, sizeof(msg));
++  agent_create_binding_request(agent, pair, use_candidate, &msg);
++  int send_ret = agent_socket_send(agent, &pair->remote->addr, msg.buf, msg.size);
++  pair->triggered = send_ret < 0;
++  pair->state = ICE_CANDIDATE_STATE_INPROGRESS;
++  pair->last_check_time = now;
++  pair->conncheck++;
++  agent->last_check_time = now;
++
++  if (agent->debug_send_logs < 64) {
++    addr_to_string(&pair->remote->addr, addr_string, sizeof(addr_string));
++    agent_ice_debug_log("conncheck send pair=%d attempt=%d nomination=%d remote=%s:%d len=%zu ret=%d mode=%d local_ufrag_len=%zu remote_ufrag_len=%zu remote_pwd_len=%zu tie_nonzero=%d",
++                        agent_candidate_pair_index(agent, pair),
++                        pair->conncheck,
++                        use_candidate,
++                        addr_string,
++                        pair->remote->addr.port,
++                        msg.size,
++                        send_ret,
++                        agent->mode,
++                        strlen(agent->local_ufrag),
++                        strlen(agent->remote_ufrag),
++                        strlen(agent->remote_upwd),
++                        agent->tie_breaker != 0);
++    agent->debug_send_logs++;
++  }
++  return send_ret;
++}
+ 
+-  if (agent->nominated_pair->state != ICE_CANDIDATE_STATE_INPROGRESS) {
+-    LOGI("nominated pair is not in progress");
+-    return -1;
++static int agent_schedule_connectivity_checks(Agent* agent) {
++  uint32_t now = ports_get_epoch_time();
++  if (agent->last_check_time != 0 &&
++      now - agent->last_check_time < AGENT_CHECK_PACING_MS) {
++    return 0;
+   }
+ 
+-  memset(&msg, 0, sizeof(msg));
++  IceCandidatePair* pair = agent_highest_priority_triggered_pair(agent);
++  int use_candidate = 0;
++  if (!pair) {
++    pair = agent_highest_priority_nomination(agent, now);
++    use_candidate = pair != NULL;
++  }
++  if (!pair) {
++    pair = agent_highest_priority_waiting_pair(agent);
++  }
++  if (!pair) {
++    pair = agent_highest_priority_retry(agent, now);
++  }
++  if (!pair) {
++    return 0;
++  }
++
++  return agent_send_connectivity_check(agent, pair, use_candidate, now);
++}
+ 
+-  if (agent->nominated_pair->conncheck % AGENT_CONNCHECK_PERIOD == 0) {
+-    addr_to_string(&agent->nominated_pair->remote->addr, addr_string, sizeof(addr_string));
+-    LOGD("send binding request to remote ip: %s, port: %d", addr_string, agent->nominated_pair->remote->addr.port);
+-    agent_create_binding_request(agent, &msg);
+-    agent_socket_send(agent, &agent->nominated_pair->remote->addr, msg.buf, msg.size);
++int agent_connectivity_check(Agent* agent) {
++  uint8_t buf[1400];
++  if (agent->selected_pair && agent->selected_pair->nominated) {
++    return 0;
+   }
+ 
++  agent_schedule_connectivity_checks(agent);
+   agent_recv(agent, buf, sizeof(buf));
+ 
+-  if (agent->nominated_pair->state == ICE_CANDIDATE_STATE_SUCCEEDED) {
+-    agent->selected_pair = agent->nominated_pair;
++  if (agent->selected_pair && agent->selected_pair->nominated) {
+     return 0;
+   }
+-
+   return -1;
+ }
+ 
+ int agent_select_candidate_pair(Agent* agent) {
+-  int i;
+-  for (i = 0; i < agent->candidate_pairs_num; i++) {
+-    if (agent->candidate_pairs[i].state == ICE_CANDIDATE_STATE_FROZEN) {
+-      // nominate this pair
+-      agent->nominated_pair = &agent->candidate_pairs[i];
+-      agent->candidate_pairs[i].conncheck = 0;
+-      agent->candidate_pairs[i].state = ICE_CANDIDATE_STATE_INPROGRESS;
+-      return 0;
+-    } else if (agent->candidate_pairs[i].state == ICE_CANDIDATE_STATE_INPROGRESS) {
+-      agent->candidate_pairs[i].conncheck++;
+-      if (agent->candidate_pairs[i].conncheck < AGENT_CONNCHECK_MAX) {
+-        return 0;
+-      }
+-      agent->candidate_pairs[i].state = ICE_CANDIDATE_STATE_FAILED;
+-    } else if (agent->candidate_pairs[i].state == ICE_CANDIDATE_STATE_FAILED) {
+-    } else if (agent->candidate_pairs[i].state == ICE_CANDIDATE_STATE_SUCCEEDED) {
+-      agent->selected_pair = &agent->candidate_pairs[i];
+-      return 0;
++  int active = 0;
++  if (agent->selected_pair && agent->selected_pair->nominated) {
++    agent->nominated_pair = agent->selected_pair;
++    return 0;
++  }
++  if (agent->candidate_pairs_num == 0) {
++    return 0;
++  }
++  for (int i = 0; i < agent->candidate_pairs_num; i++) {
++    if (agent->candidate_pairs[i].state != ICE_CANDIDATE_STATE_FAILED) {
++      active = 1;
++      break;
+     }
+   }
+-  // all candidate pairs are failed
+-  return -1;
++  return active ? 0 : -1;
+ }
+diff --git a/src/agent.h b/src/agent.h
+index 382d5a4..a20382e 100644
+--- a/src/agent.h
++++ b/src/agent.h
+@@ -17,7 +17,7 @@
+ #endif
+ 
+ #ifndef AGENT_MAX_CANDIDATES
+-#define AGENT_MAX_CANDIDATES 10
++#define AGENT_MAX_CANDIDATES 16
+ #endif
+ 
+ #ifndef AGENT_MAX_CANDIDATE_PAIRS
+@@ -70,6 +70,14 @@ struct Agent {
+   int candidate_pairs_num;
+   int use_candidate;
+   uint32_t transaction_id[3];
++  uint64_t tie_breaker;
++  uint32_t last_check_time;
++
++  int debug_pair_logs;
++  int debug_select_logs;
++  int debug_send_logs;
++  int debug_recv_logs;
++  int debug_stun_logs;
+ };
+ 
+ void agent_gather_candidate(Agent* agent, const char* urls, const char* username, const char* credential);
+@@ -96,4 +104,8 @@ void agent_destroy(Agent* agent);
+ 
+ void agent_update_candidate_pairs(Agent* agent);
+ 
++uint64_t agent_candidate_pair_priority(Agent* agent,
++                                       IceCandidate* local,
++                                       IceCandidate* remote);
++
+ #endif  // AGENT_H_
+diff --git a/src/config.h b/src/config.h
+index c655d38..da49367 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -7,6 +7,10 @@
+ #define SCTP_MTU (1200)
+ #define CONFIG_MTU (1300)
+ 
++#ifndef CONFIG_PACKET_BUFFER_SIZE
++#define CONFIG_PACKET_BUFFER_SIZE (2048)
++#endif
++
+ #ifndef CONFIG_USE_LWIP
+ #define CONFIG_USE_LWIP 0
+ #endif
+@@ -50,7 +54,7 @@
+ #endif
+ 
+ #ifndef CONFIG_KEEPALIVE_TIMEOUT
+-#define CONFIG_KEEPALIVE_TIMEOUT 10000
++#define CONFIG_KEEPALIVE_TIMEOUT 30000
+ #endif
+ 
+ #ifndef CONFIG_AUDIO_DURATION
+@@ -61,9 +65,13 @@
+ #define CONFIG_MAX_NALU_SIZE (2 * 1024 * 1024)
+ #endif
+ 
++#ifndef CONFIG_IPV6
+ #define CONFIG_IPV6 0
++#endif
+ // empty will use first active interface
++#ifndef CONFIG_IFACE_PREFIX
+ #define CONFIG_IFACE_PREFIX ""
++#endif
+ 
+ // #define LOG_LEVEL LEVEL_DEBUG
+ #ifndef LOG_REDIRECT
+diff --git a/src/dtls_srtp.c b/src/dtls_srtp.c
+index 4d750e0..1ff0174 100644
+--- a/src/dtls_srtp.c
++++ b/src/dtls_srtp.c
+@@ -60,9 +60,15 @@ static void dtls_srtp_x509_digest(const mbedtls_x509_crt* crt, char* buf) {
+   *(--buf) = '\0';
+ }
+ 
+-// Do not verify CA
++// WebRTC authenticates the self-signed DTLS certificate with the SHA-256
++// fingerprint exchanged in SDP, not with PKIX trust, validity, or usage
++// checks. Keep parsing the certificate here, then enforce the negotiated
++// fingerprint after the handshake completes.
+ static int dtls_srtp_cert_verify(void* data, mbedtls_x509_crt* crt, int depth, uint32_t* flags) {
+-  *flags &= ~(MBEDTLS_X509_BADCERT_NOT_TRUSTED | MBEDTLS_X509_BADCERT_CN_MISMATCH | MBEDTLS_X509_BADCERT_BAD_KEY);
++  (void)data;
++  (void)crt;
++  (void)depth;
++  *flags = 0;
+   return 0;
+ }
+ 
+@@ -144,6 +150,19 @@ static int dtls_srtp_selfsign_cert(DtlsSrtp* dtls_srtp) {
+ 
+ #if CONFIG_MBEDTLS_DEBUG
+ static void dtls_srtp_debug(void* ctx, int level, const char* file, int line, const char* str) {
++#ifdef __SWITCH__
++  FILE* log = fopen("sdmc:/switch/LunarNX/lunarnx.log", "a");
++#else
++  FILE* log = fopen("./lunarnx.log", "a");
++#endif
++  if (log) {
++    fprintf(log, "[DEBUG-mbedtls] level=%d %s:%d: %s",
++            level, file ? file : "?", line, str ? str : "");
++    if (!str || str[0] == '\0' || str[strlen(str) - 1] != '\n') {
++      fputc('\n', log);
++    }
++    fclose(log);
++  }
+   LOGD("%s:%04d: %s", file, line, str);
+ }
+ #endif
+@@ -191,7 +210,7 @@ static void dtls_srtp_key_derivation_cb(void* context,
+                                         mbedtls_tls_prf_types tls_prf_type);
+ #endif
+ 
+-int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data) {
++static int dtls_srtp_configure_ssl(DtlsSrtp* dtls_srtp) {
+ #if !CONFIG_MBEDTLS_2_X
+   static const mbedtls_ssl_srtp_profile default_profiles[] = {
+       MBEDTLS_TLS_SRTP_AES128_CM_HMAC_SHA1_80,
+@@ -201,26 +220,13 @@ int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data) {
+       MBEDTLS_TLS_SRTP_UNSET};
+ #endif
+ 
+-  dtls_srtp->role = role;
+-  dtls_srtp->state = DTLS_SRTP_STATE_INIT;
+-  dtls_srtp->user_data = user_data;
+-  dtls_srtp->udp_send = dtls_srtp_udp_send;
+-  dtls_srtp->udp_recv = dtls_srtp_udp_recv;
+-
+-  mbedtls_ssl_config_init(&dtls_srtp->conf);
+-  mbedtls_ssl_init(&dtls_srtp->ssl);
+-
+-  mbedtls_x509_crt_init(&dtls_srtp->cert);
+-  mbedtls_pk_init(&dtls_srtp->pkey);
+-  mbedtls_entropy_init(&dtls_srtp->entropy);
+-  mbedtls_ctr_drbg_init(&dtls_srtp->ctr_drbg);
+-  dtls_srtp_selfsign_cert(dtls_srtp);
++  int ret;
+ 
+   if (dtls_srtp->role == DTLS_SRTP_ROLE_SERVER) {
+-    mbedtls_ssl_config_defaults(&dtls_srtp->conf,
+-                                MBEDTLS_SSL_IS_SERVER,
+-                                MBEDTLS_SSL_TRANSPORT_DATAGRAM,
+-                                MBEDTLS_SSL_PRESET_DEFAULT);
++    ret = mbedtls_ssl_config_defaults(&dtls_srtp->conf,
++                                      MBEDTLS_SSL_IS_SERVER,
++                                      MBEDTLS_SSL_TRANSPORT_DATAGRAM,
++                                      MBEDTLS_SSL_PRESET_DEFAULT);
+ 
+     mbedtls_ssl_cookie_init(&dtls_srtp->cookie_ctx);
+ 
+@@ -229,10 +235,14 @@ int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data) {
+     mbedtls_ssl_conf_dtls_cookies(&dtls_srtp->conf, NULL, NULL, NULL);
+ 
+   } else {
+-    mbedtls_ssl_config_defaults(&dtls_srtp->conf,
+-                                MBEDTLS_SSL_IS_CLIENT,
+-                                MBEDTLS_SSL_TRANSPORT_DATAGRAM,
+-                                MBEDTLS_SSL_PRESET_DEFAULT);
++    ret = mbedtls_ssl_config_defaults(&dtls_srtp->conf,
++                                      MBEDTLS_SSL_IS_CLIENT,
++                                      MBEDTLS_SSL_TRANSPORT_DATAGRAM,
++                                      MBEDTLS_SSL_PRESET_DEFAULT);
++  }
++  if (ret != 0) {
++    LOGE("mbedtls_ssl_config_defaults failed -0x%.4x", (unsigned int)-ret);
++    return ret;
+   }
+ 
+ #if CONFIG_MBEDTLS_DEBUG
+@@ -246,16 +256,16 @@ int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data) {
+ 
+   mbedtls_ssl_conf_ca_chain(&dtls_srtp->conf, &dtls_srtp->cert, NULL);
+ 
+-  mbedtls_ssl_conf_own_cert(&dtls_srtp->conf, &dtls_srtp->cert, &dtls_srtp->pkey);
++  ret = mbedtls_ssl_conf_own_cert(&dtls_srtp->conf, &dtls_srtp->cert, &dtls_srtp->pkey);
++  if (ret != 0) {
++    LOGE("mbedtls_ssl_conf_own_cert failed -0x%.4x", (unsigned int)-ret);
++    return ret;
++  }
+ 
+   mbedtls_ssl_conf_rng(&dtls_srtp->conf, mbedtls_ctr_drbg_random, &dtls_srtp->ctr_drbg);
+ 
+   mbedtls_ssl_conf_read_timeout(&dtls_srtp->conf, 1000);
+ 
+-  dtls_srtp_x509_digest(&dtls_srtp->cert, dtls_srtp->local_fingerprint);
+-
+-  LOGD("local fingerprint: %s", dtls_srtp->local_fingerprint);
+-
+ #if CONFIG_MBEDTLS_2_X
+   mbedtls_ssl_conf_export_keys_ext_cb(&dtls_srtp->conf,
+                                       dtls_srtp_key_derivation_cb,
+@@ -268,9 +278,60 @@ int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data) {
+ 
+   mbedtls_ssl_conf_cert_req_ca_list(&dtls_srtp->conf, MBEDTLS_SSL_CERT_REQ_CA_LIST_DISABLED);
+ 
+-  mbedtls_ssl_setup(&dtls_srtp->ssl, &dtls_srtp->conf);
++  ret = mbedtls_ssl_setup(&dtls_srtp->ssl, &dtls_srtp->conf);
++  if (ret != 0) {
++    LOGE("mbedtls_ssl_setup failed -0x%.4x", (unsigned int)-ret);
++  }
+ 
+-  return 0;
++  return ret;
++}
++
++int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data) {
++  dtls_srtp->role = role;
++  dtls_srtp->state = DTLS_SRTP_STATE_INIT;
++  dtls_srtp->user_data = user_data;
++  dtls_srtp->udp_send = dtls_srtp_udp_send;
++  dtls_srtp->udp_recv = dtls_srtp_udp_recv;
++
++  mbedtls_ssl_config_init(&dtls_srtp->conf);
++  mbedtls_ssl_init(&dtls_srtp->ssl);
++
++  mbedtls_x509_crt_init(&dtls_srtp->cert);
++  mbedtls_pk_init(&dtls_srtp->pkey);
++  mbedtls_entropy_init(&dtls_srtp->entropy);
++  mbedtls_ctr_drbg_init(&dtls_srtp->ctr_drbg);
++  int ret = dtls_srtp_selfsign_cert(dtls_srtp);
++  if (ret != 0) {
++    return ret;
++  }
++
++  dtls_srtp_x509_digest(&dtls_srtp->cert, dtls_srtp->local_fingerprint);
++  LOGD("local fingerprint: %s", dtls_srtp->local_fingerprint);
++
++  return dtls_srtp_configure_ssl(dtls_srtp);
++}
++
++int dtls_srtp_set_role(DtlsSrtp* dtls_srtp, DtlsSrtpRole role) {
++  if (dtls_srtp->role == role) {
++    return 0;
++  }
++  if (dtls_srtp->state != DTLS_SRTP_STATE_INIT) {
++    LOGE("cannot change DTLS role after handshake has started");
++    return -1;
++  }
++
++  DtlsSrtpRole old_role = dtls_srtp->role;
++  mbedtls_ssl_free(&dtls_srtp->ssl);
++  mbedtls_ssl_config_free(&dtls_srtp->conf);
++  if (old_role == DTLS_SRTP_ROLE_SERVER) {
++    mbedtls_ssl_cookie_free(&dtls_srtp->cookie_ctx);
++  }
++
++  dtls_srtp->role = role;
++  mbedtls_ssl_config_init(&dtls_srtp->conf);
++  mbedtls_ssl_init(&dtls_srtp->ssl);
++
++  return dtls_srtp_configure_ssl(dtls_srtp);
+ }
+ 
+ void dtls_srtp_deinit(DtlsSrtp* dtls_srtp) {
+@@ -428,8 +489,6 @@ static void dtls_srtp_key_derivation_cb(void* context,
+ }
+ 
+ static int dtls_srtp_do_handshake(DtlsSrtp* dtls_srtp) {
+-  int ret;
+-
+   memset(&dtls_srtp->timer, 0, sizeof(dtls_srtp->timer));
+   mbedtls_ssl_set_timer_cb(&dtls_srtp->ssl, &dtls_srtp->timer, dtls_srtp_set_delay, dtls_srtp_get_delay);
+ 
+@@ -439,12 +498,10 @@ static int dtls_srtp_do_handshake(DtlsSrtp* dtls_srtp) {
+ 
+   mbedtls_ssl_set_bio(&dtls_srtp->ssl, dtls_srtp, dtls_srtp->udp_send, dtls_srtp->udp_recv, NULL);
+ 
+-  do {
+-    ret = mbedtls_ssl_handshake(&dtls_srtp->ssl);
+-
+-  } while (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE);
+-
+-  return ret;
++  // Drive one handshake step per peer loop. The UDP callback can legitimately
++  // return WANT_READ while the remote endpoint is retransmitting its flight;
++  // spinning here blocks ICE/media event processing on Switch.
++  return mbedtls_ssl_handshake(&dtls_srtp->ssl);
+ }
+ 
+ static int dtls_srtp_handshake_server(DtlsSrtp* dtls_srtp) {
+@@ -481,7 +538,8 @@ static int dtls_srtp_handshake_client(DtlsSrtp* dtls_srtp) {
+   int ret;
+ 
+   ret = dtls_srtp_do_handshake(dtls_srtp);
+-  if (ret != 0) {
++  if (ret != 0 && ret != MBEDTLS_ERR_SSL_WANT_READ &&
++      ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+     LOGE("failed! mbedtls_ssl_handshake returned -0x%.4x\n\n", (unsigned int)-ret);
+   }
+ 
+@@ -500,6 +558,14 @@ int dtls_srtp_handshake(DtlsSrtp* dtls_srtp, Address* addr) {
+     ret = dtls_srtp_handshake_client(dtls_srtp);
+   }
+ 
++  if (ret == MBEDTLS_ERR_SSL_WANT_READ ||
++      ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
++    return ret;
++  }
++  if (ret != 0) {
++    return ret;
++  }
++
+   const mbedtls_x509_crt* remote_crt;
+   if ((remote_crt = mbedtls_ssl_get_peer_cert(&dtls_srtp->ssl)) != NULL) {
+     dtls_srtp_x509_digest(remote_crt, dtls_srtp->actual_remote_fingerprint);
+@@ -567,18 +633,18 @@ int dtls_srtp_probe(uint8_t* buf) {
+   return (buf[0] == 0x17);
+ }
+ 
+-void dtls_srtp_decrypt_rtp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes) {
+-  srtp_unprotect(dtls_srtp->srtp_in, packet, bytes);
++int dtls_srtp_decrypt_rtp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes) {
++  return srtp_unprotect(dtls_srtp->srtp_in, packet, bytes);
+ }
+ 
+-void dtls_srtp_decrypt_rtcp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes) {
+-  srtp_unprotect_rtcp(dtls_srtp->srtp_in, packet, bytes);
++int dtls_srtp_decrypt_rtcp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes) {
++  return srtp_unprotect_rtcp(dtls_srtp->srtp_in, packet, bytes);
+ }
+ 
+ void dtls_srtp_encrypt_rtp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes) {
+   srtp_protect(dtls_srtp->srtp_out, packet, bytes);
+ }
+ 
+-void dtls_srtp_encrypt_rctp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes) {
+-  srtp_protect_rtcp(dtls_srtp->srtp_out, packet, bytes);
++int dtls_srtp_encrypt_rctp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes) {
++  return srtp_protect_rtcp(dtls_srtp->srtp_out, packet, bytes);
+ }
+diff --git a/src/dtls_srtp.h b/src/dtls_srtp.h
+index 8bfce43..63f7560 100644
+--- a/src/dtls_srtp.h
++++ b/src/dtls_srtp.h
+@@ -81,6 +81,8 @@ typedef struct DtlsSrtp {
+ 
+ int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data);
+ 
++int dtls_srtp_set_role(DtlsSrtp* dtls_srtp, DtlsSrtpRole role);
++
+ void dtls_srtp_deinit(DtlsSrtp* dtls_srtp);
+ 
+ int dtls_srtp_create_cert(DtlsSrtp* dtls_srtp);
+@@ -99,12 +101,12 @@ void dtls_srtp_sctp_to_dtls(DtlsSrtp* dtls_srtp, uint8_t* packet, int bytes);
+ 
+ int dtls_srtp_probe(uint8_t* buf);
+ 
+-void dtls_srtp_decrypt_rtp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes);
++int dtls_srtp_decrypt_rtp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes);
+ 
+-void dtls_srtp_decrypt_rtcp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes);
++int dtls_srtp_decrypt_rtcp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes);
+ 
+ void dtls_srtp_encrypt_rtp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes);
+ 
+-void dtls_srtp_encrypt_rctp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes);
++int dtls_srtp_encrypt_rctp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes);
+ 
+ #endif  // DTLS_SRTP_H_
+diff --git a/src/ice.c b/src/ice.c
+index 756e961..abce36a 100644
+--- a/src/ice.c
++++ b/src/ice.c
+@@ -17,6 +17,8 @@ static uint8_t ice_candidate_type_preference(IceCandidateType type) {
+       return 126;
+     case ICE_CANDIDATE_TYPE_SRFLX:
+       return 100;
++    case ICE_CANDIDATE_TYPE_PRFLX:
++      return 110;
+     case ICE_CANDIDATE_TYPE_RELAY:
+       return 0;
+     default:
+@@ -34,6 +36,7 @@ static void ice_candidate_priority(IceCandidate* candidate) {
+ }
+ 
+ void ice_candidate_create(IceCandidate* candidate, int foundation, IceCandidateType type, Address* addr) {
++  memset(candidate, 0, sizeof(*candidate));
+   memcpy(&candidate->addr, addr, sizeof(Address));
+   candidate->type = type;
+ 
+@@ -46,6 +49,13 @@ void ice_candidate_create(IceCandidate* candidate, int foundation, IceCandidateT
+   snprintf(candidate->transport, sizeof(candidate->transport), "%s", "UDP");
+ }
+ 
++void ice_candidate_set_related_address(IceCandidate* candidate, const Address* addr) {
++  if (!candidate || !addr) {
++    return;
++  }
++  memcpy(&candidate->raddr, addr, sizeof(Address));
++}
++
+ void ice_candidate_to_description(IceCandidate* candidate, char* description, int length) {
+   char addr_string[ADDRSTRLEN];
+   char typ_raddr[128];
+@@ -60,6 +70,9 @@ void ice_candidate_to_description(IceCandidate* candidate, char* description, in
+     case ICE_CANDIDATE_TYPE_SRFLX:
+       snprintf(typ_raddr, sizeof(typ_raddr), "srflx raddr %s rport %d", addr_string, candidate->raddr.port);
+       break;
++    case ICE_CANDIDATE_TYPE_PRFLX:
++      snprintf(typ_raddr, sizeof(typ_raddr), "prflx raddr %s rport %d", addr_string, candidate->raddr.port);
++      break;
+     case ICE_CANDIDATE_TYPE_RELAY:
+       snprintf(typ_raddr, sizeof(typ_raddr), "relay raddr %s rport %d", addr_string, candidate->raddr.port);
+     default:
+@@ -111,6 +124,8 @@ int ice_candidate_from_description(IceCandidate* candidate, char* description, c
+     candidate->type = ICE_CANDIDATE_TYPE_HOST;
+   } else if (strncmp(type, "srflx", 5) == 0) {
+     candidate->type = ICE_CANDIDATE_TYPE_SRFLX;
++  } else if (strncmp(type, "prflx", 5) == 0) {
++    candidate->type = ICE_CANDIDATE_TYPE_PRFLX;
+   } else if (strncmp(type, "relay", 5) == 0) {
+     candidate->type = ICE_CANDIDATE_TYPE_RELAY;
+   } else {
+@@ -118,8 +133,6 @@ int ice_candidate_from_description(IceCandidate* candidate, char* description, c
+     return -1;
+   }
+ 
+-  addr_set_port(&candidate->addr, port);
+-
+   if (strstr(addrstring, "local") != NULL) {
+     if (mdns_resolve_addr(addrstring, &candidate->addr) == 0) {
+       LOGW("Failed to resolve mDNS address");
+@@ -129,5 +142,7 @@ int ice_candidate_from_description(IceCandidate* candidate, char* description, c
+     return -1;
+   }
+ 
++  addr_set_port(&candidate->addr, port);
++
+   return 0;
+ }
+diff --git a/src/ice.h b/src/ice.h
+index 2628a54..1f24d72 100644
+--- a/src/ice.h
++++ b/src/ice.h
+@@ -50,10 +50,21 @@ struct IceCandidatePair {
+   IceCandidate* remote;
+   int conncheck;
+   uint64_t priority;
++  uint32_t transaction_id[3];
++  uint32_t last_check_time;
++  uint32_t rtt_ms;
++  int valid;
++  int nomination_pending;
++  int remote_nomination_pending;
++  int nominated;
++  int triggered;
++  int request_controlling;
+ };
+ 
+ void ice_candidate_create(IceCandidate* ice_candidate, int foundation, IceCandidateType type, Address* addr);
+ 
++void ice_candidate_set_related_address(IceCandidate* ice_candidate, const Address* addr);
++
+ void ice_candidate_to_description(IceCandidate* candidate, char* description, int length);
+ 
+ int ice_candidate_from_description(IceCandidate* candidate, char* description, char* end);
+diff --git a/src/peer_connection.c b/src/peer_connection.c
+index fe0f63e..870337a 100644
+--- a/src/peer_connection.c
++++ b/src/peer_connection.c
+@@ -25,7 +25,7 @@
+ 
+ typedef struct QueuedRtpPacket {
+   int len;
+-  uint8_t data[CONFIG_MTU];
++  uint8_t data[CONFIG_PACKET_BUFFER_SIZE];
+ } QueuedRtpPacket;
+ 
+ #define STATE_CHANGED(pc, curr_state)                                 \
+@@ -48,8 +48,8 @@ struct PeerConnection {
+   void (*on_connected)(void* userdata);
+   void (*on_receiver_packet_loss)(float fraction_loss, uint32_t total_loss, void* user_data);
+ 
+-  uint8_t temp_buf[CONFIG_MTU];
+-  uint8_t agent_buf[CONFIG_MTU];
++  uint8_t temp_buf[CONFIG_PACKET_BUFFER_SIZE];
++  uint8_t agent_buf[CONFIG_PACKET_BUFFER_SIZE];
+   int agent_ret;
+   int b_local_description_created;
+ 
+@@ -68,11 +68,16 @@ struct PeerConnection {
+   int debug_completed_summary_logs;
+   int debug_rtp_logs;
+   int debug_rtp_queue_logs;
++  int debug_video_rtp_logs;
+ 
+   int media_enabled;
+   QueuedRtpPacket rtp_queue[PEER_CONNECTION_RTP_QUEUE_CAPACITY];
+   int rtp_queue_head;
+   int rtp_queue_count;
++  uint32_t rtp_queue_drops;
++  uint32_t rtp_queue_high_watermark;
++  uint32_t srtp_rtp_decrypt_failures;
++  uint32_t srtp_rtcp_decrypt_failures;
+ };
+ 
+ #if PEER_CONNECTION_ENABLE_DEBUG_LOGS
+@@ -99,12 +104,19 @@ static void peer_connection_debug_log(const char* format, ...) {
+ #define peer_connection_debug_log(...) ((void)0)
+ #endif
+ 
++static void peer_connection_note_remote_activity(PeerConnection* pc) {
++  if (pc) {
++    pc->agent.binding_request_time = ports_get_epoch_time();
++  }
++}
++
+ static int peer_connection_enqueue_rtp(PeerConnection* pc, const uint8_t* data, int len) {
+-  if (!pc || !data || len <= 0 || len > CONFIG_MTU) {
++  if (!pc || !data || len <= 0 || len > CONFIG_PACKET_BUFFER_SIZE) {
+     return -1;
+   }
+ 
+   if (pc->rtp_queue_count >= PEER_CONNECTION_RTP_QUEUE_CAPACITY) {
++    pc->rtp_queue_drops++;
+     if (pc->debug_rtp_queue_logs < 16) {
+       peer_connection_debug_log("RTP queue overflow len=%d count=%d",
+                                 len, pc->rtp_queue_count);
+@@ -118,15 +130,110 @@ static int peer_connection_enqueue_rtp(PeerConnection* pc, const uint8_t* data,
+   pc->rtp_queue[index].len = len;
+   memcpy(pc->rtp_queue[index].data, data, len);
+   pc->rtp_queue_count++;
++  if ((uint32_t)pc->rtp_queue_count > pc->rtp_queue_high_watermark) {
++    pc->rtp_queue_high_watermark = (uint32_t)pc->rtp_queue_count;
++  }
+   return 0;
+ }
+ 
++static void peer_connection_debug_video_rtp(PeerConnection* pc,
++                                            const uint8_t* packet,
++                                            int len) {
++#if PEER_CONNECTION_ENABLE_DEBUG_LOGS
++  if (!pc || !packet || len < 12 || pc->debug_video_rtp_logs >= 32) {
++    return;
++  }
++
++  size_t offset = 12 + ((size_t)(packet[0] & 0x0f) * 4);
++  if (offset > (size_t)len) {
++    return;
++  }
++  if (packet[0] & 0x10) {
++    if (offset + 4 > (size_t)len) {
++      return;
++    }
++    size_t extension_words = ((size_t)packet[offset + 2] << 8) |
++                             packet[offset + 3];
++    offset += 4 + extension_words * 4;
++    if (offset > (size_t)len) {
++      return;
++    }
++  }
++
++  size_t payload_size = (size_t)len - offset;
++  if ((packet[0] & 0x20) && payload_size > 0) {
++    uint8_t padding = packet[len - 1];
++    if (padding == 0 || padding > payload_size) {
++      return;
++    }
++    payload_size -= padding;
++  }
++  if (payload_size == 0) {
++    return;
++  }
++
++  const uint8_t* payload = packet + offset;
++  uint8_t nalu_type = payload[0] & 0x1f;
++  uint8_t fu_type = 0;
++  int fu_start = 0;
++  int fu_end = 0;
++  if (nalu_type == 28 && payload_size >= 2) {
++    fu_type = payload[1] & 0x1f;
++    fu_start = (payload[1] & 0x80) != 0;
++    fu_end = (payload[1] & 0x40) != 0;
++  }
++
++  uint16_t sequence = ((uint16_t)packet[2] << 8) | packet[3];
++  uint32_t timestamp = ((uint32_t)packet[4] << 24) |
++                       ((uint32_t)packet[5] << 16) |
++                       ((uint32_t)packet[6] << 8) |
++                       packet[7];
++  peer_connection_debug_log(
++      "video RTP index=%d pt=%u seq=%u ts=%" PRIu32
++      " marker=%d payload=%zu nal=%u fu_type=%u fu_start=%d fu_end=%d"
++      " head=%02x%02x%02x%02x%02x%02x%02x%02x",
++      pc->debug_video_rtp_logs,
++      packet[1] & 0x7f,
++      sequence,
++      timestamp,
++      (packet[1] & 0x80) != 0,
++      payload_size,
++      nalu_type,
++      fu_type,
++      fu_start,
++      fu_end,
++      payload_size > 0 ? payload[0] : 0,
++      payload_size > 1 ? payload[1] : 0,
++      payload_size > 2 ? payload[2] : 0,
++      payload_size > 3 ? payload[3] : 0,
++      payload_size > 4 ? payload[4] : 0,
++      payload_size > 5 ? payload[5] : 0,
++      payload_size > 6 ? payload[6] : 0,
++      payload_size > 7 ? payload[7] : 0);
++  pc->debug_video_rtp_logs++;
++#else
++  (void)pc;
++  (void)packet;
++  (void)len;
++#endif
++}
++
+ static void peer_connection_decode_rtp_packet(PeerConnection* pc, uint8_t* packet, int len) {
+   if (!pc || !packet || len <= 0) {
+     return;
+   }
+ 
+-  dtls_srtp_decrypt_rtp_packet(&pc->dtls_srtp, packet, &len);
++  int decrypt_ret = dtls_srtp_decrypt_rtp_packet(&pc->dtls_srtp, packet, &len);
++  if (decrypt_ret != 0) {
++    pc->srtp_rtp_decrypt_failures++;
++    if (pc->debug_rtp_logs < 64) {
++      peer_connection_debug_log("rtp decrypt failed ret=%d len=%d",
++                                decrypt_ret, len);
++      pc->debug_rtp_logs++;
++    }
++    return;
++  }
++  peer_connection_note_remote_activity(pc);
+   if (pc->debug_rtp_logs < 64) {
+     peer_connection_debug_log("rtp branch after decrypt len=%d first=0x%02x",
+                               len,
+@@ -160,6 +267,7 @@ static void peer_connection_decode_rtp_packet(PeerConnection* pc, uint8_t* packe
+       pc->debug_rtp_logs++;
+     }
+   } else if (ssrc == pc->remote_vssrc) {
++    peer_connection_debug_video_rtp(pc, packet, len);
+     if (pc->debug_rtp_logs < 64) {
+       peer_connection_debug_log("rtp decode video begin len=%d", len);
+       pc->debug_rtp_logs++;
+@@ -189,14 +297,19 @@ static int peer_connection_drain_rtp_queue(PeerConnection* pc, int budget) {
+   return decoded;
+ }
+ 
+-static void peer_connection_outgoing_rtp_packet(uint8_t* data, size_t size, void* user_data) {
++static void peer_connection_outgoing_rtp_packet(uint8_t* data,
++                                                size_t size,
++                                                uint16_t sequence,
++                                                uint32_t timestamp,
++                                                void* user_data) {
++  (void)sequence;
++  (void)timestamp;
+   PeerConnection* pc = (PeerConnection*)user_data;
+   dtls_srtp_encrypt_rtp_packet(&pc->dtls_srtp, data, (int*)&size);
+   agent_send(&pc->agent, data, size);
+ }
+ 
+ static int peer_connection_dtls_srtp_recv(void* ctx, unsigned char* buf, size_t len) {
+-  int recv_max = 0;
+   int ret = -1;
+   DtlsSrtp* dtls_srtp = (DtlsSrtp*)ctx;
+   PeerConnection* pc = (PeerConnection*)dtls_srtp->user_data;
+@@ -221,26 +334,25 @@ static int peer_connection_dtls_srtp_recv(void* ctx, unsigned char* buf, size_t
+     return MBEDTLS_ERR_SSL_WANT_READ;
+   }
+ 
+-  while (recv_max < CONFIG_TLS_READ_TIMEOUT &&
+-         pc->state == PEER_CONNECTION_CONNECTED) {
++  if (pc->state == PEER_CONNECTION_CONNECTED) {
+     ret = agent_recv(&pc->agent, buf, len);
+ 
+     if (ret > 0) {
+       if (pc->debug_dtls_recv_logs < 12) {
+-        peer_connection_debug_log("recv socket len=%d first=0x%02x mbed_len=%zu loops=%d",
+-                                  ret, buf[0], len, recv_max);
++        peer_connection_debug_log("recv socket len=%d first=0x%02x mbed_len=%zu",
++                                  ret, buf[0], len);
+         pc->debug_dtls_recv_logs++;
+       }
+-      break;
+     }
+-
+-    recv_max++;
+   }
+   if (ret <= 0 && pc->debug_dtls_recv_logs < 12) {
+-    peer_connection_debug_log("recv timeout ret=%d loops=%d state=%d", ret, recv_max, pc->state);
++    peer_connection_debug_log("recv would-block ret=%d state=%d", ret, pc->state);
+     pc->debug_dtls_recv_logs++;
+   }
+-  return ret;
++  // mbedTLS DTLS expects a temporary no-data result to be reported as
++  // WANT_READ. Returning EOF or a generic socket error aborts the handshake
++  // before the next peer_connection_loop can service the socket.
++  return ret > 0 ? ret : MBEDTLS_ERR_SSL_WANT_READ;
+ }
+ 
+ static int peer_connection_dtls_srtp_send(void* ctx, const uint8_t* buf, size_t len) {
+@@ -358,10 +470,19 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
+ 
+ void peer_connection_destroy(PeerConnection* pc) {
+   if (pc) {
++    peer_connection_debug_log("destroy begin pc=%p", pc);
++    peer_connection_debug_log("destroy sctp begin");
+     sctp_destroy_association(&pc->sctp);
++    peer_connection_debug_log("destroy sctp done");
++    peer_connection_debug_log("destroy dtls begin");
+     dtls_srtp_deinit(&pc->dtls_srtp);
++    peer_connection_debug_log("destroy dtls done");
++    peer_connection_debug_log("destroy agent begin");
+     agent_destroy(&pc->agent);
++    peer_connection_debug_log("destroy agent done");
++    peer_connection_debug_log("destroy free begin");
+     free(pc);
++    peer_connection_debug_log("destroy free done");
+     pc = NULL;
+   }
+ }
+@@ -421,6 +542,41 @@ void peer_connection_set_media_enabled(PeerConnection* pc, int enabled) {
+   peer_connection_debug_log("media enabled=%d", pc->media_enabled);
+ }
+ 
++void peer_connection_get_media_stats(PeerConnection* pc, PeerConnectionMediaStats* stats) {
++  if (!stats) {
++    return;
++  }
++  memset(stats, 0, sizeof(*stats));
++  if (!pc) {
++    return;
++  }
++
++  RtpDecoderStats video_stats;
++  RtpDecoderStats audio_stats;
++  rtp_decoder_get_stats(&pc->vrtp_decoder, &video_stats);
++  rtp_decoder_get_stats(&pc->artp_decoder, &audio_stats);
++
++  stats->video_rtp_packets = video_stats.packets;
++  stats->audio_rtp_packets = audio_stats.packets;
++  stats->video_rtp_sequence_gaps = video_stats.sequence_gaps;
++  stats->audio_rtp_sequence_gaps = audio_stats.sequence_gaps;
++  stats->video_rtp_missing_packets = video_stats.missing_packets;
++  stats->audio_rtp_missing_packets = audio_stats.missing_packets;
++  stats->video_h264_frames = video_stats.frames;
++  stats->video_h264_corrupt_frames = video_stats.corrupt_frames;
++  stats->video_h264_unsupported_nalus = video_stats.unsupported_nalus;
++  stats->video_h264_overflow_frames = video_stats.overflow_frames;
++  stats->video_h264_max_frame_bytes = video_stats.max_frame_bytes;
++  stats->rtp_queue_drops = pc->rtp_queue_drops;
++  stats->rtp_queue_high_watermark = pc->rtp_queue_high_watermark;
++  stats->srtp_rtp_decrypt_failures = pc->srtp_rtp_decrypt_failures;
++  stats->srtp_rtcp_decrypt_failures = pc->srtp_rtcp_decrypt_failures;
++  IceCandidatePair* selected_pair = pc->agent.nominated_pair
++      ? pc->agent.nominated_pair
++      : pc->agent.selected_pair;
++  stats->ice_rtt_ms = selected_pair ? selected_pair->rtt_ms : 0;
++}
++
+ int peer_connection_create_datachannel(PeerConnection* pc, DecpChannelType channel_type, uint16_t priority, uint32_t reliability_parameter, char* label, char* protocol) {
+   return peer_connection_create_datachannel_sid(pc, channel_type, priority, reliability_parameter, label, protocol, 0);
+ }
+@@ -476,7 +632,10 @@ int peer_connection_create_datachannel_sid(PeerConnection* pc, DecpChannelType c
+   return rtrn;
+ }
+ 
+-static char* peer_connection_dtls_role_setup_value(DtlsSrtpRole d) {
++static char* peer_connection_dtls_role_setup_value(DtlsSrtpRole d, SdpType sdp_type) {
++  if (sdp_type == SDP_TYPE_OFFER) {
++    return "a=setup:actpass";
++  }
+   return d == DTLS_SRTP_ROLE_SERVER ? "a=setup:passive" : "a=setup:active";
+ }
+ 
+@@ -520,6 +679,9 @@ int peer_connection_loop(PeerConnection* pc) {
+         }
+ 
+         STATE_CHANGED(pc, PEER_CONNECTION_COMPLETED);
++      } else if (handshake_ret != MBEDTLS_ERR_SSL_WANT_READ &&
++                 handshake_ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
++        LOGE("DTLS handshake failed ret=-0x%.4x", (unsigned int)-handshake_ret);
+       }
+       break;
+     }
+@@ -554,7 +716,20 @@ int peer_connection_loop(PeerConnection* pc) {
+         if (rtcp_probe(pc->agent_buf, pc->agent_ret)) {
+           rtcp_packets++;
+           LOGD("Got RTCP packet");
+-          dtls_srtp_decrypt_rtcp_packet(&pc->dtls_srtp, pc->agent_buf, &pc->agent_ret);
++          int decrypt_ret = dtls_srtp_decrypt_rtcp_packet(&pc->dtls_srtp,
++                                                          pc->agent_buf,
++                                                          &pc->agent_ret);
++          if (decrypt_ret != 0) {
++            pc->srtp_rtcp_decrypt_failures++;
++            if (pc->debug_completed_recv_logs < 32) {
++              peer_connection_debug_log("rtcp decrypt failed ret=%d len=%d",
++                                        decrypt_ret,
++                                        pc->agent_ret);
++              pc->debug_completed_recv_logs++;
++            }
++            continue;
++          }
++          peer_connection_note_remote_activity(pc);
+           peer_connection_incoming_rtcp(pc, pc->agent_buf, pc->agent_ret);
+ 
+         } else if (dtls_srtp_probe(pc->agent_buf)) {
+@@ -568,6 +743,7 @@ int peer_connection_loop(PeerConnection* pc) {
+ 
+           if (ret > 0) {
+             dtls_read_positive++;
++            peer_connection_note_remote_activity(pc);
+             sctp_incoming_data(&pc->sctp, (char*)pc->temp_buf, ret);
+           } else {
+             dtls_read_nonpositive++;
+@@ -585,6 +761,7 @@ int peer_connection_loop(PeerConnection* pc) {
+               break;
+             }
+             dtls_read_positive++;
++            peer_connection_note_remote_activity(pc);
+             sctp_incoming_data(&pc->sctp, (char*)pc->temp_buf, ret);
+           }
+ 
+@@ -598,13 +775,6 @@ int peer_connection_loop(PeerConnection* pc) {
+                                       pc->agent_buf[0]);
+             pc->debug_rtp_logs++;
+           }
+-          if (!pc->media_enabled) {
+-            if (pc->debug_rtp_logs < 64) {
+-              peer_connection_debug_log("drop RTP while media disabled len=%d", pc->agent_ret);
+-              pc->debug_rtp_logs++;
+-            }
+-            continue;
+-          }
+           if (peer_connection_enqueue_rtp(pc, pc->agent_buf, pc->agent_ret) < 0) {
+             if (pc->debug_rtp_queue_logs < 16) {
+               peer_connection_debug_log("RTP enqueue failed len=%d count=%d",
+@@ -663,6 +833,7 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
+   char* val_start = NULL;
+   uint32_t* ssrc = NULL;
+   DtlsSrtpRole role = DTLS_SRTP_ROLE_SERVER;
++  int role_found = 0;
+   int is_update = 0;
+   Agent* agent = &pc->agent;
+ 
+@@ -673,6 +844,10 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
+ 
+     if (strstr(buf, "a=setup:passive")) {
+       role = DTLS_SRTP_ROLE_CLIENT;
++      role_found = 1;
++    } else if (strstr(buf, "a=setup:active")) {
++      role = DTLS_SRTP_ROLE_SERVER;
++      role_found = 1;
+     }
+ 
+     if (strstr(buf, "a=fingerprint")) {
+@@ -703,6 +878,13 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
+     return;
+   }
+ 
++  if (type == SDP_TYPE_ANSWER && role_found &&
++      dtls_srtp_set_role(&pc->dtls_srtp, role) != 0) {
++    LOGE("Failed to apply negotiated DTLS role");
++    STATE_CHANGED(pc, PEER_CONNECTION_FAILED);
++    return;
++  }
++
+   agent_set_remote_description(&pc->agent, (char*)sdp);
+   if (type == SDP_TYPE_ANSWER) {
+     agent_update_candidate_pairs(&pc->agent);
+@@ -748,7 +930,7 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
+   sdp_append(pc->sdp, "a=ice-ufrag:%s", pc->agent.local_ufrag);
+   sdp_append(pc->sdp, "a=ice-pwd:%s", pc->agent.local_upwd);
+   sdp_append(pc->sdp, "a=fingerprint:sha-256 %s", pc->dtls_srtp.local_fingerprint);
+-  sdp_append(pc->sdp, peer_connection_dtls_role_setup_value(role));
++  sdp_append(pc->sdp, peer_connection_dtls_role_setup_value(role, sdp_type));
+ 
+   if (pc->config.video_codec == CODEC_H264) {
+     sdp_append_h264(pc->sdp);
+@@ -782,10 +964,12 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
+   }
+ 
+   agent_get_local_description(&pc->agent, description, sizeof(pc->temp_buf));
+-  sdp_append(pc->sdp, description);
++  if (sdp_type == SDP_TYPE_ANSWER) {
++    sdp_append(pc->sdp, description);
++  }
+ 
+   if (pc->onicecandidate) {
+-    pc->onicecandidate(pc->sdp, pc->config.user_data);
++    pc->onicecandidate(description, pc->config.user_data);
+   }
+ 
+   return pc->sdp;
+@@ -803,15 +987,30 @@ const char* peer_connection_create_answer(PeerConnection* pc) {
+ }
+ 
+ int peer_connection_send_rtcp_pil(PeerConnection* pc, uint32_t ssrc) {
+-  int ret = -1;
++  if (!pc || pc->state != PEER_CONNECTION_COMPLETED) {
++    return -1;
++  }
++
++  uint32_t media_ssrc = ssrc ? ssrc : pc->remote_vssrc;
++  if (media_ssrc == 0) {
++    return -1;
++  }
++
+   uint8_t plibuf[128];
+-  rtcp_get_pli(plibuf, 12, ssrc);
++  int size = rtcp_get_pli(plibuf, 12, 1, media_ssrc);
++  if (size < 0) {
++    return size;
++  }
+ 
+-  // TODO: encrypt rtcp packet
+-  // guint size = 12;
+-  // dtls_transport_encrypt_rctp_packet(pc->dtls_transport, plibuf, &size);
+-  // ret = nice_agent_send(pc->nice_agent, pc->stream_id, pc->component_id, size, (gchar*)plibuf);
++  int protect_ret = dtls_srtp_encrypt_rctp_packet(&pc->dtls_srtp, plibuf, &size);
++  if (protect_ret != srtp_err_status_ok) {
++    peer_connection_debug_log("PLI SRTCP protect failed ret=%d", protect_ret);
++    return -1;
++  }
+ 
++  int ret = agent_send(&pc->agent, plibuf, size);
++  peer_connection_debug_log("PLI sent media_ssrc=%" PRIu32 " bytes=%d ret=%d",
++                            media_ssrc, size, ret);
+   return ret;
+ }
+ 
+@@ -891,11 +1090,13 @@ int peer_connection_add_ice_candidate(PeerConnection* pc, char* candidate) {
+       if (exists) {
+         continue;
+       }
+-      agent->candidate_pairs[agent->candidate_pairs_num].local = &agent->local_candidates[i];
+-      agent->candidate_pairs[agent->candidate_pairs_num].remote = &agent->remote_candidates[remote_idx];
+-      agent->candidate_pairs[agent->candidate_pairs_num].priority =
+-          agent->local_candidates[i].priority + agent->remote_candidates[remote_idx].priority;
+-      agent->candidate_pairs[agent->candidate_pairs_num].state = ICE_CANDIDATE_STATE_FROZEN;
++      IceCandidatePair* pair = &agent->candidate_pairs[agent->candidate_pairs_num];
++      memset(pair, 0, sizeof(*pair));
++      pair->local = &agent->local_candidates[i];
++      pair->remote = &agent->remote_candidates[remote_idx];
++      pair->priority = agent_candidate_pair_priority(
++          agent, pair->local, pair->remote);
++      pair->state = ICE_CANDIDATE_STATE_FROZEN;
+       agent->candidate_pairs_num++;
+     }
+   }
+diff --git a/src/peer_connection.h b/src/peer_connection.h
+index 9d3e900..1cbb258 100644
+--- a/src/peer_connection.h
++++ b/src/peer_connection.h
+@@ -70,14 +70,22 @@ typedef struct IceServer {
+ } IceServer;
+ 
+ typedef struct PeerConfiguration {
+-  IceServer ice_servers[5];
++  IceServer ice_servers[7];
+ 
+   MediaCodec audio_codec;
+   MediaCodec video_codec;
+   DataChannelType datachannel;
+ 
+-  void (*onaudiotrack)(uint8_t* data, size_t size, void* userdata);
+-  void (*onvideotrack)(uint8_t* data, size_t size, void* userdata);
++  void (*onaudiotrack)(uint8_t* data,
++                       size_t size,
++                       uint16_t sequence,
++                       uint32_t timestamp,
++                       void* userdata);
++  void (*onvideotrack)(uint8_t* data,
++                       size_t size,
++                       uint16_t sequence,
++                       uint32_t timestamp,
++                       void* userdata);
+   void (*on_request_keyframe)(void* userdata);
+   void* user_data;
+ 
+@@ -85,6 +93,25 @@ typedef struct PeerConfiguration {
+ 
+ typedef struct PeerConnection PeerConnection;
+ 
++typedef struct PeerConnectionMediaStats {
++  uint32_t video_rtp_packets;
++  uint32_t audio_rtp_packets;
++  uint32_t video_rtp_sequence_gaps;
++  uint32_t audio_rtp_sequence_gaps;
++  uint32_t video_rtp_missing_packets;
++  uint32_t audio_rtp_missing_packets;
++  uint32_t video_h264_frames;
++  uint32_t video_h264_corrupt_frames;
++  uint32_t video_h264_unsupported_nalus;
++  uint32_t video_h264_overflow_frames;
++  uint32_t video_h264_max_frame_bytes;
++  uint32_t rtp_queue_drops;
++  uint32_t rtp_queue_high_watermark;
++  uint32_t srtp_rtp_decrypt_failures;
++  uint32_t srtp_rtcp_decrypt_failures;
++  uint32_t ice_rtt_ms;
++} PeerConnectionMediaStats;
++
+ const char* peer_connection_state_to_string(PeerConnectionState state);
+ 
+ PeerConnectionState peer_connection_get_state(PeerConnection* pc);
+@@ -119,10 +146,14 @@ int peer_connection_is_datachannel_connected(PeerConnection* pc);
+ 
+ void peer_connection_set_media_enabled(PeerConnection* pc, int enabled);
+ 
++void peer_connection_get_media_stats(PeerConnection* pc, PeerConnectionMediaStats* stats);
++
+ int peer_connection_send_audio(PeerConnection* pc, const uint8_t* packet, size_t bytes);
+ 
+ int peer_connection_send_video(PeerConnection* pc, const uint8_t* packet, size_t bytes);
+ 
++int peer_connection_send_rtcp_pil(PeerConnection* pc, uint32_t ssrc);
++
+ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp, SdpType sdp_type);
+ 
+ void peer_connection_set_local_description(PeerConnection* pc, const char* sdp, SdpType sdp_type);
+diff --git a/src/ports.c b/src/ports.c
+index 2346f60..350c51e 100644
+--- a/src/ports.c
++++ b/src/ports.c
+@@ -4,6 +4,10 @@
+ #include <sys/types.h>
+ #include <unistd.h>
+ 
++#ifdef __SWITCH__
++#include <switch.h>
++#endif
++
+ #include "config.h"
+ 
+ #if CONFIG_USE_LWIP
+@@ -21,9 +25,63 @@
+ #include "ports.h"
+ #include "utils.h"
+ 
++#ifdef __SWITCH__
++static int switch_get_ipv6_source_addr(Address* addr) {
++  int fd = socket(AF_INET6, SOCK_DGRAM, 0);
++  if (fd < 0) {
++    return 0;
++  }
++
++  struct sockaddr_in6 route_probe;
++  memset(&route_probe, 0, sizeof(route_probe));
++  route_probe.sin6_family = AF_INET6;
++  route_probe.sin6_port = htons(53);
++  if (inet_pton(AF_INET6, "2001:4860:4860::8888",
++                &route_probe.sin6_addr) != 1 ||
++      connect(fd, (struct sockaddr*)&route_probe, sizeof(route_probe)) < 0) {
++    close(fd);
++    return 0;
++  }
++
++  struct sockaddr_in6 local;
++  socklen_t local_len = sizeof(local);
++  memset(&local, 0, sizeof(local));
++  if (getsockname(fd, (struct sockaddr*)&local, &local_len) < 0) {
++    close(fd);
++    return 0;
++  }
++  close(fd);
++
++  if (IN6_IS_ADDR_UNSPECIFIED(&local.sin6_addr) ||
++      IN6_IS_ADDR_LOOPBACK(&local.sin6_addr) ||
++      IN6_IS_ADDR_LINKLOCAL(&local.sin6_addr)) {
++    return 0;
++  }
++  memcpy(&addr->sin6.sin6_addr, &local.sin6_addr, sizeof(local.sin6_addr));
++  addr->sin6.sin6_scope_id = local.sin6_scope_id;
++  return 1;
++}
++#endif
++
+ int ports_get_host_addr(Address* addr, const char* iface_prefix) {
+   int ret = 0;
+ 
++#ifdef __SWITCH__
++  (void)iface_prefix;
++  if (addr->family == AF_INET6) {
++    return switch_get_ipv6_source_addr(addr);
++  }
++  if (addr->family == AF_INET) {
++    u32 current_addr = 0;
++    Result rc = nifmGetCurrentIpAddress(&current_addr);
++    if (R_SUCCEEDED(rc) && current_addr != 0) {
++      addr->sin.sin_addr.s_addr = current_addr;
++      return 1;
++    }
++  }
++  return 0;
++#endif
++
+ #if CONFIG_USE_LWIP
+   struct netif* netif;
+   int i;
+@@ -69,6 +127,16 @@ int ports_get_host_addr(Address* addr, const char* iface_prefix) {
+       continue;
+     }
+ 
++    if (ifa->ifa_addr->sa_family == AF_INET6) {
++      const struct sockaddr_in6* candidate =
++          (const struct sockaddr_in6*)ifa->ifa_addr;
++      if (IN6_IS_ADDR_UNSPECIFIED(&candidate->sin6_addr) ||
++          IN6_IS_ADDR_LOOPBACK(&candidate->sin6_addr) ||
++          IN6_IS_ADDR_LINKLOCAL(&candidate->sin6_addr)) {
++        continue;
++      }
++    }
++
+     if (iface_prefix && strlen(iface_prefix) > 0) {
+       if (strncmp(ifa->ifa_name, iface_prefix, strlen(iface_prefix)) != 0) {
+         continue;
+diff --git a/src/rtcp.c b/src/rtcp.c
+index 117b58c..c02df71 100644
+--- a/src/rtcp.c
++++ b/src/rtcp.c
+@@ -6,24 +6,28 @@
+ #include "rtp.h"
+ 
+ int rtcp_probe(uint8_t* packet, size_t size) {
+-  if (size < 8)
+-    return -1;
++  if (size < 8 || packet == NULL)
++    return 0;
++
++  if (packet[0] < 128 || packet[0] > 191)
++    return 0;
+ 
+-  RtpHeader* header = (RtpHeader*)packet;
+-  return ((header->type >= 64) && (header->type < 96));
++  return packet[1] >= 192 && packet[1] <= 223;
+ }
+ 
+-int rtcp_get_pli(uint8_t* packet, int len, uint32_t ssrc) {
++int rtcp_get_pli(uint8_t* packet, int len, uint32_t sender_ssrc, uint32_t media_ssrc) {
+   if (packet == NULL || len != 12)
+     return -1;
+ 
+   memset(packet, 0, len);
+-  RtcpHeader* rtcp_header = (RtcpHeader*)packet;
+-  rtcp_header->version = 2;
+-  rtcp_header->type = RTCP_PSFB;
+-  rtcp_header->rc = 1;
+-  rtcp_header->length = htons((len / 4) - 1);
+-  memcpy(packet + 8, &ssrc, 4);
++  packet[0] = 0x81;  // V=2, P=0, FMT=PLI(1)
++  packet[1] = RTCP_PSFB;
++  uint16_t length = htons((len / 4) - 1);
++  memcpy(packet + 2, &length, sizeof(length));
++  sender_ssrc = htonl(sender_ssrc);
++  media_ssrc = htonl(media_ssrc);
++  memcpy(packet + 4, &sender_ssrc, sizeof(sender_ssrc));
++  memcpy(packet + 8, &media_ssrc, sizeof(media_ssrc));
+ 
+   return 12;
+ }
+diff --git a/src/rtcp.h b/src/rtcp.h
+index f888d05..9aeba87 100644
+--- a/src/rtcp.h
++++ b/src/rtcp.h
+@@ -73,7 +73,7 @@ typedef struct RtcpFb {
+ 
+ int rtcp_probe(uint8_t* packet, size_t size);
+ 
+-int rtcp_get_pli(uint8_t* packet, int len, uint32_t ssrc);
++int rtcp_get_pli(uint8_t* packet, int len, uint32_t sender_ssrc, uint32_t media_ssrc);
+ 
+ int rtcp_get_fir(uint8_t* packet, int len, int* seqnr);
+ 
+diff --git a/src/rtp.c b/src/rtp.c
+index ea46c69..e4ab645 100644
+--- a/src/rtp.c
++++ b/src/rtp.c
+@@ -96,12 +96,58 @@ static uint32_t rtp_timestamp(uint8_t* packet, size_t size) {
+   return rtp_read_u32(packet + 4);
+ }
+ 
++static void rtp_emit_encoded_packet(RtpEncoder* rtp_encoder, size_t size) {
++  if (!rtp_encoder->on_packet) {
++    return;
++  }
++  rtp_encoder->on_packet(rtp_encoder->buf,
++                         size,
++                         rtp_sequence(rtp_encoder->buf, size),
++                         rtp_timestamp(rtp_encoder->buf, size),
++                         rtp_encoder->user_data);
++}
++
++static int rtp_note_sequence(RtpDecoder* rtp_decoder, uint16_t seq) {
++  if (!rtp_decoder->h264_have_last_seq) {
++    rtp_decoder->h264_last_seq = seq;
++    rtp_decoder->h264_have_last_seq = 1;
++    return 0;
++  }
++
++  uint16_t expected = (uint16_t)(rtp_decoder->h264_last_seq + 1);
++  if (seq == expected) {
++    rtp_decoder->h264_last_seq = seq;
++    return 0;
++  }
++
++  rtp_decoder->stats.sequence_gaps++;
++  uint16_t missing = (uint16_t)(seq - expected);
++  if (missing < 0x8000) {
++    rtp_decoder->stats.missing_packets += missing;
++  }
++  rtp_decoder->h264_last_seq = seq;
++  return 1;
++}
++
+ int rtp_packet_validate(uint8_t* packet, size_t size) {
+-  if (size < 12)
++  if (size < 12 || packet == NULL)
+     return 0;
+ 
+-  RtpHeader* rtp_header = (RtpHeader*)packet;
+-  return ((rtp_header->type < 64) || (rtp_header->type >= 96));
++  /*
++   * RFC5764 demux: RTP/RTCP packets have a first byte in 128..191.
++   * DTLS is 20..63 and STUN is 0..3, so reject those before touching SRTP.
++   */
++  if (packet[0] < 128 || packet[0] > 191)
++    return 0;
++
++  /*
++   * RTCP packet types occupy 192..223 in the second byte.  Keep them out of
++   * the RTP path so SRTCP is unprotected with srtp_unprotect_rtcp().
++   */
++  if (packet[1] >= 192 && packet[1] <= 223)
++    return 0;
++
++  return 1;
+ }
+ 
+ uint32_t rtp_get_ssrc(uint8_t* packet) {
+@@ -132,7 +178,7 @@ static int rtp_encoder_encode_h264_single(RtpEncoder* rtp_encoder, uint8_t* buf,
+ #endif
+ 
+   memcpy(rtp_packet->payload, buf, size);
+-  rtp_encoder->on_packet(rtp_encoder->buf, size + sizeof(RtpHeader), rtp_encoder->user_data);
++  rtp_emit_encoded_packet(rtp_encoder, size + sizeof(RtpHeader));
+   return 0;
+ }
+ 
+@@ -173,14 +219,15 @@ static int rtp_encoder_encode_h264_fu_a(RtpEncoder* rtp_encoder, uint8_t* buf, s
+       fu_header->e = 1;
+       rtp_packet->header.markerbit = 1;
+       memcpy(rtp_packet->payload + sizeof(NaluHeader) + sizeof(FuHeader), buf, size);
+-      rtp_encoder->on_packet(rtp_encoder->buf, size + sizeof(RtpHeader) + sizeof(NaluHeader) + sizeof(FuHeader), rtp_encoder->user_data);
++      rtp_emit_encoded_packet(rtp_encoder,
++                              size + sizeof(RtpHeader) + sizeof(NaluHeader) + sizeof(FuHeader));
+       break;
+     }
+ 
+     fu_header->e = 0;
+ 
+     memcpy(rtp_packet->payload + sizeof(NaluHeader) + sizeof(FuHeader), buf, FU_PAYLOAD_SIZE);
+-    rtp_encoder->on_packet(rtp_encoder->buf, CONFIG_MTU, rtp_encoder->user_data);
++    rtp_emit_encoded_packet(rtp_encoder, CONFIG_MTU);
+     size -= FU_PAYLOAD_SIZE;
+     buf += FU_PAYLOAD_SIZE;
+ 
+@@ -241,7 +288,7 @@ static int rtp_encoder_encode_generic(RtpEncoder* rtp_encoder, uint8_t* buf, siz
+   rtp_header->ssrc = htonl(rtp_encoder->ssrc);
+   memcpy(rtp_encoder->buf + sizeof(RtpHeader), buf, size);
+ 
+-  rtp_encoder->on_packet(rtp_encoder->buf, size + sizeof(RtpHeader), rtp_encoder->user_data);
++  rtp_emit_encoded_packet(rtp_encoder, size + sizeof(RtpHeader));
+ 
+   return 0;
+ }
+@@ -306,6 +353,7 @@ static void h264_begin_frame(RtpDecoder* rtp_decoder, uint32_t timestamp) {
+ static int h264_append_bytes(RtpDecoder* rtp_decoder, const uint8_t* data, size_t size) {
+   if (rtp_decoder->h264_frame_offset + size > CONFIG_MAX_NALU_SIZE) {
+     rtp_decoder->h264_frame_corrupt = 1;
++    rtp_decoder->stats.overflow_frames++;
+     return -1;
+   }
+   memcpy(rtp_decoder->h264_frame_buf + rtp_decoder->h264_frame_offset, data, size);
+@@ -331,13 +379,23 @@ static int h264_append_nalu(RtpDecoder* rtp_decoder, const uint8_t* payload, siz
+ static int h264_flush_frame(RtpDecoder* rtp_decoder) {
+   int sent = 0;
+   if (rtp_decoder->h264_frame_started &&
+-      !rtp_decoder->h264_frame_corrupt &&
+-      rtp_decoder->h264_frame_offset > 0 &&
+-      rtp_decoder->on_packet != NULL) {
+-    rtp_decoder->on_packet(rtp_decoder->h264_frame_buf,
+-                           rtp_decoder->h264_frame_offset,
+-                           rtp_decoder->user_data);
+-    sent = 1;
++      rtp_decoder->h264_frame_offset > 0) {
++    if (rtp_decoder->h264_frame_corrupt) {
++      rtp_decoder->stats.corrupt_frames++;
++    } else {
++      rtp_decoder->stats.frames++;
++      if (rtp_decoder->h264_frame_offset > rtp_decoder->stats.max_frame_bytes) {
++        rtp_decoder->stats.max_frame_bytes = (uint32_t)rtp_decoder->h264_frame_offset;
++      }
++      if (rtp_decoder->on_packet != NULL) {
++        rtp_decoder->on_packet(rtp_decoder->h264_frame_buf,
++                               rtp_decoder->h264_frame_offset,
++                               rtp_decoder->h264_frame_last_seq,
++                               rtp_decoder->h264_frame_timestamp,
++                               rtp_decoder->user_data);
++        sent = 1;
++      }
++    }
+   }
+   h264_reset_frame(rtp_decoder);
+   return sent;
+@@ -349,15 +407,19 @@ static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
+   if (rtp_payload(buf, size, &payload, &payload_size) < 0 || payload_size == 0) {
+     return -1;
+   }
++  rtp_decoder->stats.packets++;
+   uint16_t seq = rtp_sequence(buf, size);
+   uint32_t timestamp = rtp_timestamp(buf, size);
+   int marker = rtp_marker(buf, size);
+   uint8_t nalu_type = *payload & 0x1f;
++  int sequence_gap = rtp_note_sequence(rtp_decoder, seq);
+ 
+-  int same_frame = rtp_decoder->h264_frame_started &&
+-                   timestamp == rtp_decoder->h264_frame_timestamp;
+   int timestamp_changed = rtp_decoder->h264_frame_started &&
+                           timestamp != rtp_decoder->h264_frame_timestamp;
++  if (sequence_gap && rtp_decoder->h264_frame_started) {
++    rtp_decoder->h264_frame_corrupt = 1;
++    rtp_decoder->h264_fu_started = 0;
++  }
+   if (timestamp_changed) {
+     if (rtp_decoder->h264_fu_started) {
+       rtp_decoder->h264_frame_corrupt = 1;
+@@ -368,13 +430,6 @@ static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
+     h264_begin_frame(rtp_decoder, timestamp);
+   }
+ 
+-  if (same_frame &&
+-      rtp_decoder->h264_have_last_seq &&
+-      seq != (uint16_t)(rtp_decoder->h264_last_seq + 1)) {
+-    rtp_decoder->h264_frame_corrupt = 1;
+-    rtp_decoder->h264_fu_started = 0;
+-  }
+-
+   if (nalu_type > 0 && nalu_type < 24) {
+     // NALU type 1-23 are single NALUs
+     if (!rtp_decoder->h264_frame_corrupt) {
+@@ -439,11 +494,12 @@ static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
+       rtp_decoder->h264_fu_started = 0;
+     }
+   } else {
++    rtp_decoder->stats.unsupported_nalus++;
+     rtp_decoder->h264_frame_corrupt = 1;
+   }
+ 
+-  rtp_decoder->h264_last_seq = seq;
+-  rtp_decoder->h264_have_last_seq = 1;
++  rtp_decoder->h264_frame_last_seq = seq;
++
+   if (marker) {
+     if (rtp_decoder->h264_fu_started) {
+       rtp_decoder->h264_frame_corrupt = 1;
+@@ -459,8 +515,16 @@ static int rtp_decode_generic(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size
+   if (rtp_payload(buf, size, &payload, &payload_size) < 0) {
+     return -1;
+   }
++  rtp_decoder->stats.packets++;
++  uint16_t sequence = rtp_sequence(buf, size);
++  uint32_t timestamp = rtp_timestamp(buf, size);
++  rtp_note_sequence(rtp_decoder, sequence);
+   if (rtp_decoder->on_packet != NULL)
+-    rtp_decoder->on_packet(payload, payload_size, rtp_decoder->user_data);
++    rtp_decoder->on_packet(payload,
++                           payload_size,
++                           sequence,
++                           timestamp,
++                           rtp_decoder->user_data);
+   // even if there is no callback set, assume everything is ok for caller and do not return an error
+   return (int)size;
+ }
+@@ -485,3 +549,14 @@ int rtp_decoder_decode(RtpDecoder* rtp_decoder, const uint8_t* buf, size_t size)
+     return -1;
+   return rtp_decoder->decode_func(rtp_decoder, (uint8_t*)buf, size);
+ }
++
++void rtp_decoder_get_stats(RtpDecoder* rtp_decoder, RtpDecoderStats* stats) {
++  if (!stats) {
++    return;
++  }
++  memset(stats, 0, sizeof(*stats));
++  if (!rtp_decoder) {
++    return;
++  }
++  *stats = rtp_decoder->stats;
++}
+diff --git a/src/rtp.h b/src/rtp.h
+index 9cd3e55..f6c6309 100644
+--- a/src/rtp.h
++++ b/src/rtp.h
+@@ -73,7 +73,22 @@ typedef struct RtpMap {
+ 
+ typedef struct RtpEncoder RtpEncoder;
+ typedef struct RtpDecoder RtpDecoder;
+-typedef void (*RtpOnPacket)(uint8_t* packet, size_t bytes, void* user_data);
++typedef void (*RtpOnPacket)(uint8_t* packet,
++                            size_t bytes,
++                            uint16_t sequence,
++                            uint32_t timestamp,
++                            void* user_data);
++
++typedef struct RtpDecoderStats {
++  uint32_t packets;
++  uint32_t sequence_gaps;
++  uint32_t missing_packets;
++  uint32_t frames;
++  uint32_t corrupt_frames;
++  uint32_t unsupported_nalus;
++  uint32_t overflow_frames;
++  uint32_t max_frame_bytes;
++} RtpDecoderStats;
+ 
+ struct RtpDecoder {
+   RtpPayloadType type;
+@@ -85,11 +100,13 @@ struct RtpDecoder {
+   uint8_t h264_frame_buf[CONFIG_MAX_NALU_SIZE];
+   size_t h264_frame_offset;
+   uint32_t h264_frame_timestamp;
++  uint16_t h264_frame_last_seq;
+   int h264_frame_started;
+   int h264_frame_corrupt;
+   uint16_t h264_last_seq;
+   int h264_have_last_seq;
+   int h264_fu_started;
++  RtpDecoderStats stats;
+ };
+ 
+ struct RtpEncoder {
+@@ -114,6 +131,8 @@ void rtp_decoder_init(RtpDecoder* rtp_decoder, MediaCodec codec, RtpOnPacket on_
+ 
+ int rtp_decoder_decode(RtpDecoder* rtp_decoder, const uint8_t* data, size_t size);
+ 
++void rtp_decoder_get_stats(RtpDecoder* rtp_decoder, RtpDecoderStats* stats);
++
+ uint32_t rtp_get_ssrc(uint8_t* packet);
+ 
+ #endif  // RTP_H_
+diff --git a/src/sdp.c b/src/sdp.c
+index d4702dc..92d6de1 100644
+--- a/src/sdp.c
++++ b/src/sdp.c
+@@ -31,11 +31,11 @@ void sdp_append_h264(char* sdp) {
+   sdp_append(sdp, "c=IN IP4 0.0.0.0");
+   sdp_append(sdp, "a=rtcp-fb:96 nack");
+   sdp_append(sdp, "a=rtcp-fb:96 nack pli");
+-  sdp_append(sdp, "a=fmtp:96 profile-level-id=42e01f;level-asymmetry-allowed=1");
++  sdp_append(sdp, "a=fmtp:96 profile-level-id=42e01f;level-asymmetry-allowed=1;packetization-mode=1");
+   sdp_append(sdp, "a=rtpmap:96 H264/90000");
+   sdp_append(sdp, "a=ssrc:1 cname:webrtc-h264");
+   sdp_append(sdp, "a=recvonly");
+-  sdp_append(sdp, "a=mid:video");
++  sdp_append(sdp, "a=mid:0");
+   sdp_append(sdp, "a=rtcp-mux");
+ }
+ 
+@@ -45,7 +45,7 @@ void sdp_append_pcma(char* sdp) {
+   sdp_append(sdp, "a=rtpmap:8 PCMA/8000");
+   sdp_append(sdp, "a=ssrc:4 cname:webrtc-pcma");
+   sdp_append(sdp, "a=sendrecv");
+-  sdp_append(sdp, "a=mid:audio");
++  sdp_append(sdp, "a=mid:1");
+   sdp_append(sdp, "a=rtcp-mux");
+ }
+ 
+@@ -55,7 +55,7 @@ void sdp_append_pcmu(char* sdp) {
+   sdp_append(sdp, "a=rtpmap:0 PCMU/8000");
+   sdp_append(sdp, "a=ssrc:5 cname:webrtc-pcmu");
+   sdp_append(sdp, "a=sendrecv");
+-  sdp_append(sdp, "a=mid:audio");
++  sdp_append(sdp, "a=mid:1");
+   sdp_append(sdp, "a=rtcp-mux");
+ }
+ 
+@@ -65,14 +65,14 @@ void sdp_append_opus(char* sdp) {
+   sdp_append(sdp, "a=rtpmap:111 opus/48000/2");
+   sdp_append(sdp, "a=ssrc:6 cname:webrtc-opus");
+   sdp_append(sdp, "a=sendrecv");
+-  sdp_append(sdp, "a=mid:audio");
++  sdp_append(sdp, "a=mid:1");
+   sdp_append(sdp, "a=rtcp-mux");
+ }
+ 
+ void sdp_append_datachannel(char* sdp) {
+   sdp_append(sdp, "m=application 50712 UDP/DTLS/SCTP webrtc-datachannel");
+   sdp_append(sdp, "c=IN IP4 0.0.0.0");
+-  sdp_append(sdp, "a=mid:datachannel");
++  sdp_append(sdp, "a=mid:2");
+   sdp_append(sdp, "a=sctp-port:5000");
+   sdp_append(sdp, "a=max-message-size:262144");
+ }
+@@ -89,19 +89,20 @@ void sdp_create(char* sdp, int b_video, int b_audio, int b_datachannel) {
+ #endif
+   memset(bundle, 0, sizeof(bundle));
+ 
+-  strcat(bundle, "a=group:BUNDLE");
+-
+-  if (b_video) {
+-    strcat(bundle, " video");
+-  }
+-
+-  if (b_audio) {
+-    strcat(bundle, " audio");
+-  }
+-
+-  if (b_datachannel) {
+-    strcat(bundle, " datachannel");
++  if (b_video && b_audio && b_datachannel) {
++    sdp_append(sdp, "a=group:BUNDLE 0 1 2");
++  } else {
++    strcat(bundle, "a=group:BUNDLE");
++    if (b_video) {
++      strcat(bundle, " 0");
++    }
++    if (b_audio) {
++      strcat(bundle, " 1");
++    }
++    if (b_datachannel) {
++      strcat(bundle, " 2");
++    }
++    sdp_append(sdp, bundle);
+   }
+-
+-  sdp_append(sdp, bundle);
++  sdp_append(sdp, "a=ice-options:trickle renomination");
+ }
+diff --git a/src/stun.c b/src/stun.c
+index d387241..994d409 100644
+--- a/src/stun.c
++++ b/src/stun.c
+@@ -46,6 +46,15 @@ uint32_t CRC32_TABLE[256] = {
+     0xcdd70693, 0x54de5729, 0x23d967bf, 0xb3667a2e, 0xc4614ab8, 0x5d681b02, 0x2a6f2b94,
+     0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d};
+ 
++static uint64_t stun_read_u64(const char* value) {
++  const uint8_t* bytes = (const uint8_t*)value;
++  uint64_t result = 0;
++  for (int i = 0; i < 8; i++) {
++    result = (result << 8) | bytes[i];
++  }
++  return result;
++}
++
+ void stun_msg_create(StunMessage* msg, uint16_t type) {
+   StunHeader* header = (StunHeader*)msg->buf;
+   header->type = htons(type);
+@@ -127,6 +136,9 @@ void stun_parse_msg_buf(StunMessage* msg) {
+   StunHeader* header = (StunHeader*)msg->buf;
+ 
+   int length = ntohs(header->length) + sizeof(StunHeader);
++  if (length > (int)msg->size) {
++    length = (int)msg->size;
++  }
+ 
+   int pos = sizeof(StunHeader);
+ 
+@@ -160,11 +172,16 @@ void stun_parse_msg_buf(StunMessage* msg) {
+       case STUN_ATTR_TYPE_MAPPED_ADDRESS:
+         stun_get_mapped_address(attr->value, mask, &msg->mapped_addr);
+         break;
+-      case STUN_ATTR_TYPE_USERNAME:
++      case STUN_ATTR_TYPE_USERNAME: {
++        size_t attr_length = ntohs(attr->length);
++        if (attr_length >= sizeof(msg->username)) {
++          attr_length = sizeof(msg->username) - 1;
++        }
+         memset(msg->username, 0, sizeof(msg->username));
+-        memcpy(msg->username, attr->value, ntohs(attr->length));
++        memcpy(msg->username, attr->value, attr_length);
+         // LOGD("length = %d, Username %s", ntohs(attr->length), msg->username);
+         break;
++      }
+       case STUN_ATTR_TYPE_MESSAGE_INTEGRITY:
+         memcpy(msg->message_integrity, attr->value, ntohs(attr->length));
+ 
+@@ -198,17 +215,36 @@ void stun_parse_msg_buf(StunMessage* msg) {
+         memcpy(mask + 4, header->transaction_id, sizeof(header->transaction_id));
+         stun_get_mapped_address(attr->value, mask, &msg->mapped_addr);
+         break;
++      case STUN_ATTR_TYPE_ERROR_CODE:
++        if (ntohs(attr->length) >= 4) {
++          const uint8_t* value = (const uint8_t*)attr->value;
++          msg->error_code = (uint16_t)((value[2] & 0x07) * 100 + value[3]);
++        }
++        break;
+       case STUN_ATTR_TYPE_PRIORITY:
++        if (ntohs(attr->length) == 4) {
++          uint32_t network_priority;
++          memcpy(&network_priority, attr->value, sizeof(network_priority));
++          msg->priority = ntohl(network_priority);
++        }
+         break;
+       case STUN_ATTR_TYPE_USE_CANDIDATE:
+-        // LOGD("Use Candidate");
++        msg->use_candidate = 1;
+         break;
+       case STUN_ATTR_TYPE_FINGERPRINT:
+         memcpy(&msg->fingerprint, attr->value, ntohs(attr->length));
+         // LOGD("Fingerprint: 0x%.4x", msg->fingerprint);
+         break;
+       case STUN_ATTR_TYPE_ICE_CONTROLLED:
++        if (ntohs(attr->length) == 8) {
++          msg->ice_controlled = stun_read_u64(attr->value);
++        }
++        break;
+       case STUN_ATTR_TYPE_ICE_CONTROLLING:
++        if (ntohs(attr->length) == 8) {
++          msg->ice_controlling = stun_read_u64(attr->value);
++        }
++        break;
+       case STUN_ATTR_TYPE_NETWORK_COST:
+         // Do nothing
+         break;
+@@ -354,7 +390,9 @@ StunMsgType stun_is_stun_msg(uint8_t *buf, size_t size) {
+ int stun_msg_is_valid(uint8_t* buf, size_t size, char* password) {
+   StunMessage msg;
+ 
++  memset(&msg, 0, sizeof(msg));
+   memcpy(msg.buf, buf, size);
++  msg.size = size;
+ 
+   stun_parse_msg_buf(&msg);
+ 
+diff --git a/src/stun.h b/src/stun.h
+index 801133b..c0f9618 100644
+--- a/src/stun.h
++++ b/src/stun.h
+@@ -38,6 +38,7 @@ typedef enum StunAttrType {
+   STUN_ATTR_TYPE_MAPPED_ADDRESS = 0x0001,
+   STUN_ATTR_TYPE_USERNAME = 0x0006,
+   STUN_ATTR_TYPE_MESSAGE_INTEGRITY = 0x0008,
++  STUN_ATTR_TYPE_ERROR_CODE = 0x0009,
+   STUN_ATTR_TYPE_LIFETIME = 0x000d,
+   STUN_ATTR_TYPE_REALM = 0x0014,
+   STUN_ATTR_TYPE_NONCE = 0x0015,
+@@ -86,6 +87,11 @@ struct StunMessage {
+   StunClass stunclass;
+   StunMethod stunmethod;
+   uint32_t fingerprint;
++  uint32_t priority;
++  uint64_t ice_controlled;
++  uint64_t ice_controlling;
++  uint16_t error_code;
++  int use_candidate;
+   char message_integrity[20];
+   char username[128];
+   char realm[64];

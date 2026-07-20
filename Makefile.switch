@@ -1,0 +1,246 @@
+DEVKITPRO ?= /opt/devkitpro
+DEVKITA64  = $(DEVKITPRO)/devkitA64
+PORTLIBS   = $(DEVKITPRO)/portlibs/switch
+LIBNX      = $(DEVKITPRO)/libnx
+BOREALIS   = lib/borealis
+
+# WebRTC provider: "legacy" (old lib/libpeer) or "upstream" (clean github_repos/libpeer)
+WEBRTC_PROVIDER ?= legacy
+
+ifeq ($(WEBRTC_PROVIDER),upstream)
+LIBPEER       = github_repos/libpeer
+LIBPEER_LIB   = lib/switch/upstream-libpeer
+MBEDTLS       = $(LIBPEER_LIB)
+MBEDTLS_LIBDIR = -L$(MBEDTLS)/lib
+USRSCTP_CFLAGS = -DCONFIG_USE_USRSCTP=1
+USRSCTP_LIBS   = -lusrsctp
+LIBPEER_COMPAT = tools/libpeer_switch_build/compat
+LIBPEER_LIBDIRS =
+else
+LIBPEER       = lib/libpeer
+LIBPEER_LIB   = $(LIBPEER)
+MBEDTLS       = $(LIBPEER)/third_party/mbedtls
+MBEDTLS_LIBDIR = -L$(MBEDTLS)/build_switch/library
+USRSCTP_CFLAGS = -DCONFIG_USE_USRSCTP=0
+USRSCTP_LIBS   =
+LIBPEER_COMPAT =
+LIBPEER_LIBDIRS = -L$(LIBPEER)/third_party/libsrtp/build_switch
+endif
+
+NETWORK_DIAG ?= 0
+XBOX_RESPONSE_TRACE ?= 0
+APP_DIAG ?= 0
+IPV6 ?= 0
+CURL_PROVIDER ?= wiliwili
+CURL_VERIFY ?= 0
+CURL_VERBOSE ?= 0
+CURL_TIMEOUT_MS ?= 120000
+EXTRA_DFLAGS ?=
+
+ifeq ($(IPV6),0)
+IPV6_DFLAG = -DCONFIG_IPV6=0
+else
+IPV6_DFLAG = -DCONFIG_IPV6=1
+endif
+FFMPEG_LIBDIR ?= lib/switch
+FFMPEG_SWSCALE_LIB ?= -lswscale
+
+FFMPEG_LIBS = $(FFMPEG_LIBDIR)/libavcodec.a \
+    $(FFMPEG_LIBDIR)/libavformat.a \
+    $(FFMPEG_LIBDIR)/libavutil.a \
+    $(FFMPEG_LIBDIR)/libswresample.a \
+    $(FFMPEG_SWSCALE_LIB)
+
+CC      = $(DEVKITA64)/bin/aarch64-none-elf-gcc
+CXX     = $(DEVKITA64)/bin/aarch64-none-elf-g++
+OBJCOPY = $(DEVKITA64)/bin/aarch64-none-elf-objcopy
+NACP    = $(DEVKITPRO)/tools/bin/nacptool
+ELF2NRO = $(DEVKITPRO)/tools/bin/elf2nro
+UAM     = $(DEVKITPRO)/tools/bin/uam
+
+ARCH  = -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+ifeq ($(filter $(CURL_PROVIDER),wiliwili devkitpro),$(CURL_PROVIDER))
+# wiliwili uses devkitPro switch-curl, whose TLS backend is libnx ssl-service.
+CURL_DFLAGS = -DLUNARNX_CURL_FORCE_MBEDTLS=0
+CURL_INCDIRS = -I$(PORTLIBS)/include -I$(PORTLIBS)/include/curl -Ilib/switch/include
+CURL_LIB = -lcurl
+else ifeq ($(CURL_PROVIDER),moonlight)
+CURL_DFLAGS = -DLUNARNX_CURL_FORCE_MBEDTLS=1
+CURL_INCDIRS = -Ilib/switch/include -I$(PORTLIBS)/include -I$(PORTLIBS)/include/curl
+CURL_LIB = lib/switch/libcurl.a
+else
+$(error Unsupported CURL_PROVIDER=$(CURL_PROVIDER). Use wiliwili, devkitpro, or moonlight)
+endif
+
+DFLAGS = -D__SWITCH__ -DHAVE_LIBNX -DSWITCH -DSTBI_NO_THREAD_LOCALS \
+         -DBOREALIS_USE_DEKO3D -DYG_ENABLE_EVENTS -DBRLS_RESOURCES=\"romfs:/\" \
+         -DCONFIG_USE_LWIP=0 $(IPV6_DFLAG) $(USRSCTP_CFLAGS) -DCONFIG_MBEDTLS_2_X=0 \
+         -DMBEDTLS_NO_PLATFORM_ENTROPY -DMBEDTLS_ENTROPY_HARDWARE_ALT \
+         -DCONFIG_DTLS_USE_ECDSA=1 -DDISABLE_PEER_SIGNALING \
+         -D__BYTE_ORDER=__LITTLE_ENDIAN \
+         -DLUNARNX_NETWORK_DIAG=$(NETWORK_DIAG) \
+         -DLUNARNX_XBOX_RESPONSE_TRACE=$(XBOX_RESPONSE_TRACE) \
+         -DLUNARNX_DIAGNOSTIC_LOG=$(APP_DIAG) \
+         -DLUNARNX_CURL_VERIFY_SSL=$(CURL_VERIFY) \
+         -DLUNARNX_CURL_VERBOSE=$(CURL_VERBOSE) \
+         -DLUNARNX_CURL_TIMEOUT_MS=$(CURL_TIMEOUT_MS) \
+         -DLUNARNX_CURL_PROVIDER=\"$(CURL_PROVIDER)\" $(CURL_DFLAGS) $(EXTRA_DFLAGS)
+COMMON_FLAGS = $(ARCH) -ffunction-sections -fdata-sections $(DFLAGS) -O2 -Wall -ftls-model=local-exec
+CFLAGS  = $(COMMON_FLAGS) \
+          -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch
+CXXFLAGS = $(COMMON_FLAGS) -Wno-builtin-declaration-mismatch -std=gnu++20
+LDFLAGS = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,-Map,$(BUILD)/LunarNX.map
+
+INCDIRS = -Isrc -Ilib -Ilib/switch/include \
+    -I$(MBEDTLS)/include \
+    -I$(LIBNX)/include $(CURL_INCDIRS) -I$(PORTLIBS)/include/zlib \
+    -I$(BOREALIS)/library/include -I$(BOREALIS)/library/include/borealis/extern \
+    -I$(BOREALIS)/library/include/borealis/extern/nanovg \
+    -I$(BOREALIS)/library/include/borealis/extern/tinyxml2 \
+    -I$(BOREALIS)/library/lib/extern/fmt/include -I$(BOREALIS)/library/lib/extern/tweeny/include \
+    -I$(BOREALIS)/library/lib/extern/yoga -I$(BOREALIS)/library/lib/extern/switch-libpulsar/include \
+    -I$(LIBPEER_LIB)/include -I$(LIBPEER)/include -I$(LIBPEER)/src \
+    -I$(LIBPEER)/third_party/libsrtp/include \
+    -I$(LIBPEER)/third_party/libsrtp/crypto/include \
+    $(if $(LIBPEER_COMPAT),-I$(LIBPEER_COMPAT))
+
+LIBDIRS = $(MBEDTLS_LIBDIR) \
+    -L$(LIBNX)/lib -L$(PORTLIBS)/lib \
+    -L$(BOREALIS)/build_switch/library \
+    -L$(BOREALIS)/build_switch/library/lib/extern/fmt \
+    -L$(BOREALIS)/build_switch/library/lib/extern/yoga/yoga \
+    $(LIBPEER_LIBDIRS)
+
+LIBS = -Wl,--start-group -lborealis -lfmt -lyogacore -ltinyxml2 -ldeko3d -lsrtp2 \
+    -lopus -lz -lzstd \
+    $(CURL_LIB) \
+    $(FFMPEG_LIBS) \
+    $(USRSCTP_LIBS) \
+    -lmbedtls -lmbedx509 -lmbedcrypto -lnx -Wl,--end-group
+
+BUILD   = build/switch
+TARGET  = $(BUILD)/LunarNX.nro
+ROMFS_STAGE = $(BUILD)/romfs
+ROMFS_STAGE_STAMP = $(BUILD)/romfs.stamp
+BOREALIS_RESOURCES = $(shell find $(BOREALIS)/resources -type f 2>/dev/null)
+APP_ROMFS_FILES = $(shell find romfs -type f 2>/dev/null)
+ROMFS_SHADERS = romfs/shaders/basic_vsh.dksh \
+    romfs/shaders/texture_fsh.dksh \
+    romfs/shaders/upscaling_pass_fsh.dksh \
+    romfs/shaders/upscaling_fsh.dksh \
+    romfs/shaders/rcas_fsh.dksh
+
+CXX_SRCS = src/main.cpp src/app/ice_candidate_processor.cpp src/app/stream_controller.cpp \
+    src/app/web_rtc_transport.cpp \
+    src/app/xbox_channel_manager.cpp \
+    src/app/xbox_session_client.cpp src/app/xbox_stream_session.cpp \
+    src/ui/auth_activity.cpp src/ui/main_activity.cpp src/ui/stream_view.cpp src/ui/stream_loading_activity.cpp src/ui/stream_settings_activity.cpp src/ui/i18n.cpp src/ui/ui_style.cpp src/ui/qr_code.cpp src/ui/poster_loader.cpp src/ui/recycling_list.cpp \
+    src/ui/perf_overlay.cpp src/ui/stream_overlay.cpp \
+    src/input/gamepad_reader.cpp src/input/xinput_encoder.cpp src/input/rumble_controller.cpp \
+    src/auth/token_store.cpp src/auth/xbox_signing.cpp src/auth/auth_manager.cpp src/auth/xbox_auth_errors.cpp \
+    src/api/http_client.cpp src/api/xbox_api_client.cpp \
+    src/platform/network_worker.cpp \
+    src/webrtc/peer_manager.cpp src/webrtc/xbox_input_feedback.cpp \
+    src/stream/stream_backend_provider.cpp src/stream/media_pipeline.cpp \
+    src/stream/audio_packet_reorder.cpp \
+    src/stream/video_decoder.cpp src/stream/audio_decoder.cpp src/stream/video_renderer.cpp \
+    src/stream/software_video_frame.cpp \
+    src/stream/audio_player.cpp src/stream/av_sync.cpp
+
+C_SRCS = lib/cJSON.c \
+    src/platform/switch_wrapper.c \
+    src/platform/switch_posix_stubs.c \
+    $(LIBPEER)/src/address.c $(LIBPEER)/src/agent.c $(LIBPEER)/src/base64.c \
+    $(LIBPEER)/src/dtls_srtp.c $(LIBPEER)/src/ice.c $(LIBPEER)/src/mdns.c \
+    $(LIBPEER)/src/peer_connection.c $(LIBPEER)/src/peer.c $(LIBPEER)/src/ports.c \
+    $(LIBPEER)/src/rtcp.c $(LIBPEER)/src/rtp.c $(LIBPEER)/src/sctp.c \
+    $(LIBPEER)/src/sdp.c $(LIBPEER)/src/socket.c $(LIBPEER)/src/stun.c \
+    $(LIBPEER)/src/ssl_transport.c $(LIBPEER)/src/utils.c \
+    lib/stubs/dav1d_stubs.c
+
+CXX_OBJS = $(CXX_SRCS:%.cpp=$(BUILD)/%.o)
+C_OBJS   = $(C_SRCS:%.c=$(BUILD)/%.o)
+ALL_OBJS = $(CXX_OBJS) $(C_OBJS)
+
+# =============================================================================
+# rho — Local video player for decode pipeline testing
+# =============================================================================
+RHO_CXX_SRCS = src/rho/rho_main.cpp src/stream/audio_player.cpp
+RHO_C_SRCS = src/platform/switch_wrapper.c lib/stubs/dav1d_stubs.c
+RHO_CXX_OBJS = $(RHO_CXX_SRCS:%.cpp=$(BUILD)/%.o)
+RHO_C_OBJS   = $(RHO_C_SRCS:%.c=$(BUILD)/%.o)
+
+RHO_LIBS = -Wl,--start-group -lborealis -lfmt -lyogacore -ltinyxml2 -ldeko3d \
+    -lz -lzstd -lbz2 -lopus \
+    $(FFMPEG_LIBS) \
+    -lmbedtls -lmbedx509 -lmbedcrypto -lnx -Wl,--end-group
+
+.PHONY: all clean rho
+
+all: $(TARGET)
+	@echo "=== Switch Build Complete ===" && ls -lh $(TARGET)
+
+$(TARGET): $(BUILD)/LunarNX.elf $(ROMFS_STAGE_STAMP)
+	$(OBJCOPY) -O binary $< $(BUILD)/LunarNX.bin
+	$(NACP) --create LunarNX "LunarNX Team" 0.1.0 $(BUILD)/nacp.tmp
+	$(ELF2NRO) $< $@ --icon=res/icon.jpg --nacp=$(BUILD)/nacp.tmp --romfsdir=$(ROMFS_STAGE)
+
+$(ROMFS_STAGE_STAMP): $(ROMFS_SHADERS) $(BOREALIS_RESOURCES) $(APP_ROMFS_FILES)
+	rm -rf $(ROMFS_STAGE)
+	mkdir -p $(ROMFS_STAGE)
+	cp -R lib/borealis/resources/. $(ROMFS_STAGE)/
+	cp -R romfs/. $(ROMFS_STAGE)/
+	touch $@
+
+romfs/shaders/basic_vsh.dksh: shaders/basic_vsh.glsl
+	@mkdir -p $(dir $@)
+	$(UAM) -s vert -o $@ $<
+
+romfs/shaders/texture_fsh.dksh: shaders/texture_fsh.glsl
+	@mkdir -p $(dir $@)
+	$(UAM) -s frag -o $@ $<
+
+romfs/shaders/upscaling_pass_fsh.dksh: shaders/upscaling_pass_fsh.glsl
+	@mkdir -p $(dir $@)
+	$(UAM) -s frag -o $@ $<
+
+romfs/shaders/upscaling_fsh.dksh: shaders/upscaling_fsh.glsl
+	@mkdir -p $(dir $@)
+	$(UAM) -s frag -o $@ $<
+
+romfs/shaders/rcas_fsh.dksh: shaders/rcas_fsh.glsl
+	@mkdir -p $(dir $@)
+	$(UAM) -s frag -o $@ $<
+
+$(BUILD)/LunarNX.elf: $(ALL_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(LDFLAGS) $(ALL_OBJS) $(LIBDIRS) $(LIBS) -o $@
+
+$(BUILD)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(INCDIRS) -c $< -o $@
+
+$(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCDIRS) -c $< -o $@
+
+clean:
+	rm -rf $(BUILD)
+
+# =============================================================================
+# rho target
+# =============================================================================
+RHO_TARGET = $(BUILD)/Rho.nro
+RHO_ELF    = $(BUILD)/Rho.elf
+
+rho: $(RHO_TARGET)
+	@echo "=== rho Switch Build Complete ===" && ls -lh $(RHO_TARGET)
+
+$(RHO_TARGET): $(RHO_ELF) $(ROMFS_STAGE_STAMP)
+	$(OBJCOPY) -O binary $< $(BUILD)/Rho.bin
+	$(NACP) --create Rho "LunarNX Team" 0.1.0 $(BUILD)/nacp_rho.tmp
+	$(ELF2NRO) $< $@ --icon=res/icon.jpg --nacp=$(BUILD)/nacp_rho.tmp --romfsdir=$(ROMFS_STAGE)
+
+$(RHO_ELF): $(RHO_CXX_OBJS) $(RHO_C_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(LDFLAGS) $(RHO_CXX_OBJS) $(RHO_C_OBJS) $(LIBDIRS) $(RHO_LIBS) -o $@

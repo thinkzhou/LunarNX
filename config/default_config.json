@@ -1,0 +1,23 @@
+{
+    "resolution": 720,
+    "bitrate_mode": "auto",
+    "bitrate": 20,
+    "codec": "h264",
+    "vibration": true,
+    "rumble_intensity": 3,
+    "dead_zone": 0.1,
+    "ipv6": false,
+    "signaling_home_name": "",
+    "signaling_cloud_name": "",
+    "preferred_game_language": "en-US",
+    "language": "auto",
+    "enable_stereo_audio": true,
+    "enable_audio_control": false,
+    "enable_audio_rumble": false,
+    "audio_rumble_threshold": 20,
+    "show_performance": false,
+    "power_on": false,
+    "gamepad_mapping": null,
+    "video_backend": "hardware_zero_copy",
+    "base_url": ""
+}

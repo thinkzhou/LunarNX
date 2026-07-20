@@ -1,0 +1,41 @@
+#pragma once
+#ifdef __SWITCH__
+
+#include <borealis.hpp>
+
+#include "../app/stream_controller.h"
+
+#include <functional>
+#include <memory>
+
+namespace lunar::ui {
+
+struct StreamSettingsSnapshot {
+    int width = 1280;
+    int height = 720;
+    stream::VideoBackend video_backend = stream::VideoBackend::HardwareZeroCopy;
+    stream::PostProcessMode post_process_mode = stream::PostProcessMode::Off;
+    bool dithering_enabled = false;
+};
+
+class StreamSettingsActivity : public brls::Activity {
+public:
+    using CompletionCallback = std::function<void(const StreamSettingsSnapshot&)>;
+
+    StreamSettingsActivity(std::shared_ptr<app::StreamController> ctrl,
+                           StreamSettingsSnapshot settings,
+                           CompletionCallback completion);
+
+    brls::View* createContentView() override;
+
+private:
+    std::shared_ptr<app::StreamController> ctrl_;
+    StreamSettingsSnapshot settings_;
+    CompletionCallback completion_;
+    bool closed_ = false;
+
+    void closeSettings();
+};
+
+} // namespace lunar::ui
+#endif

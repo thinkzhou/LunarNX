@@ -1,0 +1,6 @@
+attempt	configure	build	target	build_dir
+dependency_mbedtls3	0	0	install	/work/tools/libdatachannel_switch_spike/build/mbedtls3-build
+no_media_no_websocket_mbedtls3	0	1	datachannel-static	/work/tools/libdatachannel_switch_spike/build/no_media_no_websocket_mbedtls3
+media_no_websocket_mbedtls3	0	1	datachannel-static	/work/tools/libdatachannel_switch_spike/build/media_no_websocket_mbedtls3
+media_websocket_mbedtls3	0	1	datachannel-static	/work/tools/libdatachannel_switch_spike/build/media_websocket_mbedtls3
+no_media_no_websocket_openssl_portlibs	1	NA	datachannel-static	/work/tools/libdatachannel_switch_spike/build/no_media_no_websocket_openssl_portlibs

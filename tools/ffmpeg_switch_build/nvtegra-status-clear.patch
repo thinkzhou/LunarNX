@@ -1,0 +1,9 @@
+diff --git a/libavcodec/nvtegra_decode.c b/libavcodec/nvtegra_decode.c
+--- a/libavcodec/nvtegra_decode.c
++++ b/libavcodec/nvtegra_decode.c
+@@ -248,0 +249,5 @@ int ff_nvtegra_start_frame(AVCodecContext *avctx, AVFrame *frame, FFNVTegraDeco
++    memset((uint8_t *)av_nvtegra_map_get_addr((AVNVTegraMap *)tf->input_map_ref->data) +
++               ctx->status_off,
++           0,
++           ctx->cmdbuf_off - ctx->status_off);
++

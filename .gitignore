@@ -1,0 +1,58 @@
+# Build output
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Switch output
+*.nro
+*.elf
+*.bin
+*.nsp
+*.npdm
+nacp.tmp
+
+# romfs build outputs (compiled shaders and generated data)
+romfs/*
+!romfs/i18n/
+
+# Secrets
+token.json
+config.json
+auth.json
+credentials.json
+*.token.json
+xcloud_library_cache.json
+
+# Logs
+debug.log
+*.log
+*.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local emulator and test data
+ryujinx-data/
+simulator-data/
+
+# CMake generated
+cmake-build-*/
+
+# Desktop binary
+build/pc/
+
+# Third-party dependencies (clone separately, see README)
+# Legacy libpeer local changes are tracked as a reproducible patch in
+# tools/libpeer_legacy/ because lib/libpeer is an embedded git checkout.
+lib/borealis/
+lib/libpeer/
+github_repos/*

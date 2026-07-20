@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=1280, initial-scale=1">
+  <title>LunarNX UI Preview</title>
+  <style>
+    * { margin:0;padding:0;box-sizing:border-box; }
+    body { background:#1a1a2e; color:#e0e0e0; font-family:-apple-system,sans-serif; display:flex; flex-direction:column; align-items:center; padding:20px; gap:24px; }
+    .phone { width:720px; height:1280px; border:3px solid #333; border-radius:36px; background:#0a0a1a; overflow:hidden; position:relative; box-shadow:0 0 60px rgba(0,0,0,.5); }
+    .screen { padding:40px 32px; height:100%; display:flex; flex-direction:column; }
+    .title { text-align:center; font-size:28px; font-weight:700; margin-bottom:8px; color:#4fc3f7; }
+    .subtitle { text-align:center; font-size:14px; color:#888; margin-bottom:24px; }
+    .btn { background:#1a73e8; color:white; border:none; border-radius:8px; padding:14px 28px; font-size:18px; cursor:pointer; text-align:center; margin:6px 0; transition:.2s; }
+    .btn:hover { background:#1557b0; }
+    .btn.small { padding:8px 16px; font-size:14px; }
+    .btn.green { background:#0d904f; }
+    .btn.green:hover { background:#0a6e3c; }
+    .btn.red { background:#c62828; }
+    .btn.gray { background:#444; }
+    .code { font-size:48px; font-weight:900; text-align:center; letter-spacing:12px; margin:20px 0; color:#4fc3f7; background:#111; border-radius:12px; padding:16px; border:2px solid #333; }
+    .label { font-size:14px; color:#aaa; margin:4px 0; }
+    .row { display:flex; align-items:center; gap:12px; padding:8px 0; }
+    .card { background:#111; border-radius:12px; padding:16px; margin:8px 0; border:1px solid #222; }
+    .card h3 { font-size:16px; margin-bottom:4px; }
+    .card p { font-size:12px; color:#888; }
+    .stat { display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:13px; }
+    .stat div { background:#111; padding:6px 10px; border-radius:6px; }
+    .stat .val { color:#4fc3f7; font-weight:700; }
+    .overlay { position:absolute; top:10px; left:10px; background:rgba(0,0,0,.8); border-radius:8px; padding:12px; font-size:14px; color:#4caf50; font-family:monospace; line-height:1.6; z-index:10; border:1px solid #333; }
+    .overlay2 { position:absolute; bottom:20px; left:20px; right:20px; background:rgba(0,0,0,.6); border-radius:12px; padding:12px 20px; font-size:13px; color:#fff; display:flex; justify-content:space-between; z-index:10; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; }
+    .badge.on { background:#0d904f; color:#fff; }
+    .badge.off { background:#444; color:#aaa; }
+    .flow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:16px 0; }
+    .flow span { background:#1a73e8; color:white; padding:8px 16px; border-radius:20px; font-size:13px; }
+    .flow i { color:#666; font-size:20px; }
+    h2 { color:#4fc3f7; font-size:16px; margin:16px 0 8px; border-bottom:1px solid #333; padding-bottom:4px; }
+  </style>
+</head>
+<body>
+
+<h1 style="color:#4fc3f7;margin-bottom:8px;">LunarNX UI Flow</h1>
+
+<div class="flow">
+  <span>1. 认证</span><i>→</i>
+  <span>2. 主界面</span><i>→</i>
+  <span>3. 串流</span>
+</div>
+
+<!-- SCREEN 1: AUTH -->
+<div class="phone">
+<div class="screen">
+  <div class="title">Sign in to Xbox</div>
+  <div class="subtitle">MSAL Device Code Flow</div>
+
+  <div class="code">X79D695E</div>
+
+  <div class="label" style="text-align:center;margin-top:8px;">
+    1. Open: <b>microsoft.com/link</b><br>
+    2. Enter the code above<br>
+    3. Waiting... (15s)
+  </div>
+
+  <div class="btn" style="margin-top:30px;">Start</div>
+
+  <div style="margin-top:auto;text-align:center;color:#666;font-size:12px;">
+    Press + to go back
+  </div>
+</div>
+</div>
+
+<!-- SCREEN 2: MAIN -->
+<div class="phone">
+<div class="screen">
+  <div class="title">LunarNX</div>
+  <div class="subtitle">Signed in as: thinkzhou12</div>
+
+  <div class="btn green">Find My Xbox</div>
+
+  <h2>Consoles</h2>
+  <div class="card">
+    <div class="row" style="justify-content:space-between;">
+      <div><h3>XBOX</h3><p>XboxSeriesS · On</p></div>
+      <div class="btn green small">Connect</div>
+    </div>
+  </div>
+
+  <h2>Settings</h2>
+  <div class="row" style="justify-content:space-between;">
+    <span>Resolution</span>
+    <span>
+      <span class="btn small green">720p</span>
+      <span class="btn small gray">1080p</span>
+    </span>
+  </div>
+
+  <div style="margin-top:auto;text-align:center;color:#666;font-size:12px;">
+    Ready. Select a console to connect.
+  </div>
+</div>
+</div>
+
+<!-- SCREEN 3: STREAMING -->
+<div class="phone" style="position:relative;">
+  <div class="screen" style="background:#000;justify-content:center;align-items:center;">
+    <div style="color:#555;font-size:60px;">🎮</div>
+    <div style="color:#555;font-size:24px;">Video Stream</div>
+
+    <!-- Perf overlay -->
+    <div class="overlay">
+      FPS:  60  (V:1800 A:3600)<br>
+      Dec:  2.1 ms<br>
+      Res:  720p<br>
+      Drop: 0
+    </div>
+
+    <!-- Bottom bar -->
+    <div class="overlay2">
+      <span>Press R3 for stats</span>
+      <span style="color:#4caf50;">● Streaming</span>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:20px;text-align:center;max-width:720px;">
+  <h2 style="color:#4fc3f7;">实际 Switch 上会看到什么</h2>
+  <div class="stat" style="background:#111;padding:16px;border-radius:12px;text-align:left;">
+    <div>启动<span class="val">→</span></div>
+    <div>AuthActivity 显示设备码</div>
+    <div>手机浏览器<span class="val">→</span></div>
+    <div>microsoft.com/link 输入码</div>
+    <div>认证成功<span class="val">→</span></div>
+    <div>MainActivity 显示主机列表</div>
+    <div>点击 Connect<span class="val">→</span></div>
+    <div>StreamView 显示画面+性能面板</div>
+  </div>
+</div>
+
+</body>
+</html>

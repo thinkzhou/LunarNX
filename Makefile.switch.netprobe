@@ -1,0 +1,65 @@
+DEVKITPRO ?= /opt/devkitpro
+DEVKITA64  = $(DEVKITPRO)/devkitA64
+PORTLIBS   = $(DEVKITPRO)/portlibs/switch
+LIBNX      = $(DEVKITPRO)/libnx
+NETPROBE_RAW_HTTP ?= 0
+NETPROBE_CERTINFO ?= 0
+NETPROBE_RAW_PUBLIC ?= 1
+NETPROBE_RUN_CURL ?= 1
+NETPROBE_LOCAL_HOST ?=
+NETPROBE_LOCAL_PORT ?= 18080
+
+CC      = $(DEVKITA64)/bin/aarch64-none-elf-gcc
+CXX     = $(DEVKITA64)/bin/aarch64-none-elf-g++
+OBJCOPY = $(DEVKITA64)/bin/aarch64-none-elf-objcopy
+NACP    = $(DEVKITPRO)/tools/bin/nacptool
+ELF2NRO = $(DEVKITPRO)/tools/bin/elf2nro
+
+ARCH = -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+COMMON_FLAGS = $(ARCH) -ffunction-sections -fdata-sections -D__SWITCH__ -DCURL_STATICLIB -O2 -Wall -ftls-model=local-exec \
+    -DLUNARNX_NETPROBE_RAW_HTTP=$(NETPROBE_RAW_HTTP) -DLUNARNX_NETPROBE_CERTINFO=$(NETPROBE_CERTINFO) \
+    -DLUNARNX_NETPROBE_RAW_PUBLIC=$(NETPROBE_RAW_PUBLIC) -DLUNARNX_NETPROBE_RUN_CURL=$(NETPROBE_RUN_CURL) \
+    -DLUNARNX_NETPROBE_LOCAL_HOST='"$(NETPROBE_LOCAL_HOST)"' -DLUNARNX_NETPROBE_LOCAL_PORT='"$(NETPROBE_LOCAL_PORT)"'
+CFLAGS = $(COMMON_FLAGS)
+CXXFLAGS = $(COMMON_FLAGS) -std=gnu++17
+LDFLAGS = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,-Map,$(BUILD)/LunarNXNetProbe.map
+INCDIRS = -I$(LIBNX)/include -I$(PORTLIBS)/include
+LIBDIRS = -L$(PORTLIBS)/lib -L$(LIBNX)/lib
+LIBS = -Wl,--start-group -lcurl -lz -lnx -Wl,--end-group
+
+BUILD = build/switch-netprobe
+TARGET = $(BUILD)/LunarNXNetProbe.nro
+ELF = $(BUILD)/LunarNXNetProbe.elf
+ROMFS = $(BUILD)/romfs
+OBJS = \
+    $(BUILD)/src/tools/switch_netprobe.o \
+    $(BUILD)/lib/borealis/library/lib/platforms/switch/switch_wrapper.o
+
+.PHONY: all clean
+
+all: $(TARGET)
+	@echo "=== Switch NetProbe Build Complete ===" && ls -lh $(TARGET)
+
+$(TARGET): $(ELF) $(ROMFS)/.keep
+	$(OBJCOPY) -O binary $< $(BUILD)/LunarNXNetProbe.bin
+	$(NACP) --create LunarNXNetProbe "LunarNX Team" 0.1.0 $(BUILD)/nacp.tmp
+	$(ELF2NRO) $< $@ --nacp=$(BUILD)/nacp.tmp --romfsdir=$(ROMFS)
+
+$(ELF): $(OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(LDFLAGS) $(OBJS) $(LIBDIRS) $(LIBS) -o $@
+
+$(BUILD)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(INCDIRS) -c $< -o $@
+
+$(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCDIRS) -c $< -o $@
+
+$(ROMFS)/.keep:
+	@mkdir -p $(ROMFS)
+	@touch $@
+
+clean:
+	rm -rf $(BUILD)
