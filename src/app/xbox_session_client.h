@@ -47,7 +47,8 @@ public:
                            const SleepCallback& sleep);
     bool sendIceCandidates(const std::string& session_id,
                            const std::vector<webrtc::IceCandidate>& candidates,
-                           const CancelCallback& cancel);
+                           const CancelCallback& cancel,
+                           const std::string& username_fragment = {});
     std::vector<IceCandidatePayload> getIceCandidates(
         const std::string& session_id,
         const StreamProfile& profile,
@@ -57,6 +58,8 @@ public:
     bool keepAlive(const std::string& session_id, const CancelCallback& cancel);
     void updateTokens(const std::string& web_token, const std::string& gssv_token);
     void deleteSessionAsync(const std::string& session_id);
+    bool cleanupStaleSessions(const StreamProfile& profile,
+                              const CancelCallback& cancel);
     std::shared_ptr<api::XboxApiClient> api() const { return api_; }
 
 private:

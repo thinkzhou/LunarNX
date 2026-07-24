@@ -52,6 +52,8 @@ MediaPipeline::~MediaPipeline() {
 bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
                                const MediaPipelineOptions& options) {
     running_ = false;
+    video_recovery_request_ = false;
+    video_decoder_reset_pending_ = false;
     stopWorkers();
 
     uint32_t worker_generation = 0;
@@ -195,6 +197,8 @@ void MediaPipeline::shutdown() {
 
 void MediaPipeline::shutdownUnlocked() {
     running_ = false;
+    video_recovery_request_ = false;
+    video_decoder_reset_pending_ = false;
     if (video_decoder_) {
         lunar::diagnosticLog("media", "shutdown video decoder begin");
         video_decoder_->shutdown();
@@ -242,6 +246,15 @@ bool MediaPipeline::decodeAudioPacket(const uint8_t* data, size_t len,
     return enqueueAudioPacket(data, len, sequence, timestamp);
 }
 
+void MediaPipeline::markVideoRecovery(const char* reason) {
+    video_decoder_reset_pending_ = true;
+    const bool was_pending = video_recovery_request_.exchange(true);
+    if (!was_pending) {
+        lunar::diagnosticLog("media", "video recovery requested reason=%s",
+                             reason ? reason : "unknown");
+    }
+}
+
 bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
                                        size_t len,
                                        uint64_t timestamp) {
@@ -260,15 +273,20 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
     {
         std::lock_guard<std::mutex> lock(video_queue_mutex_);
         if (video_worker_stop_ || !running_) return false;
-        while (!video_queue_.empty() &&
-               (video_queue_.size() >= kMaxVideoQueuePackets ||
-                queued_video_bytes_ + packet.data.size() > kMaxVideoQueueBytes)) {
-            queued_video_bytes_ -= video_queue_.front().data.size();
-            video_queue_.pop_front();
-            if (perf_) perf_->recordVideoFrameDrop();
+        if (!video_queue_.empty() &&
+            (video_queue_.size() >= kMaxVideoQueuePackets ||
+             queued_video_bytes_ + packet.data.size() > kMaxVideoQueueBytes)) {
+            const size_t dropped_packets = video_queue_.size();
+            video_queue_.clear();
+            queued_video_bytes_ = 0;
+            markVideoRecovery("video queue overflow");
+            for (size_t i = 0; i < dropped_packets; ++i) {
+                if (perf_) perf_->recordVideoFrameDrop();
+            }
             if (shouldLogMediaQueue()) {
                 lunar::diagnosticLog("media",
-                                     "video queue drop packets=%zu bytes=%zu",
+                                     "video queue reset dropped=%zu packets=%zu bytes=%zu",
+                                     dropped_packets,
                                      video_queue_.size(),
                                      queued_video_bytes_);
             }
@@ -340,6 +358,8 @@ bool MediaPipeline::startWorkers(uint32_t generation) {
         video_worker_generation_ = generation;
         video_queue_.clear();
         queued_video_bytes_ = 0;
+        video_recovery_request_ = false;
+        video_decoder_reset_pending_ = false;
     }
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
@@ -422,6 +442,11 @@ void MediaPipeline::videoWorkerLoop() {
             video_queue_.pop_front();
             queued_video_bytes_ -= packet.data.size();
         }
+        if (video_decoder_reset_pending_.exchange(false) && video_decoder_) {
+            if (!video_decoder_->resetForKeyframe()) {
+                lunar::diagnosticLog("media", "video decoder reset for keyframe failed");
+            }
+        }
         if (shouldLogMediaWorker()) {
             lunar::diagnosticLog("media", "video worker pop len=%zu", packet.data.size());
         }
@@ -476,9 +501,16 @@ void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet) {
         return;
     }
     if (video_decoder_) {
-        video_decoder_->decode(packet.data.data(),
-                               packet.data.size(),
-                               packet.timestamp);
+        const bool decoded = video_decoder_->decode(packet.data.data(),
+                                                    packet.data.size(),
+                                                    packet.timestamp);
+        if (!decoded) {
+            markVideoRecovery("video decoder error");
+            // Keep the reset on the video worker so FFmpeg/NVDEC is never
+            // touched concurrently by the WebRTC pump or UI thread.
+            video_decoder_->resetForKeyframe();
+            video_decoder_reset_pending_ = false;
+        }
     }
 }
 
@@ -513,7 +545,11 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
                                  static_cast<long long>(delay_ns),
                                  static_cast<long long>(wait_ns));
         }
-        std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns));
+        // Do not sleep the decode worker for a frame that is early.  At
+        // 1080p/HQ that stall can fill the encoded queue and lose an entire
+        // reference chain.  The renderer's latest-frame handoff and the
+        // display pacing provide the appropriate wait point instead.
+        (void)wait_ns;
     }
 
     {

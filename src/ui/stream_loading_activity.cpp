@@ -316,11 +316,13 @@ void StreamLoadingActivity::startConnection() {
                 ? ctrl->startCloudStream(request.target_id,
                                          request.width,
                                          request.height,
-                                         request.options)
+                                         request.options,
+                                         request.bitrate_kbps)
                 : ctrl->startStream(request.target_id,
                                     request.width,
                                     request.height,
-                                    request.options);
+                                    request.options,
+                                    request.bitrate_kbps);
             std::string error = ok ? std::string() : ctrl->getLastStreamError();
             if (!alive->load()) {
                 if (ok) {

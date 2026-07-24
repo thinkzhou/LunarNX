@@ -61,9 +61,15 @@ public:
     bool startStream(const std::string& server_id, int width = 1280, int height = 720);
     bool startStream(const std::string& server_id, int width, int height,
                      const stream::MediaPipelineOptions& options);
+    bool startStream(const std::string& server_id, int width, int height,
+                     const stream::MediaPipelineOptions& options,
+                     int bitrate_kbps);
     bool startCloudStream(const std::string& title_id, int width = 1280, int height = 720);
     bool startCloudStream(const std::string& title_id, int width, int height,
                           const stream::MediaPipelineOptions& options);
+    bool startCloudStream(const std::string& title_id, int width, int height,
+                          const stream::MediaPipelineOptions& options,
+                          int bitrate_kbps);
     void stopStream();
     void stopStream(bool set_disconnected);
     StreamState getState() const { return state_.load(); }

@@ -104,10 +104,20 @@ int main() {
 
     lunar::webrtc::IceCandidate local;
     local.sdp = "candidate:5 1 UDP 1 10.0.0.4 9002 typ host";
-    auto api = processor.fromLocal({local});
-    require(api.size() == 1, "local candidate should convert");
+    require(lunar::app::IceCandidateProcessor::usernameFragmentFromSdp(
+                "v=0\r\na=ice-ufrag:local-ufrag\r\na=ice-pwd:secret\r\n") ==
+                "local-ufrag",
+            "SDP ICE username fragment should be extracted without CRLF");
+    auto api = processor.fromLocal({local}, "local-ufrag");
+    require(api.size() == 2, "local candidate should include end marker");
     require(api[0].candidate == "candidate:5 1 UDP 1 10.0.0.4 9002 typ host",
             "API candidate should not include a= prefix");
+    require(api[0].username_fragment == "local-ufrag",
+            "local candidate should carry the SDP ICE username fragment");
+    require(api[1].candidate == "a=end-of-candidates",
+            "local ICE should explicitly terminate trickle candidates");
+    require(api[1].username_fragment == "local-ufrag",
+            "local end marker should carry the SDP ICE username fragment");
 
     std::string json = processor.toApiJson(api);
     require(json.find("\"messageType\":\"iceCandidate\"") != std::string::npos,
@@ -116,6 +126,31 @@ int main() {
             "API JSON should use XStreaming candidate field");
     require(json.find("\"iceCandidates\"") == std::string::npos,
             "API JSON should not use legacy iceCandidates field");
+    require(json.find("\\\"usernameFragment\\\":\\\"local-ufrag\\\"") !=
+                std::string::npos,
+            "API JSON should stringify candidates with usernameFragment");
+    require(json.find("a=end-of-candidates") != std::string::npos,
+            "API JSON should include the local end marker");
+
+    auto round_trip = processor.parseRemotePayload(json, profile);
+    require(round_trip.size() == 2,
+            "stringified XStreaming candidate objects should parse");
+
+    const std::string placeholder =
+        R"([{"candidate":"candidate:1 1 UDP 100 13.104.10.20 9002 typ host"}])";
+    const std::string real =
+        R"([{"candidate":"candidate:2 1 UDP 2130706431 192.168.1.5 9002 typ host"},{"candidate":"a=end-of-candidates"}])";
+    require(!processor.hasRealCandidate(placeholder),
+            "low-priority placeholder ICE must not count as a real candidate");
+    require(processor.hasRealCandidate(real),
+            "high-priority trickled ICE should count as a real candidate");
+    auto aggregated = processor.parseRemotePayloads({placeholder, real}, profile);
+    require(aggregated.size() == 3,
+            "remote ICE batches should be aggregated before rewriting");
+    require(aggregated[0].candidate.find("192.168.1.5") != std::string::npos,
+            "aggregated home ICE should prefer the later LAN candidate");
+    require(processor.parseRemotePayloads({}, profile).empty(),
+            "no remote ICE payload must remain a signaling failure");
 
     auto lines = processor.toLibPeerLines(array);
     require(lines.size() == 1, "libpeer lines should skip end-of-candidates");

@@ -14,6 +14,7 @@ def main():
     libpeer_config = Path("lib/libpeer/src/config.h").read_text()
     tracked_patch = Path("tools/libpeer_legacy/legacy-libpeer-switch.patch").read_text()
     rtp = Path("lib/libpeer/src/rtp.c").read_text()
+    socket = Path("lib/libpeer/src/socket.c").read_text()
     peer_manager = Path("src/webrtc/peer_manager.cpp").read_text()
     web_rtc_transport = Path("src/app/web_rtc_transport.cpp").read_text()
 
@@ -86,6 +87,9 @@ def main():
     require("PEER_CONNECTION_MAX_PACKETS_PER_LOOP" in peer_connection and
             "while (packets_processed < PEER_CONNECTION_MAX_PACKETS_PER_LOOP)" in peer_connection,
             "WebRTC completed-state loop should drain multiple UDP packets so RTP cannot starve DTLS/SCTP data")
+    require("loop_work = packets_processed + rtp_decoded_packets" in peer_connection and
+            "return loop_work;" in peer_connection,
+            "WebRTC pump should report queued media work to the bounded outer drain")
     require("PEER_CONNECTION_MAX_RTP_DECODE_PER_LOOP" not in peer_connection and
             "rtp_decoded_this_loop" not in peer_connection and
             "drop RTP after media budget" not in peer_connection,
@@ -112,6 +116,8 @@ def main():
 
     require("CONFIG_MAX_NALU_SIZE (2 * 1024 * 1024)" in libpeer_config,
             "H.264 RTP reassembly must allow large Xbox IDR frames")
+    require("SO_RCVBUF" in socket and "4 * 1024 * 1024" in socket,
+            "Legacy libpeer should request a large UDP receive buffer for 1080p bursts")
     require("uint8_t h264_buf[CONFIG_MAX_NALU_SIZE]" in Path("lib/libpeer/src/rtp.h").read_text(),
             "H.264 RTP reassembly buffer should be per decoder, not static global state")
     require("uint8_t h264_frame_buf[CONFIG_MAX_NALU_SIZE]" in Path("lib/libpeer/src/rtp.h").read_text() and

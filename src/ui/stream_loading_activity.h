@@ -29,6 +29,8 @@ struct StreamLaunchRequest {
     std::string display_name;
     int width = 1280;
     int height = 720;
+    // Zero keeps direct callers on StreamController's resolution default.
+    int bitrate_kbps = 0;
     stream::MediaPipelineOptions options;
 };
 

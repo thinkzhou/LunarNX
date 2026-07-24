@@ -1,6 +1,7 @@
 #pragma once
 
 #include "web_rtc_transport.h"
+#include "stream_profile.h"
 
 #include <atomic>
 #include <chrono>
@@ -16,7 +17,8 @@ public:
 
     void reset();
     void handleMessageChannelData(const uint8_t* data, size_t len);
-    bool startProtocol(const uint8_t* metadata,
+    bool startProtocol(const StreamProfile& profile,
+                       const uint8_t* metadata,
                        size_t metadata_len,
                        const CancelCallback& cancel);
     bool sendInputPacket(const uint8_t* data, size_t len);

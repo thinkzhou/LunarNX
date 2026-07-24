@@ -75,20 +75,43 @@ void userAppInit()
     appletLockExit();
     switchEarlyLog("appletLockExit done");
 
-    SocketInitConfig cfg = *(socketGetDefaultInitConfig());
+    const SocketInitConfig default_cfg = *(socketGetDefaultInitConfig());
+    SocketInitConfig cfg = default_cfg;
     AppletType at        = appletGetAppletType();
+    // 1080p/HQ streams can burst several large RTP packets per frame.  The
+    // libnx default UDP receive buffer is only about 42 KiB, which lets the
+    // kernel drop packets while the Switch is busy presenting a frame.
+    // Keep the larger buffer in the dynamic socket heap; if a platform build
+    // cannot reserve it, retry with libnx's original configuration.
+    cfg.udp_rx_buf_size = 512 * 1024;
     switchEarlyLog("applet type=%d", at);
     if (at == AppletType_Application || at == AppletType_SystemApplication)
     {
         cfg.num_bsd_sessions = 12;
         cfg.sb_efficiency    = 8;
-        socket_initialized = logInitResult("socketInitialize application", socketInitialize(&cfg));
+        Result rc = socketInitialize(&cfg);
+        switchEarlyLog("socketInitialize application enhanced rc=0x%08x udp_rx=%u",
+                       rc, cfg.udp_rx_buf_size);
+        if (R_FAILED(rc))
+        {
+            rc = socketInitialize(&default_cfg);
+            switchEarlyLog("socketInitialize application fallback rc=0x%08x", rc);
+        }
+        socket_initialized = R_SUCCEEDED(rc);
     }
     else
     {
         cfg.num_bsd_sessions = 2;
         cfg.sb_efficiency    = 1;
-        socket_initialized = logInitResult("socketInitialize applet", socketInitialize(&cfg));
+        Result rc = socketInitialize(&cfg);
+        switchEarlyLog("socketInitialize applet enhanced rc=0x%08x udp_rx=%u",
+                       rc, cfg.udp_rx_buf_size);
+        if (R_FAILED(rc))
+        {
+            rc = socketInitialize(&default_cfg);
+            switchEarlyLog("socketInitialize applet fallback rc=0x%08x", rc);
+        }
+        socket_initialized = R_SUCCEEDED(rc);
     }
 
 #ifdef DEBUG

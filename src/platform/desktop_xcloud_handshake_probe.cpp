@@ -222,7 +222,11 @@ int main() {
     printf("local ICE candidates=%zu\n", local.size());
     t0 = clock::now();
     const bool ice_send_ok =
-        session.sendIceCandidates(provisioned.session_id, local, {});
+        session.sendIceCandidates(
+            provisioned.session_id,
+            local,
+            {},
+            lunar::app::IceCandidateProcessor::usernameFragmentFromSdp(offer));
     printf("sendIceCandidates ok=%s elapsed_ms=%.0f err=%s\n",
            ice_send_ok ? "yes" : "no",
            ms_since(t0),

@@ -89,6 +89,11 @@ public:
                            size_t len,
                            uint16_t sequence,
                            uint64_t timestamp);
+    // A media discontinuity requires a fresh IDR.  The video worker performs
+    // the decoder reset independently; the session acknowledges this flag
+    // after a throttled control/PLI request succeeds.
+    bool hasVideoRecoveryRequest() const { return video_recovery_request_.load(); }
+    void clearVideoRecoveryRequest() { video_recovery_request_ = false; }
     void presentVideoFrame();
 
     bool isRunning() const { return running_.load(); }
@@ -110,6 +115,7 @@ private:
     void videoWorkerLoop();
     void audioWorkerLoop();
     void processVideoPacket(const QueuedVideoPacket& packet);
+    void markVideoRecovery(const char* reason);
 
     bool isGenerationActive(uint32_t generation) const;
     void handleVideoFrame(const VideoFrame& frame, uint32_t generation);
@@ -135,6 +141,8 @@ private:
     bool video_worker_stop_ = false;
     size_t queued_video_bytes_ = 0;
     uint32_t video_worker_generation_ = 0;
+    std::atomic<bool> video_recovery_request_{false};
+    std::atomic<bool> video_decoder_reset_pending_{false};
 
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;

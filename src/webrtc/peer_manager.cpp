@@ -409,6 +409,14 @@ bool PeerManager::requestVideoKeyframe() {
     return ret >= 0;
 }
 
+bool PeerManager::sendReceiverFeedback(uint32_t bitrate_bps) {
+    if (!pc_ || !connected_) return false;
+    const int ret = peer_connection_send_receiver_feedback(pc_, bitrate_bps);
+    lunar::diagnosticLog("webrtc", "send RTCP RR+REMB bitrate_bps=%u result=%d",
+                         bitrate_bps, ret);
+    return ret >= 0;
+}
+
 bool PeerManager::isConnected() const {
     return connected_;
 }
@@ -438,10 +446,25 @@ void PeerManager::processEvents() {
         if (log_index < 16) {
             lunar::diagnosticLog("webrtc", "processEvents begin index=%d", log_index);
         }
-        peer_connection_loop(pc_);
+        constexpr int kMaxDrainPasses = 8;
+        constexpr auto kMaxDrainTime = std::chrono::milliseconds(3);
+        const auto drain_start = std::chrono::steady_clock::now();
+        int drain_passes = 0;
+        int drain_work = 0;
+        while (drain_passes < kMaxDrainPasses) {
+            const int work = peer_connection_loop(pc_);
+            drain_work += work;
+            drain_passes++;
+            if (work <= 0 ||
+                std::chrono::steady_clock::now() - drain_start >= kMaxDrainTime) {
+                break;
+            }
+        }
         if (log_index < 16) {
-            lunar::diagnosticLog("webrtc", "processEvents after peer loop index=%d connected=%s data_created=%s data_ready=%s",
+            lunar::diagnosticLog("webrtc", "processEvents after peer loop index=%d passes=%d work=%d connected=%s data_created=%s data_ready=%s",
                                  log_index,
+                                 drain_passes,
+                                 drain_work,
                                  connected_.load() ? "true" : "false",
                                  data_channels_created_ ? "true" : "false",
                                  peer_connection_is_datachannel_connected(pc_) ? "true" : "false");

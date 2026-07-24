@@ -192,11 +192,27 @@ brls::View* StreamSettingsActivity::createContentView() {
     video_card->setPadding(4, 8, 4, 8);
 
     auto* resolution = new brls::SelectorCell();
-    resolution->init(brls::getStr("lunarnx/settings/resolution"), {"720p", "1080p"},
-        settings_.height == 1080 ? 1 : 0,
+    resolution->init(brls::getStr("lunarnx/settings/resolution"),
+        {brls::getStr("lunarnx/settings/resolution_720p"),
+         brls::getStr("lunarnx/settings/resolution_1080p"),
+         brls::getStr("lunarnx/settings/resolution_1080p_hq")},
+        settings_.height >= 1080
+            ? (settings_.bitrate_kbps >= 30000 ? 2 : 1)
+            : 0,
         [this](int selected) {
-            settings_.width = selected == 1 ? 1920 : 1280;
-            settings_.height = selected == 1 ? 1080 : 720;
+            if (selected >= 2) {
+                settings_.width = 1920;
+                settings_.height = 1080;
+                settings_.bitrate_kbps = 30000;
+            } else if (selected == 1) {
+                settings_.width = 1920;
+                settings_.height = 1080;
+                settings_.bitrate_kbps = 20000;
+            } else {
+                settings_.width = 1280;
+                settings_.height = 720;
+                settings_.bitrate_kbps = 10000;
+            }
         });
     video_card->addView(resolution);
 

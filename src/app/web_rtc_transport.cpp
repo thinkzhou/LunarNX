@@ -7,6 +7,7 @@ namespace lunar::app {
 namespace {
 
 constexpr std::chrono::milliseconds kDataChannelSettle{500};
+constexpr std::chrono::seconds kConnectedDataChannelTimeout{12};
 
 std::string answerWithInlineCandidates(
     std::string answer,
@@ -141,12 +142,14 @@ bool WebRtcTransport::waitDataChannels(std::chrono::milliseconds timeout,
     }
 
     const auto start = std::chrono::steady_clock::now();
+    auto connected_at = std::chrono::steady_clock::time_point{};
     while (true) {
         if (cancel && cancel()) {
             return false;
         }
 
         peer_->processEvents();
+        const auto now = std::chrono::steady_clock::now();
         if (peer_->isDataChannelReady()) {
             const auto settle_start = std::chrono::steady_clock::now();
             while (std::chrono::steady_clock::now() - settle_start < kDataChannelSettle) {
@@ -163,9 +166,23 @@ bool WebRtcTransport::waitDataChannels(std::chrono::milliseconds timeout,
                                          std::chrono::steady_clock::now() - start).count()));
             return true;
         }
-
+        if (peer_->isConnected()) {
+            if (connected_at.time_since_epoch().count() == 0) {
+                connected_at = now;
+            } else if (now - connected_at >= kConnectedDataChannelTimeout) {
+                lunar::diagnosticLog(
+                    "webrtc-transport",
+                    "waitDataChannels dead media path connected_ms=%lld",
+                    static_cast<long long>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now - connected_at).count()));
+                return false;
+            }
+        } else {
+            connected_at = {};
+        }
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - start);
+            now - start);
         if (elapsed >= timeout) {
             lunar::diagnosticLog("webrtc-transport", "waitDataChannels timeout elapsed_ms=%lld",
                                  static_cast<long long>(elapsed.count()));
@@ -199,6 +216,15 @@ bool WebRtcTransport::sendMessageData(const uint8_t* data, size_t len) {
 bool WebRtcTransport::requestVideoKeyframe() {
     const bool sent = peer_ && peer_->requestVideoKeyframe();
     lunar::diagnosticLog("webrtc-transport", "send RTCP PLI result=%s",
+                         sent ? "true" : "false");
+    return sent;
+}
+
+bool WebRtcTransport::sendReceiverFeedback(uint32_t bitrate_bps) {
+    const bool sent = peer_ && peer_->sendReceiverFeedback(bitrate_bps);
+    lunar::diagnosticLog("webrtc-transport",
+                         "send RTCP RR+REMB bitrate_bps=%u result=%s",
+                         bitrate_bps,
                          sent ? "true" : "false");
     return sent;
 }

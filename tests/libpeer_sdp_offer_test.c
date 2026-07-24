@@ -34,8 +34,12 @@ int main(void) {
           "video offer direction should match XStreaming recvonly");
   require(memmem(video, video_len, "a=sendrecv", strlen("a=sendrecv")) == NULL,
           "video offer should not advertise sendrecv");
-  require(strstr(audio, "a=sendrecv") != NULL,
-          "audio offer should keep sendrecv");
+  require(strstr(audio, "a=recvonly") != NULL,
+          "audio offer should match the native recvonly template");
+  require(strstr(video, "a=rtcp-fb:102 goog-remb") != NULL,
+          "video offer should negotiate REMB feedback");
+  require(strstr(video, "a=rtcp-rsize") != NULL,
+          "video offer should negotiate reduced-size RTCP");
 
   printf("libpeer SDP offer tests passed\n");
   return 0;

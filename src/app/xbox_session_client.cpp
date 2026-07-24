@@ -2,6 +2,8 @@
 #include "../diagnostics.h"
 #include "../platform/network_worker.h"
 
+#include <algorithm>
+
 namespace lunar::app {
 namespace {
 
@@ -213,12 +215,13 @@ bool XboxSessionClient::exchangeSdpAnswer(const std::string& session_id,
 bool XboxSessionClient::sendIceCandidates(
     const std::string& session_id,
     const std::vector<webrtc::IceCandidate>& candidates,
-    const CancelCallback& cancel) {
+    const CancelCallback& cancel,
+    const std::string& username_fragment) {
     if (!api_) {
         lunar::diagnosticLog("xbox-session", "Send ICE skipped: api unavailable");
         return false;
     }
-    const auto payloads = ice_processor_.fromLocal(candidates);
+    const auto payloads = ice_processor_.fromLocal(candidates, username_fragment);
     const bool ok = api_->sendIceCandidates(session_id,
                                             ice_processor_.toApiJson(payloads),
                                             cancel);
@@ -239,6 +242,10 @@ std::vector<IceCandidatePayload> XboxSessionClient::getIceCandidates(
         return {};
     }
 
+    std::vector<std::string> raw_payloads;
+    bool saw_real_candidate = false;
+    int quiet_polls = 0;
+    size_t candidate_count = 0;
     for (int i = 0; i < kSignalingPollAttempts; ++i) {
         if (cancel && cancel()) {
             return {};
@@ -246,11 +253,22 @@ std::vector<IceCandidatePayload> XboxSessionClient::getIceCandidates(
 
         const std::string payload = api_->getIceCandidates(session_id, cancel);
         if (!payload.empty()) {
-            auto candidates = ice_processor_.parseRemotePayload(payload, profile);
-            if (!candidates.empty()) {
-                lunar::diagnosticLog("xbox-session", "Get ICE candidates succeeded count=%zu attempt=%d",
-                                     candidates.size(), i + 1);
-                return candidates;
+            raw_payloads.push_back(payload);
+            const bool is_real = ice_processor_.hasRealCandidate(payload);
+            saw_real_candidate = saw_real_candidate || is_real;
+            const bool server_done = payload.find("end-of-candidates") != std::string::npos;
+            const auto accumulated =
+                ice_processor_.parseRemotePayloads(raw_payloads, profile);
+            const size_t next_count = accumulated.empty() ? 0 : accumulated.size() - 1;
+            quiet_polls = next_count > candidate_count ? 0 : quiet_polls + 1;
+            candidate_count = std::max(candidate_count, next_count);
+            if (server_done || (saw_real_candidate && quiet_polls >= 4)) {
+                break;
+            }
+        } else if (saw_real_candidate) {
+            ++quiet_polls;
+            if (quiet_polls >= 4) {
+                break;
             }
         }
 
@@ -263,9 +281,34 @@ std::vector<IceCandidatePayload> XboxSessionClient::getIceCandidates(
         }
     }
 
+    auto candidates = ice_processor_.parseRemotePayloads(raw_payloads, profile);
+    if (!candidates.empty()) {
+        lunar::diagnosticLog("xbox-session", "Get ICE candidates succeeded count=%zu payloads=%zu real=%s",
+                             candidates.size(), raw_payloads.size(),
+                             saw_real_candidate ? "true" : "false");
+        return candidates;
+    }
+
     lunar::diagnosticLog("xbox-session", "Get ICE candidates timed out: %s",
                          api_->getLastError().c_str());
     return {};
+}
+
+bool XboxSessionClient::cleanupStaleSessions(const StreamProfile& profile,
+                                              const CancelCallback& cancel) {
+    if (!api_) {
+        return false;
+    }
+    api_->setSessionKind(profile.type == SessionType::Cloud
+                             ? api::GssvSessionKind::Cloud
+                             : api::GssvSessionKind::Home);
+    if (!profile.base_url.empty()) {
+        api_->setBaseUrl(profile.base_url);
+    }
+    return api_->cleanupActiveSessions(profile.type == SessionType::Cloud
+                                           ? api::GssvSessionKind::Cloud
+                                           : api::GssvSessionKind::Home,
+                                       cancel);
 }
 
 bool XboxSessionClient::keepAlive(const std::string& session_id,

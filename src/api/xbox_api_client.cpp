@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <set>
 #include <cctype>
+#include <cstring>
 
 namespace lunar::api {
 namespace {
@@ -78,6 +79,34 @@ std::string sessionIdFromPath(const std::string& path) {
         return "";
     }
     return path.substr(slash + 1);
+}
+
+void collectActiveSessionPaths(cJSON* node,
+                               std::vector<std::string>& paths) {
+    if (!node) {
+        return;
+    }
+    if (cJSON_IsArray(node)) {
+        cJSON* item = nullptr;
+        cJSON_ArrayForEach(item, node) {
+            collectActiveSessionPaths(item, paths);
+        }
+        return;
+    }
+    if (!cJSON_IsObject(node)) {
+        return;
+    }
+
+    cJSON* item = nullptr;
+    cJSON_ArrayForEach(item, node) {
+        if (item->string &&
+            (std::strcmp(item->string, "sessionPath") == 0 ||
+             std::strcmp(item->string, "path") == 0) &&
+            cJSON_IsString(item) && item->valuestring) {
+            paths.emplace_back(item->valuestring);
+        }
+        collectActiveSessionPaths(item, paths);
+    }
 }
 
 std::string makeHomeDeviceInfoHeader(int width = 1920,
@@ -459,9 +488,16 @@ std::string XboxApiClient::pollSessionState(const std::string& session_id,
     traceXboxResponse("session-state", url, resp);
 
     if (resp.status_code != 200) {
-        last_error_ = resp.network_error
-            ? "Could not poll Xbox session state. Check WiFi and try again."
-            : "Xbox session state request failed. HTTP " + std::to_string(resp.status_code) + ".";
+        if (resp.network_error) {
+            last_error_ = "Could not poll Xbox session state. Check WiFi and try again.";
+        } else {
+            const std::string detail = serviceErrorMessage(resp.body);
+            last_error_ = "Xbox session state request failed. HTTP " +
+                          std::to_string(resp.status_code) + ".";
+            if (!detail.empty()) {
+                last_error_ += " " + detail;
+            }
+        }
         lunar::diagnosticLog("xbox-api", "Poll session state failed status=%d network=%s error=%s",
                              resp.status_code,
                              resp.network_error ? "true" : "false",
@@ -800,6 +836,91 @@ bool XboxApiClient::deleteSession(const std::string& session_id, HttpClient::Can
                              resp.error_message.c_str());
     }
     return ok;
+}
+
+bool XboxApiClient::cleanupActiveSessions(GssvSessionKind kind,
+                                          HttpClient::CancelCallback cancel) {
+    const std::string path = "/v5/sessions/" +
+                             std::string(gssvSessionKindPath(kind)) + "/active";
+    const std::string url = base_url_ + path;
+
+    std::map<std::string, std::string> headers;
+    headers["Accept"] = "application/json";
+    headers["Content-Type"] = "application/json";
+    headers["X-MS-Device-Info"] = kind == GssvSessionKind::Home
+        ? makeHomeDeviceInfoHeader(1280, 720, "android")
+        : makeHomeDeviceInfoHeader(1920, 1080, "tizen");
+    headers["Authorization"] = "Bearer " + gssv_token_;
+
+    auto response = http_.get(url, headers, cancel);
+    traceXboxResponse("active-sessions", url, response);
+    if (response.status_code == 404 || response.status_code == 204) {
+        return true;
+    }
+    if (!isHttpSuccess(response.status_code)) {
+        lunar::diagnosticLog("xbox-api",
+                             "Active session cleanup lookup failed kind=%s status=%d network=%s error=%s",
+                             gssvSessionKindPath(kind),
+                             response.status_code,
+                             response.network_error ? "true" : "false",
+                             response.error_message.c_str());
+        return false;
+    }
+
+    cJSON* root = cJSON_Parse(response.body.c_str());
+    if (!root) {
+        lunar::diagnosticLog("xbox-api", "Active session cleanup response parse failed");
+        return false;
+    }
+    std::vector<std::string> paths;
+    collectActiveSessionPaths(root, paths);
+    cJSON_Delete(root);
+
+    std::set<std::string> unique_paths;
+    const std::string expected_prefix = "/v5/sessions/" +
+                                        std::string(gssvSessionKindPath(kind)) + "/";
+    for (const auto& raw_path : paths) {
+        if (raw_path.empty()) {
+            continue;
+        }
+        std::string session_path = raw_path;
+        if (session_path.rfind("http://", 0) == 0 ||
+            session_path.rfind("https://", 0) == 0) {
+            const auto scheme_end = session_path.find('/', session_path.find("://") + 3);
+            session_path = scheme_end == std::string::npos
+                ? "/"
+                : session_path.substr(scheme_end);
+        }
+        if (session_path.front() != '/') {
+            session_path.insert(session_path.begin(), '/');
+        }
+        if (session_path.rfind(expected_prefix, 0) != 0 ||
+            session_path == expected_prefix + "active") {
+            lunar::diagnosticLog("xbox-api",
+                                 "Ignoring unexpected active-session path=%s",
+                                 session_path.c_str());
+            continue;
+        }
+        if (!unique_paths.insert(session_path).second) {
+            continue;
+        }
+
+        const std::string delete_url = base_url_ + session_path;
+        auto deleted = http_.del(delete_url, headers, cancel);
+        traceXboxResponse("active-session-delete", delete_url, deleted);
+        if (deleted.status_code == 404 || isHttpSuccess(deleted.status_code)) {
+            lunar::diagnosticLog("xbox-api", "Removed stale session path=%s",
+                                 session_path.c_str());
+            continue;
+        }
+        lunar::diagnosticLog("xbox-api",
+                             "Stale session delete failed path=%s status=%d network=%s error=%s",
+                             session_path.c_str(),
+                             deleted.status_code,
+                             deleted.network_error ? "true" : "false",
+                             deleted.error_message.c_str());
+    }
+    return true;
 }
 
 // =============================================================================

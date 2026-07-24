@@ -324,6 +324,16 @@ bool VideoDecoder::deliverFrame(AVFrame* frame,
                                 bool log) {
     if (!frame) return false;
 
+    if (frame->decode_error_flags != 0) {
+        if (perf_) perf_->recordVideoDecodeError();
+        lunar::diagnosticLog("video",
+                             "drop corrupt decoded frame index=%d flags=0x%x",
+                             log_index,
+                             frame->decode_error_flags);
+        av_frame_free(&frame);
+        return false;
+    }
+
     AVFrame* callback_frame = frame;
 
 #ifdef __SWITCH__
@@ -468,6 +478,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
         if (au.has_idr) pkt->flags |= AV_PKT_FLAG_KEY;
 
         int ret = avcodec_send_packet(ctx, pkt);
+        bool decode_ok = ret >= 0 || ret == AVERROR(EAGAIN);
         if (log) {
             lunar::diagnosticLog("video",
                                  "hardware avcodec_send_packet ret=%d index=%d",
@@ -480,7 +491,10 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
             int receive_ret = 0;
             while (receive_ret >= 0) {
                 AVFrame* frame = av_frame_alloc();
-                if (!frame) break;
+                if (!frame) {
+                    decode_ok = false;
+                    break;
+                }
                 auto t0 = std::chrono::high_resolution_clock::now();
                 receive_ret = avcodec_receive_frame(ctx, frame);
                 auto t1 = std::chrono::high_resolution_clock::now();
@@ -498,12 +512,17 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                         auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
                         perf_->recordDecodeLatency(static_cast<uint64_t>(us));
                     }
-                    deliverFrame(frame, timestamp, log_index, log);
+                    if (!deliverFrame(frame, timestamp, log_index, log)) {
+                        decode_ok = false;
+                    }
                 } else {
                     if (log && receive_ret != AVERROR(EAGAIN) && receive_ret != AVERROR_EOF) {
                         logVideoDecodeError("hardware avcodec_receive_frame failed",
                                             receive_ret,
                                             h264_error_log_count_);
+                    }
+                    if (receive_ret != AVERROR(EAGAIN) && receive_ret != AVERROR_EOF) {
+                        decode_ok = false;
                     }
                     av_frame_free(&frame);
                 }
@@ -522,6 +541,9 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                                      decoded_frames - before_retry_frames);
             }
             ret = retry_ret;
+            if (retry_ret < 0 && retry_ret != AVERROR(EAGAIN)) {
+                decode_ok = false;
+            }
         } else if (ret == AVERROR_UNKNOWN && h264_error_log_count_ < kVideoErrorLogLimit) {
             lunar::diagnosticLog("video",
                                  "NVDEC status error; packet not retried index=%d len=%zu ts=%llu",
@@ -548,6 +570,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
             logVideoDecodeError("hardware avcodec_send_packet failed",
                                 ret,
                                 h264_error_log_count_);
+            decode_ok = false;
         }
         if (log) {
             lunar::diagnosticLog("video",
@@ -556,7 +579,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                                  decoded_frames,
                                  ret);
         }
-        return true;
+        return decode_ok;
     }
 #endif
 
@@ -570,6 +593,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
     const uint8_t* p_data = data;
     int p_size = static_cast<int>(len);
 
+    bool decode_ok = true;
     while (p_size > 0) {
         uint8_t* out_data = nullptr;
         int out_size = 0;
@@ -589,7 +613,10 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
 
         if (out_size > 0) {
             AVPacket* pkt = av_packet_alloc();
-            if (!pkt) continue;
+            if (!pkt) {
+                decode_ok = false;
+                continue;
+            }
             pkt->data = out_data;
             pkt->size = out_size;
 
@@ -602,6 +629,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                                      log_index);
             }
             if (ret < 0) {
+                decode_ok = false;
                 if (perf_) perf_->recordVideoDecodeError();
                 if (h264_error_log_count_ < kVideoErrorLogLimit) {
                     lunar::diagnosticLog("video",
@@ -640,11 +668,16 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                         auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
                         perf_->recordDecodeLatency(static_cast<uint64_t>(us));
                     }
-                    deliverFrame(frame, timestamp, log_index, log);
+                    if (!deliverFrame(frame, timestamp, log_index, log)) {
+                        decode_ok = false;
+                    }
                 } else {
                     if (log && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
                         if (perf_) perf_->recordVideoDecodeError();
                         logVideoDecodeError("avcodec_receive_frame failed", ret, h264_error_log_count_);
+                    }
+                    if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+                        decode_ok = false;
                     }
                     av_frame_free(&frame);
                 }
@@ -658,10 +691,36 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
             }
         }
     }
-    return true;
+    return decode_ok;
 }
 
 void VideoDecoder::setCallback(FrameCallback cb) { on_frame_ = std::move(cb); }
+
+bool VideoDecoder::resetForKeyframe() {
+    if (!initialized_ || !codec_ctx_) return false;
+
+    auto* ctx = static_cast<AVCodecContext*>(codec_ctx_);
+    avcodec_flush_buffers(ctx);
+
+    if (parser_) {
+        av_parser_close(static_cast<AVCodecParserContext*>(parser_));
+        parser_ = nullptr;
+    }
+    AVCodecParserContext* parser = av_parser_init(AV_CODEC_ID_H264);
+    if (!parser) {
+        lunar::diagnosticLog("video", "H264 parser reinit failed during keyframe reset");
+        h264_decoder_ready_ = false;
+        return false;
+    }
+    parser->flags |= PARSER_FLAG_COMPLETE_FRAMES;
+    parser_ = parser;
+    // Keep SPS/PPS knowledge: Xbox may send them only in the first IDR, while
+    // a requested recovery IDR can be a slice-only access unit.
+    h264_decoder_ready_ = false;
+    h264_wait_log_count_ = 0;
+    lunar::diagnosticLog("video", "H264 decoder reset; waiting for IDR");
+    return true;
+}
 
 void VideoDecoder::flush() {
     if (!initialized_) return;

@@ -31,6 +31,11 @@ int main() {
     require(cloud.prefer_ipv6, "cloud prefer public/ipv6");
     require(cloud.os_name == "windows", "cloud 1080 os");
 
+    auto cloud_hq = lunar::app::makeCloudStreamProfile(
+        "TITLE123", 1920, 1080, 30000);
+    require(cloud_hq.bitrate_kbps == 30000, "cloud 1080 HQ bitrate");
+    require(cloud_hq.os_name == "tizen", "cloud 1080 HQ os");
+
     require(std::string(lunar::api::gssvSessionKindPath(lunar::api::GssvSessionKind::Home)) == "home",
             "home path");
     require(std::string(lunar::api::gssvSessionKindPath(lunar::api::GssvSessionKind::Cloud)) == "cloud",

@@ -96,6 +96,8 @@ public:
     // Session lifecycle
     bool sendKeepAlive(const std::string& session_id, HttpClient::CancelCallback cancel = {});
     bool deleteSession(const std::string& session_id, HttpClient::CancelCallback cancel = {});
+    bool cleanupActiveSessions(GssvSessionKind kind,
+                               HttpClient::CancelCallback cancel = {});
     void setBaseUrl(const std::string& base_url);
     // When set, catalog.gamepass.com / titles.json calls are rewritten to this base
     // (used by local mock_xbox server). Empty means real Microsoft hosts.

@@ -21,6 +21,12 @@ Decoded media callbacks also expose the source RTP sequence number and
 timestamp. LunarNX uses those values for Opus reordering, packet-loss
 concealment, and RTP-clock-based A/V synchronization.
 
+The UDP socket requests a 4 MiB `SO_RCVBUF` as a best-effort burst cushion for
+1080p/HQ IDR frames. `peer_connection_loop()` reports receive/decode work so
+LunarNX can perform a bounded multi-pass drain without starving DTLS or SCTP;
+the socket and drain changes are safe to ignore when a target clamps the
+requested buffer size.
+
 On Switch, libpeer obtains the local IPv4 host ICE candidate through
 `nifmGetCurrentIpAddress()`. The compatibility `getifaddrs()` implementation
 returns an empty list on this platform, which otherwise leaves only the public
@@ -107,6 +113,16 @@ XStreaming's libwebrtc. LunarNX sends the Xbox control-channel
 function was previously an unsent TODO; the patch now writes the RTCP header in
 network byte order, protects it with the negotiated outbound SRTCP context, and
 sends it through the selected ICE pair.
+
+The receiver also advertises its selected 720p/1080p/HQ capability through the
+message-channel `clientdevicecapabilities` and `dimensionschanged` messages.
+Once media is enabled, LunarNX sends a compound RTCP Receiver Report plus a
+REMB roughly once per second. The report records the remote Sender Report's LSR
+and computes DLSR in 1/65536-second units; using raw milliseconds here makes the
+sender's RTT estimator overflow and can pin its encoder at a starvation bitrate.
+The REMB value is the profile's receiver cap (10 Mbps for 720p, 20 Mbps for
+1080p, or an explicitly selected 30 Mbps HQ profile), not a local encoder
+setting.
 
 Switch release builds default to `CONFIG_IPV6=0`; pass `IPV6=1` to the Switch
 make invocation when testing native IPv6 paths. When enabled, IPv6 host

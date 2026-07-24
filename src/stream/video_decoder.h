@@ -43,6 +43,9 @@ public:
 
     void setCallback(FrameCallback cb);
     void setPerfStats(struct PerfStats* stats) { perf_ = stats; }
+    /// Discard decoder reference state and wait for the next IDR.  This is
+    /// used after RTP queue loss or a hardware decode error.
+    bool resetForKeyframe();
     void flush();
     void shutdown();
 

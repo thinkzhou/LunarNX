@@ -1,116 +1,123 @@
 # LunarNX
 
-> Xbox Remote Play / xCloud 串流客户端 for Nintendo Switch (Atmosphère CFW)
+English | [简体中文](README.zh-CN.md)
 
-LunarNX 让你在破解的 Nintendo Switch 上游玩你自己的 Xbox 主机或 Xbox Cloud Gaming (xCloud) 的游戏。它实现了完整的 Xbox GameStream over WebRTC 协议栈：从 MSAL OAuth2 认证 → Xbox REST API → WebRTC SDP/ICE 信令 → NVDEC 硬件解码 → deko3d GPU 渲染 → audout 音频输出 → Switch HID 手柄输入映射，提供低延迟、零拷贝的端到端串流体验。
+An unofficial Xbox Remote Play and Xbox Cloud Gaming client for Nintendo Switch homebrew.
+
+LunarNX implements the Xbox streaming client path from Microsoft authentication and Xbox session APIs through WebRTC transport, H.264/Opus decoding, Switch rendering, audio output, controller input, and rumble.
 
 > [!WARNING]
-> LunarNX 仍处于早期开发阶段，需要 Atmosphère CFW，不适用于未破解的 Switch。
-> 局域网主机串流是当前的主要实机验收路径；异地串流依赖两端 UDP/NAT
-> 连通性，而 legacy libpeer 尚未实现完整 TURN relay。xCloud 也属于实验性功能。
+> LunarNX is early-stage software intended for development and testing on real Nintendo Switch hardware. It requires a Switch homebrew environment, is not compatible with an unmodified retail console, and may fail or behave differently across networks, accounts, games, firmware versions, and Xbox service changes.
 
----
+## Project status
 
-## 功能
+Real Switch hardware is the compatibility target. Ryubing/Ryujinx is useful for regression testing, but simulator success is not proof of hardware compatibility.
 
-- **认证**：MSAL Device Code Flow，手机上访问 microsoft.com/link 输入代码即可登录
-- **主机串流**：连接你局域网内的 Xbox 主机，串流已安装的游戏
-- **视频**：H.264 硬件解码 (Tegra X1 NVDEC)，deko3d GPU 零拷贝 NV12→RGB 渲染，BT.709 色域转换
-- **音频**：Opus 软解码 (48kHz 立体声)，libnx audout 低延迟输出
-- **手柄输入**：Switch → Xbox 按键物理位置映射，XInput 线格式编码，HD 震动 (4 马达)
-- **性能叠加**：实时 FPS / 解码延迟 / 丢包统计，R3 按键切换显示
-- **稳定性**：Session keepalive 保活，断连自动重连 (指数退避)，Token 自动刷新
-- **音画同步**：基于时间戳的帧调度，>5ms 延迟丢帧，>2ms 提前 sleep
+| Area | Current status |
+| --- | --- |
+| Xbox console Remote Play on the same LAN | Primary tested path |
+| Xbox console Remote Play over the internet | Experimental; requires direct UDP/NAT connectivity |
+| Xbox Cloud Gaming (xCloud) | Experimental |
+| 720p / 1080p / 1080p HQ | Available; stability and delivered bitrate depend on the network and server |
+| H.264 hardware decoding | Available through Switch NVDEC |
+| Native IPv6 | Optional build setting; disabled in the default Switch build |
+| TURN relay | Not implemented |
 
-## 截屏
+Remote streaming is not guaranteed to work on every network. LunarNX can use public IPv4, native IPv6 when enabled, and IPv4 endpoints derived from Xbox Teredo ICE candidates, but the active legacy WebRTC stack does not provide a complete TURN relay fallback.
 
-欢迎提交不含账号、主机标识符或公网 IP 的实机截图。
+## Highlights
 
-## 安装
+- Microsoft device-code sign-in with local token storage
+- Discovery and wake-up of registered Xbox consoles
+- Browsable and searchable xCloud library with recent and new-title sections
+- Xbox GSSV session creation, SDP/ICE exchange, stale-session cleanup, keepalive, and reconnect handling
+- H.264 hardware decoding using Tegra X1 NVDEC
+- Zero-copy deko3d rendering, with copy-out and software decoder fallbacks
+- Optional EASU upscaling, RCAS sharpening, and dithering
+- Opus audio decoding with low-latency libnx Audren output
+- Switch controller to Xbox input mapping and four-motor rumble support
+- 720p at 10 Mbps, 1080p at 20 Mbps, and 1080p HQ at 30 Mbps receiver profiles
+- Runtime performance overlay for bitrate, packet loss, decode, render, audio, and WebRTC statistics
+- English, Simplified Chinese, and Traditional Chinese UI translations
 
-### 前提
+## Requirements
 
-- 已破解的 Nintendo Switch (Atmosphère CFW)，能够启动 Title Mode（需要完整 ~3.2GB RAM）
-- Xbox One / Xbox Series 主机；xCloud 通常需要 Game Pass Ultimate，部分免费游戏可能例外
-- 5GHz WiFi 网络
+- A Nintendo Switch capable of running homebrew NRO applications, typically with Atmosphère CFW
+- Full-memory/title-override mode is strongly recommended; Applet Mode may not provide enough memory for streaming and hardware decoding
+- An Xbox One or Xbox Series console with Remote Play enabled, or an account eligible for Xbox Cloud Gaming
+- A stable 5 GHz Wi-Fi or wired network connection
+- A legally obtained copy of all required firmware and system files for any simulator testing
 
-### 下载
+Xbox Cloud Gaming availability depends on account entitlement and region. Game Pass Ultimate is commonly required, although eligible free-to-play titles may differ.
 
-从 [Releases](https://github.com/thinkzhou/LunarNX/releases) 下载 `LunarNX.nro`，放到 SD 卡：
+## Installation
 
-```
-sdmc:/switch/LunarNX/LunarNX.nro
-```
+1. Download `LunarNX.nro` from the [Releases page](https://github.com/thinkzhou/LunarNX/releases).
+2. Copy it to your SD card:
 
-### 首次使用
+   ```text
+   sdmc:/switch/LunarNX/LunarNX.nro
+   ```
 
-1. 通过 hbmenu 启动 LunarNX（建议用 [NSP Forwarder](https://nsp-forwarder.vercel.app/moonlight) 创建桌面快捷方式以获得 Title Mode 完整内存）
-2. 界面上会显示一个 8 位代码和 microsoft.com/link 网址
-3. 用手机或电脑浏览器访问该网址，输入代码，用你的 Microsoft 账号登录
-4. 认证成功后，LunarNX 会显示你的 Xbox 主机列表
-5. 选择分辨率 (720p/1080p)，点击 Connect 开始串流
-6. 串流中按 `-` (Minus) 退出，按 `R3` (右摇杆按下) 切换性能统计显示
+3. Start the Homebrew Menu in title-override/full-memory mode and launch LunarNX.
 
-### 手柄按键映射
+Do not publish or share the contents of `sdmc:/switch/LunarNX/`. It can contain Microsoft/Xbox authentication material, cached account data, and diagnostic logs.
 
-| Switch | Xbox |
-|--------|-----|
-| A (右侧) | B |
-| B (下方) | A |
-| X (上方) | Y |
-| Y (左侧) | X |
-| ZL | LT (数字: 按下=100%, 松开=0%) |
-| ZR | RT (数字: 按下=100%, 松开=0%) |
-| L | LB |
-| R | RB |
-| - | View |
-| + | Menu |
+## First run
+
+1. Select **Start sign-in**.
+2. Open the displayed Microsoft device-login URL on a phone or computer and enter the code.
+3. After authentication, choose either your registered Xbox console or the xCloud library.
+4. Open Settings and select 720p, 1080p, or 1080p HQ.
+5. Select **Play** or **Wake & connect**.
+
+The first session may take up to a minute. A sleeping home console may require several wake-up attempts.
+
+## Controls
+
+LunarNX maps buttons by their physical position, so the Nintendo face-button labels are translated to the equivalent Xbox layout.
+
+| Nintendo Switch | Xbox action |
+| --- | --- |
+| B (bottom) | A |
+| A (right) | B |
+| Y (left) | X |
+| X (top) | Y |
+| L / R | LB / RB |
+| ZL / ZR | LT / RT |
+| Minus | View |
+| Plus | Menu |
 | L + R + Plus | Xbox Guide / Nexus |
-| 左摇杆按下 | L3 |
-| 右摇杆按下 | R3 |
-| 十字键 | 十字键 |
+| Left stick click | L3 |
+| Right stick click | R3 and performance overlay toggle |
+| D-pad / sticks | D-pad / sticks |
 
-> 注：Switch 的 ZL/ZR 是数字按键（无模拟行程），所以 LT/RT 输入只有 0% 或 100% 两种状态。
+ZL and ZR are digital Switch buttons, so Xbox trigger input is reported as either 0% or 100%.
 
-## 桌面测试
+To stop streaming, press **Minus + Plus together twice within three seconds**. A single Minus or Plus press remains available as Xbox View or Menu input.
 
-在烧录到 Switch 实机之前，可以在 macOS 上验证认证和 API 流程：
+## Building from source
 
-```bash
-# 安装依赖
-brew install openssl curl
+### Prerequisites
 
-# 编译并运行
-make -f Makefile.desktop auth_test
-./build/pc/lunar_auth_test
-```
-
-测试程序会：
-1. 显示设备码和 microsoft.com/link 网址
-2. 等你在浏览器完成登录后按 Enter
-3. 获取 token 并显示你的 Gamertag
-4. 列出你的 Xbox 主机
-5. 创建一个测试会话并立即删除
-
-## 从源码构建
-
-### 环境
-
-- macOS (Apple Silicon / Intel) 或 Linux
+- Git
 - Docker
-- 固定镜像 `devkitpro/devkita64:20251117`
-- Git（用于获取忽略的 Borealis 与 legacy libpeer 源码）
+- The pinned `devkitpro/devkita64:20251117` image
+- macOS or Linux as the host operating system
 
-Switch 目标不支持在 macOS 上直接编译。先准备固定版本的本地依赖：
+Do not build Switch-targeted libraries directly on macOS. Switch libraries and the NRO must be built with devkitA64 inside Docker.
+
+### Prepare dependencies
 
 ```sh
+git clone https://github.com/thinkzhou/LunarNX.git
+cd LunarNX
 ./scripts/setup_dependencies.sh
 ```
 
-该脚本会获取 Borealis，并在指定 libpeer commit 上应用
-`tools/libpeer_legacy/legacy-libpeer-switch.patch`。这两个 checkout 都被 Git 忽略。
+The setup script fetches pinned Borealis and legacy libpeer revisions and applies the tracked LunarNX libpeer patch. These local dependency checkouts are intentionally ignored by the main repository.
 
-### 构建
+### Build the Switch NRO
 
 ```sh
 docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
@@ -120,105 +127,128 @@ docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
     export PATH=/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin:$PATH
     make -f Makefile.switch clean
     make -f Makefile.switch -j$(nproc) \
-      IPV6=0 APP_DIAG=0 NETWORK_DIAG=0 XBOX_RESPONSE_TRACE=0 \
-      CURL_PROVIDER=wiliwili CURL_VERIFY=0 CURL_VERBOSE=0 \
-      CURL_TIMEOUT_MS=30000
+      NETWORK_DIAG=0 CURL_PROVIDER=wiliwili CURL_VERIFY=0 \
+      CURL_VERBOSE=0 CURL_TIMEOUT_MS=30000
   '
 ```
 
-输出为 `build/switch/LunarNX.nro`。构建后建议运行：
+The resulting application is written to:
+
+```text
+build/switch/LunarNX.nro
+```
+
+The default Switch build uses `IPV6=0`. Pass `IPV6=1` to the make command to compile native IPv6 support. This does not add TURN relay support and does not guarantee connectivity on IPv6-only or restrictive NAT networks.
+
+### Desktop development build
+
+The desktop target is intended for development, protocol probes, and regression tests. It is not a replacement for Switch hardware testing.
 
 ```sh
+make -f Makefile.desktop -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+make -f Makefile.desktop stream_tests
+make -f Makefile.desktop xcloud_session_support_test
+```
+
+Useful diagnostic targets include:
+
+```sh
+make -f Makefile.desktop auth_test
+make -f Makefile.desktop sdp_probe
+make -f Makefile.desktop xcloud_handshake_probe
+```
+
+### Validation
+
+After Switch or streaming changes, run the relevant focused tests and at minimum:
+
+```sh
+scripts/check_stream_regressions.sh
+python3 tests/xbox_stream_session_order_test.py
+python3 tests/libpeer_sctp_config_test.py
+python3 tests/libpeer_dtls_read_loop_test.py
+python3 tests/datachannel_ppid_test.py
 python3 tests/switch_nro_bss_test.py
+git diff --check
 ```
 
-桌面版只用于开发测试，不代表 Switch 实机兼容性：
+The Switch NRO BSS regression guard is 32 MiB. Real hardware remains the final validation target. See [docs/ryujinx_testing.md](docs/ryujinx_testing.md) for the current simulator and mock-stream workflow.
+
+If GLSL shaders change, rebuild the `.dksh` files inside a devkitPro environment:
 
 ```sh
-cmake -B build/pc -DPLATFORM_DESKTOP=ON -DCMAKE_BUILD_TYPE=Debug
-cmake --build build/pc -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+./scripts/compile_shaders.sh
 ```
 
-### shader 编译
+## Architecture
 
-如果修改了 `shaders/` 目录下的 GLSL 文件，需要用 `uam` (deko3d shader compiler) 重新编译：
-
-```bash
-uam -s glsl -o romfs/shaders/texture_fsh.dksh shaders/texture_fsh.glsl
-uam -s glsl -o romfs/shaders/basic_vsh.dksh shaders/basic_vsh.glsl
+```text
+Microsoft device-code authentication
+                │
+                ▼
+      Xbox REST / GSSV APIs
+  console discovery, catalog, sessions
+                │
+                ▼
+       WebRTC via legacy libpeer
+ SDP + ICE + DTLS-SRTP + SCTP channels
+          │                 │
+          ▼                 ▼
+ H.264 / Opus media    Xbox input/control
+          │                 │
+          ▼                 ▼
+ NVDEC + deko3d       Joy-Con / Pro Controller
+ Audren audio         XInput + rumble
 ```
 
-## 架构
+Major source areas:
 
-```
-┌────────────────────────────────────────────────┐
-│                  Nintendo Switch                 │
-│  ┌──────┐ ┌──────┐ ┌────────┐ ┌─────────────┐ │
-│  │ Auth │ │ API  │ │ WebRTC │ │   Input      │ │
-│  │MSAL  │ │REST  │ │libpeer │ │   HID→XInput │ │
-│  │ECDSA │ │JSON  │ │SDP/ICE │ │   HD Rumble  │ │
-│  └──┬───┘ └──┬───┘ └───┬────┘ └──────┬──────┘ │
-│     │        │         │              │         │
-│     │        │    ┌────┴──────────────┘         │
-│     │        │    │  Stream Pipeline             │
-│     │        │    │  ┌───────────────────────┐  │
-│     │        │    │  │ FFmpeg NVDEC H.264    │  │
-│     │        │    │  │ FFmpeg Opus (software) │  │
-│     │        │    │  └───────────┬───────────┘  │
-│     │        │    │              │              │
-│  ┌──┴────────┴────┴──────────────┴──────────┐  │
-│  │           Render & Audio Output           │  │
-│  │  deko3d NV12→RGB BT.709   │  audout PCM  │  │
-│  └───────────────────────────────────────────┘  │
-│  ┌───────────────────────────────────────────┐  │
-│  │          borealis UI Framework             │  │
-│  │   Auth → Console List → Stream + Overlay   │  │
-│  └───────────────────────────────────────────┘  │
-└────────────────────────────────────────────────┘
-          │ WiFi 5GHz, 802.11ac
-          ▼
-┌──────────────────────────────────┐
-│        Xbox / Azure Cloud         │
-│  GameStream REST API (WebRTC)     │
-│  H.264 + Opus / SCTP DataChannel  │
-└──────────────────────────────────┘
-```
+| Path | Responsibility |
+| --- | --- |
+| `src/auth/` | Microsoft/Xbox authentication and token storage |
+| `src/api/` | HTTP client, console discovery, cloud catalog, and Xbox session APIs |
+| `src/app/` | Stream profiles, session lifecycle, SDP/ICE, channels, and controller orchestration |
+| `src/webrtc/` | LunarNX wrapper around the active legacy libpeer checkout |
+| `src/stream/` | H.264/Opus decoding, rendering, audio, synchronization, and statistics |
+| `src/input/` | Switch gamepad reading, Xbox packet encoding, and rumble |
+| `src/ui/` | Borealis activities, settings, lists, stream view, and overlays |
+| `tools/mock_xbox/` | Local mock Xbox WebRTC server for simulator testing |
 
-## 依赖库
+## Privacy and security
 
-本项目站在以下优秀开源项目的肩膀上：
+- Authentication tokens are stored locally on the SD card.
+- Never upload token files, full diagnostic logs, raw Xbox API responses, console identifiers, or public IP addresses.
+- Release builds keep application diagnostics, network diagnostics, and raw Xbox response tracing disabled.
+- Debug builds can expose sensitive account and network metadata.
 
-| 项目 | 用途 | 许可证 |
-|------|------|--------|
-| [libpeer](https://github.com/sepfy/libpeer) | 轻量级 WebRTC C 实现 (SDP/ICE/DTLS-SRTP/SCTP) | MIT |
-| [averne/FFmpeg](https://github.com/averne/FFmpeg) | H.264 NVDEC 硬件解码 + Opus 软件解码 | LGPL/GPL |
-| [borealis](https://github.com/XITRIX/borealis) | Switch 风格 C++ UI 框架 | MIT |
-| [deko3d](https://github.com/devkitPro/deko3d) | Switch 原生底层 GPU API (NV12→RGB shader) | Zlib |
-| [libnx](https://github.com/switchbrew/libnx) | Switch 硬件抽象层 (HID, audout, fs) | ISC |
-| [mbedtls](https://github.com/Mbed-TLS/mbedtls) | DTLS/SRTP 加密 (ECDSA P-256 签名) | Apache 2.0 |
-| [libsrtp](https://github.com/cisco/libsrtp) | SRTP 媒体加密 | BSD-3 |
-| [cJSON](https://github.com/DaveGamble/cJSON) | 轻量 JSON 解析 | MIT |
-| [devkitPro](https://devkitpro.org) | Switch 交叉编译工具链 | GPL |
+Please read [SECURITY.md](SECURITY.md) before reporting a vulnerability or sharing logs.
 
-## 参考项目
+## Contributing
 
-LunarNX 在协议逆向、架构设计和技术验证上参考了以下开源项目：
+Contributions and hardware test reports are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
-| 项目 | 说明 |
-|------|------|
-| [XStreaming](https://github.com/Geocld/XStreaming) | iOS/Android Xbox 串流客户端 — Xbox 协议、XInput 线格式、Rumble 协议的主要参考 |
-| [libnxbox](https://github.com/ursusworks/libnxbox) | Switch Xbox 串流客户端 — 验证了 libpeer + NVDEC + deko3d 技术路线在 Switch 上可行 |
-| [Moonlight-Switch](https://github.com/XITRIX/Moonlight-Switch) | Switch NVIDIA GameStream 客户端 — deko3d 渲染、audout 音频、borealis UI 等 Switch 平台技术模式参考 |
-| [xbox-xcloud-player](https://github.com/unknownskl/xbox-xcloud-player) | JS xCloud WebRTC 库 — Xbox SDP 配置格式参考 |
-| [Greenlight](https://github.com/unknownskl/greenlight) | Xbox 串流桌面客户端 — MSAL Device Code 认证流程参考 |
+Useful reports include the selected stream profile, Switch model and firmware, network topology, whether the test was LAN or WAN, and a minimal redacted log excerpt. Do not attach complete logs.
 
-## 许可证
+## Credits
 
-项目自有源码使用 [MIT License](LICENSE)。第三方源码、预编译库和最终链接产物
-同时受各自许可证约束，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。特别是当
-FFmpeg 以 `--enable-gpl --enable-version3` 构建时，分发链接后的 NRO 需要同时履行 GPLv3
-及其他第三方许可证要求。
+LunarNX builds on or learns from several open-source projects, including:
 
----
+- [libpeer](https://github.com/sepfy/libpeer)
+- [Borealis](https://github.com/XITRIX/borealis)
+- [FFmpeg](https://github.com/FFmpeg/FFmpeg), [wiliwili](https://github.com/xfangfang/wiliwili), and Switch NVDEC work
+- [libnx](https://github.com/switchbrew/libnx) and [deko3d](https://github.com/devkitPro/deko3d)
+- [XStreaming](https://github.com/Geocld/XStreaming)
+- [Greenlight](https://github.com/unknownskl/greenlight)
+- [Moonlight-Switch](https://github.com/XITRIX/Moonlight-Switch)
+- [libnxbox](https://github.com/ursusworks/libnxbox)
+- [xbox-xcloud-player](https://github.com/unknownskl/xbox-xcloud-player)
 
-*LunarNX 不隶属于 Microsoft、Xbox 或 Nintendo。所有商标均为其各自所有者的财产。*
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency licenses and binary distribution obligations.
+
+## License
+
+LunarNX-owned source code is licensed under the [MIT License](LICENSE). Third-party source, libraries, patches, and linked release artifacts remain subject to their own licenses.
+
+The current Switch FFmpeg build enables GPL components. Anyone distributing a linked NRO must review and satisfy the license obligations for the exact dependency build used. `THIRD_PARTY_NOTICES.md` is an engineering inventory, not legal advice.
+
+LunarNX is not affiliated with, authorized by, or endorsed by Microsoft, Xbox, Nintendo, or the maintainers of the referenced projects. All product names and trademarks belong to their respective owners.

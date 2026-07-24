@@ -692,7 +692,16 @@ bool StreamController::startStream(const std::string& server_id,
                                    int width,
                                    int height,
                                    const stream::MediaPipelineOptions& options) {
-    StreamProfile profile = makeHomeStreamProfile(server_id, width, height);
+    return startStream(server_id, width, height, options, 0);
+}
+
+bool StreamController::startStream(const std::string& server_id,
+                                   int width,
+                                   int height,
+                                   const stream::MediaPipelineOptions& options,
+                                   int bitrate_kbps) {
+    StreamProfile profile = makeHomeStreamProfile(
+        server_id, width, height, bitrate_kbps);
     return startStreamWithProfile(profile, options);
 }
 
@@ -706,7 +715,16 @@ bool StreamController::startCloudStream(const std::string& title_id,
                                         int width,
                                         int height,
                                         const stream::MediaPipelineOptions& options) {
-    StreamProfile profile = makeCloudStreamProfile(title_id, width, height);
+    return startCloudStream(title_id, width, height, options, 0);
+}
+
+bool StreamController::startCloudStream(const std::string& title_id,
+                                        int width,
+                                        int height,
+                                        const stream::MediaPipelineOptions& options,
+                                        int bitrate_kbps) {
+    StreamProfile profile = makeCloudStreamProfile(
+        title_id, width, height, bitrate_kbps);
     return startStreamWithProfile(profile, options);
 }
 

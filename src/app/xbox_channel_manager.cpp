@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace lunar::app {
 
@@ -22,6 +23,73 @@ constexpr std::string_view kGamepadRemoved =
     R"({"message":"gamepadChanged","gamepadIndex":0,"wasAdded":false})";
 constexpr std::string_view kGamepadAdded =
     R"({"message":"gamepadChanged","gamepadIndex":0,"wasAdded":true})";
+
+std::string jsonEscape(std::string_view value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    for (const char ch : value) {
+        if (ch == '\\' || ch == '"') escaped.push_back('\\');
+        escaped.push_back(ch);
+    }
+    return escaped;
+}
+
+std::string wrapMessage(std::string_view target,
+                        std::string_view content,
+                        int counter) {
+    return std::string(R"({"type":"Message","content":")") +
+        jsonEscape(content) +
+        R"(","id":"5c5f2b40-0000-4000-8000-00000000)" +
+        std::to_string(1000 + counter) +
+        R"(","target":")" + jsonEscape(target) + R"(","cv":""})";
+}
+
+std::vector<std::string> startupMessages(const StreamProfile& profile) {
+    const int width = profile.width;
+    const int height = profile.height;
+    const int bitrate = streamProfileBitrateKbps(profile);
+    const int fps = profile.fps > 0 ? profile.fps : 60;
+    int counter = 0;
+    std::vector<std::string> messages;
+    messages.reserve(6);
+    messages.push_back(wrapMessage(
+        "/streaming/systemUi/configuration",
+        R"({"version":[0,2,0],"systemUis":[]})", counter++));
+    messages.push_back(wrapMessage(
+        "/streaming/properties/clientappinstallidchanged",
+        R"({"clientAppInstallId":"c97d7ee0-73b2-4239-bf1d-9d805a338429"})",
+        counter++));
+    messages.push_back(wrapMessage(
+        "/streaming/characteristics/orientationchanged",
+        R"({"orientation":0})", counter++));
+    messages.push_back(wrapMessage(
+        "/streaming/characteristics/touchinputenabledchanged",
+        R"({"touchInputEnabled":false})", counter++));
+    messages.push_back(wrapMessage(
+        "/streaming/characteristics/clientdevicecapabilities",
+        std::string(R"({"supportsCustomResolution":true,"supportsHevc":false,"supportsHdr":false,"supportsFps":)") +
+            std::to_string(fps) +
+            R"(,"maxWidth":)" + std::to_string(width) +
+            R"(,"maxHeight":)" + std::to_string(height) +
+            R"(,"maxBitrateKbps":)" + std::to_string(bitrate) +
+            R"(,"video":{"width":)" + std::to_string(width) +
+            R"(,"height":)" + std::to_string(height) +
+            R"(,"maxWidth":)" + std::to_string(width) +
+            R"(,"maxHeight":)" + std::to_string(height) +
+            R"(,"maxBitrateKbps":)" + std::to_string(bitrate) + "}}",
+        counter++));
+    messages.push_back(wrapMessage(
+        "/streaming/characteristics/dimensionschanged",
+        std::string(R"({"horizontal":)") + std::to_string(width) +
+            R"(,"vertical":)" + std::to_string(height) +
+            R"(,"preferredWidth":)" + std::to_string(width) +
+            R"(,"preferredHeight":)" + std::to_string(height) +
+            R"(,"safeAreaLeft":0,"safeAreaTop":0,"safeAreaRight":)" +
+            std::to_string(width) + R"(,"safeAreaBottom":)" +
+            std::to_string(height) + R"(,"supportsCustomResolution":true})",
+        counter++));
+    return messages;
+}
 
 bool sleepUnlessCancelled(std::chrono::milliseconds duration,
                           const CancelCallback& cancel) {
@@ -61,7 +129,8 @@ void XboxChannelManager::handleMessageChannelData(const uint8_t* data, size_t le
     }
 }
 
-bool XboxChannelManager::startProtocol(const uint8_t* metadata,
+bool XboxChannelManager::startProtocol(const StreamProfile& profile,
+                                       const uint8_t* metadata,
                                        size_t metadata_len,
                                        const CancelCallback& cancel) {
     if (cancel && cancel()) {
@@ -102,6 +171,22 @@ bool XboxChannelManager::startProtocol(const uint8_t* metadata,
     std::fprintf(stderr, "[ctrl] Gamepad added sent\n");
     lunar::diagnosticLog("xbox-channel", "gamepad added sent");
     std::fflush(stderr);
+
+    const auto startup = startupMessages(profile);
+    for (const auto& message : startup) {
+        if (!transport_.sendMessageData(
+                reinterpret_cast<const uint8_t*>(message.data()), message.size())) {
+            lunar::diagnosticLog("xbox-channel", "startup capability send failed");
+            return false;
+        }
+    }
+    lunar::diagnosticLog("xbox-channel",
+                         "startup capabilities sent width=%d height=%d fps=%d bitrate_kbps=%d messages=%zu",
+                         profile.width,
+                         profile.height,
+                         profile.fps,
+                         streamProfileBitrateKbps(profile),
+                         startup.size());
 
     if (metadata && metadata_len > 0) {
         lunar::diagnosticLog("xbox-channel", "metadata send begin len=%zu", metadata_len);

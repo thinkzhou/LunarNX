@@ -8,6 +8,7 @@
 #include <vector>
 #include <chrono>
 #include <atomic>
+#include <cstdint>
 
 namespace lunar::webrtc {
 
@@ -58,6 +59,7 @@ public:
     bool sendControlData(const uint8_t* data, size_t len);
     bool sendMessageData(const uint8_t* data, size_t len);
     bool requestVideoKeyframe();
+    bool sendReceiverFeedback(uint32_t bitrate_bps);
     bool isDataChannelReady() const;
     void setMediaEnabled(bool enabled);
     PeerConnectionMediaStats getMediaStats() const;

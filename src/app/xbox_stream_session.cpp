@@ -2,6 +2,7 @@
 #include "../diagnostics.h"
 
 #include <algorithm>
+#include <cctype>
 #include <exception>
 #include <cstdio>
 
@@ -15,6 +16,7 @@ constexpr std::chrono::milliseconds kInputPollInterval{16};
 constexpr std::chrono::seconds kDataChannelTimeout{45};
 constexpr std::chrono::seconds kStartupKeyframeRetryInterval{1};
 constexpr std::chrono::seconds kRecoveryKeyframeInterval{8};
+constexpr std::chrono::seconds kReceiverFeedbackInterval{1};
 constexpr uint32_t kRecoveryMissingPacketsThreshold = 12;
 constexpr uint32_t kRecoveryCorruptFramesThreshold = 4;
 
@@ -23,6 +25,42 @@ void notify(const std::function<void(const std::string&)>& callback,
     if (callback) {
         callback(message);
     }
+}
+
+std::string offerForProfile(std::string offer, const StreamProfile& profile) {
+    // libpeer's base offer intentionally matches the accepted 720p native
+    // template. For a 1080p profile, expand only the H.264 decode limits; the
+    // receiver capability/bitrate itself is declared on the message channel.
+    if (profile.width >= 1920 && profile.height >= 1080) {
+        const auto max_fs = offer.find("max-fs=3600");
+        if (max_fs != std::string::npos) {
+            offer.replace(max_fs + 7, 4, "8160");
+        }
+        const auto max_mbps = offer.find("max-mbps=108000");
+        if (max_mbps != std::string::npos) {
+            offer.replace(max_mbps + 9, 6, "489600");
+        }
+    }
+    // Home-console agents use the level-3.2 variant of the same baseline
+    // template. Cloud keeps the native 42e01f profile-level-id.
+    if (profile.type == SessionType::Home && profile.height <= 720) {
+        const auto level = offer.find("profile-level-id=42e01f");
+        if (level != std::string::npos) {
+            offer.replace(level + 17, 6, "42e020");
+        }
+    }
+    return offer;
+}
+
+bool isNonRetryableStartError(std::string error) {
+    std::transform(error.begin(), error.end(), error.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return error.find("cancel") != std::string::npos ||
+           error.find("unsupported") != std::string::npos ||
+           error.find("msal") != std::string::npos ||
+           error.find("token") != std::string::npos ||
+           error.find("auth") != std::string::npos;
 }
 
 } // namespace
@@ -60,61 +98,137 @@ bool XboxStreamSession::start(const StreamProfile& profile,
         return sleepUnlessCancelled(duration, callbacks);
     };
 
-    notify(callbacks.on_status, "");
-    ProvisionedSession session =
-        session_client_.createAndWait(profile, cancel, callbacks.on_status, sleep);
-
-    if (session.status == SessionStartStatus::Cancelled) {
-        if (!session.session_id.empty()) {
-            session_client_.deleteSessionAsync(session.session_id);
-        }
-        return cancelStart(callbacks);
-    }
-    if (session.status == SessionStartStatus::Unsupported ||
-        session.status == SessionStartStatus::Failed) {
-        if (!session.session_id.empty()) {
-            session_client_.deleteSessionAsync(session.session_id);
-        }
-        return failStart(session.error.empty() ? "Session creation failed" : session.error,
-                         callbacks);
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        session_id_ = session.session_id;
-    }
-    notify(callbacks.on_session_id, session.session_id);
-
-    notify(callbacks.on_status, "Setting up WebRTC...");
+    notify(callbacks.on_status, "Cleaning up old sessions...");
+    session_client_.cleanupStaleSessions(profile, cancel);
     if (isCancelled(callbacks)) {
         return cancelStart(callbacks);
     }
-    if (!transport_.initialize()) {
-        lunar::diagnosticLog("xbox-stream", "WebRTC transport init failed");
-        return failStart("WebRTC init failed", callbacks);
-    }
-    rumble_.initialize();
 
-    notify(callbacks.on_status, "Exchanging SDP...");
-    if (!negotiateWebRtc(profile, session.session_id, callbacks)) {
+    const bool is_cloud = profile.type == SessionType::Cloud;
+    const int max_start_attempts = is_cloud ? 2 : 4;
+    const auto retry_delay = is_cloud ? std::chrono::seconds(3)
+                                      : std::chrono::seconds(5);
+    ProvisionedSession session;
+    std::string start_error = "Session creation failed";
+    bool negotiated = false;
+
+    for (int attempt = 0; attempt < max_start_attempts; ++attempt) {
+        if (attempt > 0) {
+            notify(callbacks.on_status,
+                   std::string(is_cloud ? "Retrying cloud session ("
+                                        : "Retrying console session (") +
+                       std::to_string(attempt + 1) + "/" +
+                       std::to_string(max_start_attempts) + ")...");
+            if (!sleep(retry_delay)) {
+                return cancelStart(callbacks);
+            }
+            session_client_.cleanupStaleSessions(profile, cancel);
+            if (isCancelled(callbacks)) {
+                return cancelStart(callbacks);
+            }
+        }
+
+        session = session_client_.createAndWait(
+            profile, cancel, callbacks.on_status, sleep);
+        if (session.status == SessionStartStatus::Cancelled) {
+            if (!session.session_id.empty()) {
+                session_client_.deleteSessionAsync(session.session_id);
+            }
+            return cancelStart(callbacks);
+        }
+        if (session.status == SessionStartStatus::Unsupported) {
+            if (!session.session_id.empty()) {
+                session_client_.deleteSessionAsync(session.session_id);
+            }
+            return failStart(session.error.empty() ? "Session is unsupported"
+                                                   : session.error,
+                             callbacks);
+        }
+        if (session.status == SessionStartStatus::Failed) {
+            start_error = session.error.empty() ? "Session creation failed"
+                                                : session.error;
+            if (!session.session_id.empty()) {
+                session_client_.deleteSessionAsync(session.session_id);
+            }
+            lunar::diagnosticLog("xbox-stream",
+                                 "Session start attempt failed attempt=%d/%d error=%s",
+                                 attempt + 1,
+                                 max_start_attempts,
+                                 start_error.c_str());
+            const bool retry_waking_home =
+                !is_cloud && start_error.find("AgentCommandError") != std::string::npos;
+            if (attempt + 1 >= max_start_attempts ||
+                !retry_waking_home ||
+                isNonRetryableStartError(start_error)) {
+                return failStart(start_error, callbacks);
+            }
+            continue;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            session_id_ = session.session_id;
+        }
+        notify(callbacks.on_session_id, session.session_id);
+
+        notify(callbacks.on_status, "Setting up WebRTC...");
         if (isCancelled(callbacks)) {
             return cancelStart(callbacks);
         }
-        return failStart("WebRTC negotiation failed", callbacks);
-    }
+        if (!transport_.initialize()) {
+            start_error = "WebRTC init failed";
+            lunar::diagnosticLog("xbox-stream",
+                                 "WebRTC transport init failed attempt=%d/%d",
+                                 attempt + 1,
+                                 max_start_attempts);
+        } else {
+            rumble_.initialize();
+            notify(callbacks.on_status, "Exchanging SDP...");
+            const bool webrtc_negotiated =
+                negotiateWebRtc(profile, session.session_id, callbacks);
+            if (!webrtc_negotiated) {
+                start_error = "WebRTC negotiation failed";
+            } else {
+                perf_.reset();
+                transport_.setCallbacks(createPeerCallbacks());
+                lunar::diagnosticLog("xbox-stream", "Peer callbacks installed");
+                transport_.setMediaEnabled(false);
 
-    perf_.reset();
-    transport_.setCallbacks(createPeerCallbacks());
-    lunar::diagnosticLog("xbox-stream", "Peer callbacks installed");
-    transport_.setMediaEnabled(false);
+                notify(callbacks.on_status, "Establishing data channel...");
+                negotiated = transport_.waitDataChannels(kDataChannelTimeout, cancel);
+                if (!negotiated) {
+                    start_error = "Data channel timeout";
+                }
+            }
+        }
 
-    notify(callbacks.on_status, "Establishing data channel...");
-    if (!transport_.waitDataChannels(kDataChannelTimeout, cancel)) {
+        if (negotiated) {
+            break;
+        }
         if (isCancelled(callbacks)) {
             return cancelStart(callbacks);
         }
-        lunar::diagnosticLog("xbox-stream", "Data channel timeout");
-        return failStart("Data channel timeout", callbacks);
+
+        transport_.disconnect();
+        channels_.reset();
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            session_id_.clear();
+        }
+        session_client_.deleteSessionAsync(session.session_id);
+        session.session_id.clear();
+        lunar::diagnosticLog("xbox-stream",
+                             "WebRTC start attempt failed attempt=%d/%d error=%s",
+                             attempt + 1,
+                             max_start_attempts,
+                             start_error.c_str());
+        if (attempt + 1 >= max_start_attempts) {
+            return failStart(start_error, callbacks);
+        }
+    }
+
+    if (!negotiated) {
+        return failStart(start_error, callbacks);
     }
 
     notify(callbacks.on_status, "Initializing media pipeline...");
@@ -230,11 +344,21 @@ bool XboxStreamSession::negotiateWebRtc(const StreamProfile& profile,
         return sleepUnlessCancelled(duration, callbacks);
     };
 
-    const std::string offer = transport_.createOffer();
+    const std::string raw_offer = transport_.createOffer();
+    const std::string offer = offerForProfile(raw_offer, profile);
     if (offer.empty() || isCancelled(callbacks)) {
         lunar::diagnosticLog("xbox-stream", "Create WebRTC offer failed or cancelled");
         return false;
     }
+    lunar::diagnosticLog("webrtc-sdp",
+                         "local offer profile width=%d height=%d bitrate_kbps=%d raw_len=%zu munged_len=%zu max_fs=%s max_mbps=%s",
+                         profile.width,
+                         profile.height,
+                         streamProfileBitrateKbps(profile),
+                         raw_offer.size(),
+                         offer.size(),
+                         offer.find("max-fs=8160") != std::string::npos ? "8160" : "3600",
+                         offer.find("max-mbps=489600") != std::string::npos ? "489600" : "108000");
 
     std::string answer;
     if (!session_client_.exchangeSdpAnswer(session_id, offer, answer, cancel, sleep)) {
@@ -255,7 +379,12 @@ bool XboxStreamSession::negotiateWebRtc(const StreamProfile& profile,
     if (isCancelled(callbacks)) {
         return false;
     }
-    if (!session_client_.sendIceCandidates(session_id, local_candidates, cancel)) {
+    const std::string ice_ufrag =
+        IceCandidateProcessor::usernameFragmentFromSdp(offer);
+    if (!session_client_.sendIceCandidates(session_id,
+                                           local_candidates,
+                                           cancel,
+                                           ice_ufrag)) {
         lunar::diagnosticLog("xbox-stream", "Sending ICE candidates failed count=%zu",
                              local_candidates.size());
         return false;
@@ -263,6 +392,10 @@ bool XboxStreamSession::negotiateWebRtc(const StreamProfile& profile,
     const auto remote_candidates =
         session_client_.getIceCandidates(session_id, profile, cancel, sleep);
     if (isCancelled(callbacks)) {
+        return false;
+    }
+    if (remote_candidates.empty()) {
+        lunar::diagnosticLog("xbox-stream", "Server returned no usable ICE candidates");
         return false;
     }
     transport_.addRemoteCandidates(remote_candidates);
@@ -320,9 +453,11 @@ void XboxStreamSession::runLoop(StreamProfile profile,
     auto last_reconnect = std::chrono::steady_clock::now();
     auto last_perf_log = std::chrono::steady_clock::now();
     auto last_keyframe_request = std::chrono::steady_clock::time_point{};
+    auto last_receiver_feedback = std::chrono::steady_clock::time_point{};
     uint32_t last_perf_rendered = 0;
     uint32_t keyframe_missing_baseline = 0;
     uint32_t keyframe_corrupt_baseline = 0;
+    uint32_t keyframe_queue_drop_baseline = 0;
     uint32_t keyframe_srtp_baseline = 0;
     int reconnect_count = 0;
     int input_send_failure_logs = 0;
@@ -374,6 +509,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
         transport_.processEvents();
         const bool connected = transport_.isConnected();
         const auto media_stats = transport_.getMediaStats();
+        const bool pipeline_recovery_pending = media_.hasVideoRecoveryRequest();
         perf_.setRtpStats(media_stats.video_rtp_packets,
                           media_stats.audio_rtp_packets,
                           media_stats.video_rtp_sequence_gaps,
@@ -390,6 +526,16 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                           media_stats.srtp_rtp_decrypt_failures,
                           media_stats.srtp_rtcp_decrypt_failures,
                           media_stats.ice_rtt_ms);
+
+        if (control_started && connected &&
+            (last_receiver_feedback.time_since_epoch().count() == 0 ||
+             std::chrono::steady_clock::now() - last_receiver_feedback >=
+                 kReceiverFeedbackInterval)) {
+            const uint32_t bitrate_bps = static_cast<uint32_t>(
+                streamProfileBitrateKbps(profile)) * 1000u;
+            transport_.sendReceiverFeedback(bitrate_bps);
+            last_receiver_feedback = std::chrono::steady_clock::now();
+        }
         try {
             rumble_.update();
         } catch (const std::exception& e) {
@@ -405,7 +551,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             try {
                 lunar::diagnosticLog("xbox-stream", "control protocol start begin");
                 auto metadata = xinput_.encodeMetadata(0);
-                ok = channels_.startProtocol(metadata.data(), metadata.size(), cancel);
+                ok = channels_.startProtocol(profile, metadata.data(), metadata.size(), cancel);
                 lunar::diagnosticLog("xbox-stream",
                                      "control protocol start result=%s metadata_len=%zu",
                                      ok ? "true" : "false", metadata.size());
@@ -436,6 +582,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                     last_keyframe_request = std::chrono::steady_clock::now();
                     keyframe_missing_baseline = media_stats.video_rtp_missing_packets;
                     keyframe_corrupt_baseline = media_stats.video_h264_corrupt_frames;
+                    keyframe_queue_drop_baseline = media_stats.rtp_queue_drops;
                     keyframe_srtp_baseline = media_stats.srtp_rtp_decrypt_failures;
                 } catch (const std::exception& e) {
                     std::fprintf(stderr, "[xbox-stream] post-control media exception: %s\n", e.what());
@@ -457,11 +604,14 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                 media_stats.video_rtp_missing_packets - keyframe_missing_baseline;
             const uint32_t corrupt_delta =
                 media_stats.video_h264_corrupt_frames - keyframe_corrupt_baseline;
+            const uint32_t queue_drop_delta =
+                media_stats.rtp_queue_drops - keyframe_queue_drop_baseline;
             const uint32_t srtp_delta =
                 media_stats.srtp_rtp_decrypt_failures - keyframe_srtp_baseline;
             const bool video_damage_increased =
                 missing_delta >= kRecoveryMissingPacketsThreshold ||
-                corrupt_delta >= kRecoveryCorruptFramesThreshold;
+                corrupt_delta >= kRecoveryCorruptFramesThreshold ||
+                queue_drop_delta > 0;
             const uint32_t rendered_frames = perf_.video_frames.load();
             const bool awaiting_first_frame = rendered_frames == 0;
             const bool can_retry_startup_keyframe =
@@ -484,26 +634,38 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                                      corrupt_delta,
                                      media_stats.srtp_rtp_decrypt_failures,
                                      srtp_delta);
+                if (keyframe_requested) {
+                    media_.clearVideoRecoveryRequest();
+                }
                 last_keyframe_request = now;
                 keyframe_missing_baseline = media_stats.video_rtp_missing_packets;
                 keyframe_corrupt_baseline = media_stats.video_h264_corrupt_frames;
+                keyframe_queue_drop_baseline = media_stats.rtp_queue_drops;
                 keyframe_srtp_baseline = media_stats.srtp_rtp_decrypt_failures;
-            } else if (video_damage_increased && can_request_recovery_keyframe) {
+            } else if ((video_damage_increased || pipeline_recovery_pending) &&
+                       can_request_recovery_keyframe) {
                 const bool keyframe_requested =
                     channels_.requestVideoKeyframe(false);
                 lunar::diagnosticLog("xbox-stream",
-                                     "recovery keyframe request result=%s missing=%u(+%u) corrupt=%u(+%u) srtp=%u(+%u)",
+                                     "recovery keyframe request result=%s pipeline=%s missing=%u(+%u) corrupt=%u(+%u) queue_drop=%u(+%u) srtp=%u(+%u)",
                                      keyframe_requested ? "true" : "false",
+                                     pipeline_recovery_pending ? "true" : "false",
                                      media_stats.video_rtp_missing_packets,
                                      missing_delta,
                                      media_stats.video_h264_corrupt_frames,
                                      corrupt_delta,
+                                     media_stats.rtp_queue_drops,
+                                     queue_drop_delta,
                                      media_stats.srtp_rtp_decrypt_failures,
                                      srtp_delta);
-                last_keyframe_request = now;
-                keyframe_missing_baseline = media_stats.video_rtp_missing_packets;
-                keyframe_corrupt_baseline = media_stats.video_h264_corrupt_frames;
-                keyframe_srtp_baseline = media_stats.srtp_rtp_decrypt_failures;
+                if (keyframe_requested) {
+                    media_.clearVideoRecoveryRequest();
+                    last_keyframe_request = now;
+                    keyframe_missing_baseline = media_stats.video_rtp_missing_packets;
+                    keyframe_corrupt_baseline = media_stats.video_h264_corrupt_frames;
+                    keyframe_queue_drop_baseline = media_stats.rtp_queue_drops;
+                    keyframe_srtp_baseline = media_stats.srtp_rtp_decrypt_failures;
+                }
             }
         }
 

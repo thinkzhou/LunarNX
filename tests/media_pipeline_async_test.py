@@ -55,6 +55,12 @@ def main():
             "Video queue must have an independent condition variable")
     require("std::condition_variable audio_queue_cv_" in header,
             "Audio queue must have an independent condition variable")
+    require("video_recovery_request_" in header and
+            "video_decoder_reset_pending_" in header,
+            "Video queue recovery must coordinate a decoder reset and keyframe request")
+    require("hasVideoRecoveryRequest" in header and
+            "clearVideoRecoveryRequest" in header,
+            "MediaPipeline should expose throttled keyframe recovery state")
 
     video_body = method_body(
         impl,
@@ -84,6 +90,13 @@ def main():
             "MediaPipeline should wake the video worker after enqueue")
     require("audio_queue_cv_.notify_one()" in impl,
             "MediaPipeline should wake the audio worker after enqueue")
+    require("video queue overflow" in impl and
+            "markVideoRecovery" in impl,
+            "Video queue overflow should trigger reference-chain recovery")
+    require("resetForKeyframe" in impl,
+            "Video worker should reset the decoder after media discontinuity")
+    require("std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns))" not in impl,
+            "The video decode worker should not sleep for A/V lead time")
 
     audio_handler = method_body(
         impl,

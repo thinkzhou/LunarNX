@@ -517,7 +517,9 @@ bool runProbeCase(HttpClient& http,
         const auto local_candidates = sdp_file.empty()
             ? peer.getLocalCandidates()
             : std::vector<lunar::webrtc::IceCandidate>{};
-        const auto ice_payloads = ice_processor.fromLocal(local_candidates);
+        const auto ice_payloads = ice_processor.fromLocal(
+            local_candidates,
+            lunar::app::IceCandidateProcessor::usernameFragmentFromSdp(offer));
         const std::string ice_body = ice_processor.toApiJson(ice_payloads);
         writeTextFile(base + "_ice_request.json", ice_body);
         std::cout << "[" << probe.name << "] local ICE count=" << local_candidates.size()

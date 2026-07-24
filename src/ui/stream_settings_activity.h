@@ -13,6 +13,7 @@ namespace lunar::ui {
 struct StreamSettingsSnapshot {
     int width = 1280;
     int height = 720;
+    int bitrate_kbps = 10000;
     stream::VideoBackend video_backend = stream::VideoBackend::HardwareZeroCopy;
     stream::PostProcessMode post_process_mode = stream::PostProcessMode::Off;
     bool dithering_enabled = false;

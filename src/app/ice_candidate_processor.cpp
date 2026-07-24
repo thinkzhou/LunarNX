@@ -365,6 +365,12 @@ void appendCandidateFromJson(cJSON* item,
 
     IceCandidatePayload payload;
     if (cJSON_IsString(item) && item->valuestring) {
+        cJSON* nested = cJSON_Parse(item->valuestring);
+        if (nested) {
+            appendCandidateFromJson(nested, candidates);
+            cJSON_Delete(nested);
+            return;
+        }
         payload.candidate = item->valuestring;
         appendCandidate(std::move(payload), candidates);
         return;
@@ -467,39 +473,93 @@ void appendRawCandidates(const std::string& payload,
 
 } // namespace
 
+std::string IceCandidateProcessor::usernameFragmentFromSdp(
+    const std::string& sdp) {
+    const std::string marker = "a=ice-ufrag:";
+    const auto at = sdp.find(marker);
+    if (at == std::string::npos) {
+        return {};
+    }
+    const auto start = at + marker.size();
+    const auto end = sdp.find_first_of("\r\n", start);
+    std::string value = sdp.substr(start,
+                                   end == std::string::npos ? std::string::npos
+                                                             : end - start);
+    return trim(std::move(value));
+}
+
 std::vector<IceCandidatePayload> IceCandidateProcessor::fromLocal(
-    const std::vector<webrtc::IceCandidate>& local) const {
+    const std::vector<webrtc::IceCandidate>& local,
+    const std::string& username_fragment) const {
     std::vector<IceCandidatePayload> payloads;
-    payloads.reserve(local.size());
+    payloads.reserve(local.size() + 1);
     for (const auto& candidate : local) {
         IceCandidatePayload payload;
         payload.candidate = normalizeForApi(candidate.sdp);
         payload.sdp_mid = candidate.sdp_mid.empty() ? "0" : candidate.sdp_mid;
         payload.sdp_mline_index = candidate.sdp_mline_index;
+        payload.username_fragment = username_fragment;
         if (!payload.candidate.empty() && !candidateIsInvalid(payload.candidate)) {
             payloads.push_back(std::move(payload));
         }
     }
+    IceCandidatePayload end_marker;
+    end_marker.candidate = "a=end-of-candidates";
+    end_marker.username_fragment = username_fragment;
+    payloads.push_back(std::move(end_marker));
     return payloads;
 }
 
 std::vector<IceCandidatePayload> IceCandidateProcessor::parseRemotePayload(
     const std::string& payload,
     const StreamProfile& profile) const {
-    std::vector<IceCandidatePayload> candidates;
+    return parseRemotePayloads({payload}, profile);
+}
 
-    cJSON* root = cJSON_Parse(payload.c_str());
-    if (root) {
-        appendCandidatesFromJsonRoot(root, candidates);
-        cJSON_Delete(root);
+std::vector<IceCandidatePayload> IceCandidateProcessor::parseRemotePayloads(
+    const std::vector<std::string>& payloads,
+    const StreamProfile& profile) const {
+    if (payloads.empty()) {
+        return {};
     }
-
-    if (candidates.empty()) {
-        appendRawCandidates(payload, candidates);
+    std::vector<IceCandidatePayload> candidates;
+    for (const auto& payload : payloads) {
+        const size_t before = candidates.size();
+        cJSON* root = cJSON_Parse(payload.c_str());
+        const bool parsed_json = root != nullptr;
+        if (root) {
+            appendCandidatesFromJsonRoot(root, candidates);
+            cJSON_Delete(root);
+        }
+        if (!parsed_json || candidates.size() == before) {
+            appendRawCandidates(payload, candidates);
+        }
     }
 
     const bool prefer_public = profile.type == SessionType::Cloud || profile.prefer_ipv6;
     return rewriteCandidatesLikeXStreaming(std::move(candidates), prefer_public);
+}
+
+bool IceCandidateProcessor::hasRealCandidate(const std::string& payload) const {
+    std::vector<IceCandidatePayload> candidates;
+    const size_t before = candidates.size();
+    cJSON* root = cJSON_Parse(payload.c_str());
+    const bool parsed_json = root != nullptr;
+    if (root) {
+        appendCandidatesFromJsonRoot(root, candidates);
+        cJSON_Delete(root);
+    }
+    if (!parsed_json || candidates.size() == before) {
+        appendRawCandidates(payload, candidates);
+    }
+
+    for (const auto& candidate : candidates) {
+        CandidateParts parts;
+        if (parseCandidateParts(candidate.candidate, parts) && parts.priority > 1000) {
+            return true;
+        }
+    }
+    return false;
 }
 
 std::string IceCandidateProcessor::toApiJson(
@@ -517,11 +577,16 @@ std::string IceCandidateProcessor::toApiJson(
         cJSON_AddStringToObject(item, "candidate", api_candidate.c_str());
         cJSON_AddStringToObject(item, "sdpMid", candidate.sdp_mid.c_str());
         cJSON_AddNumberToObject(item, "sdpMLineIndex", candidate.sdp_mline_index);
-        if (!candidate.message_type.empty()) {
-            cJSON_AddStringToObject(item, "messageType",
-                                    candidate.message_type.c_str());
+        if (!candidate.username_fragment.empty()) {
+            cJSON_AddStringToObject(item, "usernameFragment",
+                                    candidate.username_fragment.c_str());
         }
-        cJSON_AddItemToArray(list, item);
+        char* serialized = cJSON_PrintUnformatted(item);
+        if (serialized) {
+            cJSON_AddItemToArray(list, cJSON_CreateString(serialized));
+            std::free(serialized);
+        }
+        cJSON_Delete(item);
     }
 
     cJSON_AddStringToObject(root, "messageType", "iceCandidate");

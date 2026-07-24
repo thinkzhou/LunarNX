@@ -27,6 +27,14 @@ def main():
             "The app transport must expose the libpeer PLI sender")
     require("transport_.requestVideoKeyframe()" in channels,
             "Xbox keyframe requests must include the RTCP PLI used by libwebrtc")
+    require("peer_connection_send_receiver_feedback" in peer,
+            "libpeer must expose periodic receiver feedback for bitrate ramp-up")
+    require("goog-remb" in Path("lib/libpeer/src/sdp.c").read_text(),
+            "SDP must negotiate goog-remb before sending REMB")
+    require("dlsr = htonl(delta_ms << 16)" not in peer,
+            "feedback implementation should not carry the old milliseconds/seconds bug")
+    require("(uint64_t)delta_ms << 16" in peer and "/ 1000" in peer,
+            "RTCP DLSR must convert milliseconds to 1/65536 seconds")
 
     print("libpeer PLI send tests passed")
 

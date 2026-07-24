@@ -309,6 +309,7 @@ void MainActivity::openStreamSettings() {
     StreamSettingsSnapshot snapshot;
     snapshot.width = stream_width_;
     snapshot.height = stream_height_;
+    snapshot.bitrate_kbps = stream_bitrate_kbps_;
     snapshot.video_backend = video_backend_;
     snapshot.post_process_mode = post_process_mode_;
     snapshot.dithering_enabled = dithering_enabled_;
@@ -321,6 +322,7 @@ void MainActivity::openStreamSettings() {
                 if (!alive->load()) return;
                 stream_width_ = updated.width;
                 stream_height_ = updated.height;
+                stream_bitrate_kbps_ = updated.bitrate_kbps;
                 video_backend_ = updated.video_backend;
                 post_process_mode_ = updated.post_process_mode;
                 dithering_enabled_ = updated.dithering_enabled;
@@ -490,6 +492,7 @@ void MainActivity::startConsoleStream(const std::string& server_id,
     request.display_name = console_name;
     request.width = stream_width_;
     request.height = stream_height_;
+    request.bitrate_kbps = stream_bitrate_kbps_;
     request.options.video_backend = video_backend_;
     request.options.post_process_mode = post_process_mode_;
     request.options.dithering_enabled = dithering_enabled_;
@@ -1099,6 +1102,7 @@ void MainActivity::startCloudTitleStream(const std::string& title_id,
     request.display_name = title_name;
     request.width = stream_width_;
     request.height = stream_height_;
+    request.bitrate_kbps = stream_bitrate_kbps_;
     request.options.video_backend = video_backend_;
     request.options.post_process_mode = post_process_mode_;
     request.options.dithering_enabled = dithering_enabled_;
