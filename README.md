@@ -40,6 +40,18 @@ Remote streaming is not guaranteed to work on every network. LunarNX can use pub
 - Runtime performance overlay for bitrate, packet loss, decode, render, audio, and WebRTC statistics
 - English, Simplified Chinese, and Traditional Chinese UI translations
 
+## Screenshots
+
+### 1080p streaming on Nintendo Switch
+
+![LunarNX streaming an Xbox game at 1080p on Nintendo Switch](docs/screenshots/streaming.jpg)
+
+| Console discovery | Stream settings |
+| --- | --- |
+| ![LunarNX Xbox console discovery screen](docs/screenshots/find_xbox.jpg) | ![LunarNX resolution and decoder settings](docs/screenshots/settings.jpg) |
+
+![LunarNX establishing an Xbox Remote Play session](docs/screenshots/connecting.jpg)
+
 ## Requirements
 
 - A Nintendo Switch capable of running homebrew NRO applications, typically with Atmosphère CFW

@@ -40,6 +40,18 @@ LunarNX 实现了 Xbox 串流客户端所需的完整链路：Microsoft 账号�
 - 串流性能面板，可查看码率、丢包、解码、渲染、音频和 WebRTC 状态
 - 英文、简体中文与繁体中文界面
 
+## 实机截图
+
+### Nintendo Switch 上的 1080p 串流
+
+![LunarNX 在 Nintendo Switch 上进行 1080p Xbox 游戏串流](docs/screenshots/streaming.jpg)
+
+| 查找 Xbox 主机 | 串流设置 |
+| --- | --- |
+| ![LunarNX 查找 Xbox 主机界面](docs/screenshots/find_xbox.jpg) | ![LunarNX 分辨率与解码器设置](docs/screenshots/settings.jpg) |
+
+![LunarNX 正在建立 Xbox Remote Play 会话](docs/screenshots/connecting.jpg)
+
 ## 使用要求
 
 - 能够运行 Homebrew NRO 的 Nintendo Switch，通常需要 Atmosphère CFW
