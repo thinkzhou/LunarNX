@@ -87,12 +87,14 @@ LunarNX maps buttons by their physical position, so the Nintendo face-button lab
 | ZL / ZR | LT / RT |
 | Minus | View |
 | Plus | Menu |
-| L + R + Plus | Xbox Guide / Nexus |
+| L + R + Plus (together) | Xbox Guide / Nexus button |
 | Left stick click | L3 |
 | Right stick click | R3 and performance overlay toggle |
 | D-pad / sticks | D-pad / sticks |
 
 ZL and ZR are digital Switch buttons, so Xbox trigger input is reported as either 0% or 100%.
+
+While streaming, press **L + R + Plus together** to open the Xbox Guide. LunarNX sends this chord as a single Xbox Guide / Nexus input, rather than forwarding LB, RB, and Menu separately.
 
 To stop streaming, press **Minus + Plus together twice within three seconds**. A single Minus or Plus press remains available as Xbox View or Menu input.
 

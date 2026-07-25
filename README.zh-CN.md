@@ -87,12 +87,14 @@ LunarNX 按按键的物理位置映射 Xbox 布局，因此 Nintendo 与 Xbox �
 | ZL / ZR | LT / RT |
 | Minus | View |
 | Plus | Menu |
-| L + R + Plus | Xbox Guide / Nexus |
+| L + R + Plus（同时按下） | Xbox Guide / Nexus 键 |
 | 左摇杆按下 | L3 |
 | 右摇杆按下 | R3，同时切换性能详情面板 |
 | 十字键 / 摇杆 | 十字键 / 摇杆 |
 
 Switch 的 ZL/ZR 是数字按键，因此 Xbox 扳机输入只有 0% 或 100%。
+
+串流过程中，同时按下 **L + R + Plus** 即可打开 Xbox 导航菜单。LunarNX 会将这个组合键作为单独的 Xbox Guide / Nexus 输入发送，而不会同时发送 LB、RB 和 Menu。
 
 停止串流时，请在三秒内连续两次同时按下 **Minus + Plus**。单独按下 Minus 或 Plus 仍会作为 Xbox View 或 Menu 输入发送。
 
