@@ -19,6 +19,9 @@ def main() -> None:
     stream_view = (ROOT / "src/ui/stream_view.cpp").read_text()
     media_pipeline = (ROOT / "src/stream/media_pipeline.cpp").read_text()
     peer_header = (ROOT / "lib/libpeer/src/peer_connection.h").read_text()
+    peer_source = (ROOT / "lib/libpeer/src/peer_connection.c").read_text()
+    agent_header = (ROOT / "lib/libpeer/src/agent.h").read_text()
+    agent_source = (ROOT / "lib/libpeer/src/agent.c").read_text()
     legacy_patch = (ROOT / "tools/libpeer_legacy/legacy-libpeer-switch.patch").read_text()
 
     for metric in ("RTT", "JIT", "FPS", "FD", "PL", "Bitrate", "DT"):
@@ -35,6 +38,11 @@ def main() -> None:
 
     require("ice_rtt_ms" in peer_header and "ice_rtt_ms" in legacy_patch,
             "legacy libpeer must expose a reproducible ICE RTT sample")
+    require("agent_send_consent_check" in agent_header and
+            "agent_send_consent_check(&pc->agent)" in peer_source and
+            "consent_check_pending" in agent_source and
+            "AGENT_CONSENT_INTERVAL_MS" in agent_source,
+            "streaming RTT must be refreshed by periodic ICE consent checks")
     require('"lunarnx/perf/hud_metrics"' in overlay and
             "metrics_label_->setText(brls::getStr(" in overlay,
             "single-row HUD metrics must use the active locale catalog")
@@ -52,6 +60,9 @@ def main() -> None:
     ):
         require(f'"lunarnx/perf/{key}"' in detail_overlay,
                 f"R3 diagnostics must localize {key}")
+    require("rtp_video_missing_packets.load()" in detail_overlay and
+            "packets_lost.load()" not in detail_overlay,
+            "compact and R3 overlays must use the same video RTP loss source")
 
     require("last_encoded_bytes_" in overlay_header and
             "last_decode_total_us_" in overlay_header,

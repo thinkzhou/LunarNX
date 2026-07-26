@@ -53,9 +53,9 @@ def main() -> None:
     reset_start = pipeline.index("bool MediaPipeline::resetVideoDecoderForKeyframe()")
     reset_end = pipeline.index("void MediaPipeline::processVideoPacket", reset_start)
     reset = pipeline[reset_start:reset_end]
-    require(reset.index("video_renderer_->drainDecoderFrames()") <
+    require(reset.index("video_renderer_->prepareDecoderReset()") <
             reset.index("video_decoder_->resetForKeyframe()"),
-            "Renderer-held NVTEGRA frames must drain before FFmpeg flushes its DPB")
+            "Renderer must release only its unsubmitted frame before FFmpeg flushes its DPB")
 
     shutdown = renderer.index("void VideoRenderer::shutdown()")
     wait_idle = renderer.index("s->q.waitIdle()", shutdown)
@@ -64,7 +64,7 @@ def main() -> None:
             "Shutdown should wait for GPU idle before destroying mappings")
 
     present_start = renderer.index("void VideoRenderer::present()")
-    present_end = renderer.index("void VideoRenderer::drainDecoderFrames()", present_start)
+    present_end = renderer.index("void VideoRenderer::prepareDecoderReset()", present_start)
     require("s->q.waitIdle()" not in renderer[present_start:present_end],
             "Borealis draw must not wait for queue idle before endFrame/presentImage")
 

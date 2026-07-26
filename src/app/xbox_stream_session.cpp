@@ -427,9 +427,9 @@ webrtc::PeerCallbacks XboxStreamSession::createPeerCallbacks() {
             std::fprintf(stderr, "[ctrl] %s\n", error.c_str());
         },
         [this](bool reset_decoder) {
-            if (reset_decoder) {
-                media_.requestVideoRecovery("RTP loss timeout");
-            }
+            media_.requestVideoRecovery(reset_decoder
+                                            ? "RTP loss timeout"
+                                            : "waiting for recovery IDR");
         },
         [this](uint8_t gamepad_index,
                float left,

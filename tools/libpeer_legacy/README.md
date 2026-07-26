@@ -69,9 +69,11 @@ open for 45 seconds so it does not tear down the Xbox session while this ICE
 window is still active.
 
 The nominated ICE pair retains the measured Binding-response round-trip time
-and exposes it through `PeerConnectionMediaStats::ice_rtt_ms`. LunarNX uses
-that real connectivity-check sample for the in-stream RTT indicator instead of
-displaying an HTTP request time or a fabricated latency value.
+and exposes it through `PeerConnectionMediaStats::ice_rtt_ms`. Once streaming
+is established, a one-second ICE consent check refreshes the same RTT sample
+without reopening nomination. LunarNX therefore shows a live network RTT
+instead of an HTTP request time, a fabricated latency value, or the frozen
+RTT from the initial connectivity check.
 
 Established connections use a 30-second liveness timeout instead of legacy
 libpeer's 10-second default. Valid inbound SRTP, SRTCP, and DTLS traffic refreshes
@@ -107,15 +109,21 @@ pipeline is ready, but packets are not discarded. This preserves the Xbox's
 startup SPS/PPS/IDR access unit; dropping RTP during that interval can leave
 the decoder receiving only P-frames indefinitely.
 
+If that startup queue reaches its limit while media is still gated, it keeps a
+rolling, contiguous tail by evicting the oldest packet before appending the
+newest one. Once media is enabled, LunarNX drains queued RTP before accepting
+another full socket burst. This prevents client-side startup overflow from
+appearing as thousands of network-lost packets in the performance HUD.
+
 For video, legacy libpeer now exposes decrypted raw RTP packets instead of
 depacketizing H.264 immediately. LunarNX applies a bounded, timestamp-ordered
-jitter buffer that waits 120-300 ms based on the measured ICE RTT, reorders
+jitter buffer that waits 60-180 ms based on the measured ICE RTT, reorders
 late packets, and sends RFC 4585 Generic NACK feedback for short sequence gaps.
 Incomplete or malformed access units are never passed to FFmpeg: after the
-bounded wait expires, LunarNX resets decoder reference state, requests a PLI,
-and drops P-frames until a real IDR arrives. Receiver Reports use the same
-wrap-aware sequence accounting, so a late retransmission repairs the reported
-loss instead of permanently inflating it.
+bounded wait expires, LunarNX requests a PLI and drops P-frames until a real
+IDR arrives without blocking on a GPU-wide decoder drain. Receiver Reports use
+the same wrap-aware sequence accounting, so a late retransmission repairs the
+reported loss instead of permanently inflating it.
 
 The video jitter path has hard heap limits of 32 frames, 2048 packets, 3 MiB of
 buffered RTP payload, and 2 MiB per assembled H.264 access unit. Capacity or

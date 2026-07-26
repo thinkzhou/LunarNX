@@ -59,8 +59,8 @@ void PerfOverlay::update(float fps, const std::string& resolution,
     float dithering_ms = perf_->avg_dithering_ms();
 
     // Drop rate as percentage
-    uint32_t recv = perf_->packets_received.load();
-    uint32_t lost = perf_->packets_lost.load();
+    uint32_t recv = perf_->rtp_video_packets.load();
+    uint32_t lost = perf_->rtp_video_missing_packets.load();
     float drop_pct = (recv + lost > 0) ? (100.0f * lost / (recv + lost)) : 0.0f;
 
     std::string text = brls::getStr(

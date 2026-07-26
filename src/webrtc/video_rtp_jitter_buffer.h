@@ -24,6 +24,8 @@ struct VideoRtpJitterStats {
     uint32_t max_frame_bytes = 0;
     uint32_t nacks = 0;
     uint32_t resyncs = 0;
+    uint32_t assembly_attempts = 0;
+    uint32_t payload_storage_reallocations = 0;
     size_t buffered_bytes = 0;
     size_t buffered_packets = 0;
     size_t buffered_frames = 0;
@@ -37,7 +39,7 @@ public:
     using NackCallback = std::function<void(uint16_t, uint16_t)>;
     using RecoveryCallback = std::function<void(bool)>;
 
-    static constexpr uint64_t kDefaultHoldMs = 180;
+    static constexpr uint64_t kDefaultHoldMs = 120;
     static constexpr size_t kMaxBufferedFrames = 32;
     static constexpr size_t kMaxBufferedPackets = 2048;
     static constexpr size_t kMaxBufferedBytes = 3 * 1024 * 1024;

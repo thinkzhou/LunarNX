@@ -19,7 +19,7 @@ index 1618ede..67f0bfd 100644
 +  return a->sin.sin_addr.s_addr == b->sin.sin_addr.s_addr;
  }
 diff --git a/src/agent.c b/src/agent.c
-index 6055e0f..96c9cfa 100644
+index 6055e0f..270d750 100644
 --- a/src/agent.c
 +++ b/src/agent.c
 @@ -1,6 +1,7 @@
@@ -30,7 +30,7 @@ index 6055e0f..96c9cfa 100644
  #include <sys/select.h>
  #include <unistd.h>
  
-@@ -13,14 +14,120 @@
+@@ -13,14 +14,168 @@
  #include "utils.h"
  
  #define AGENT_POLL_TIMEOUT 1
@@ -41,6 +41,7 @@ index 6055e0f..96c9cfa 100644
 +#define AGENT_CHECK_RTO_MS 500
 +#define AGENT_CHECK_MAX_RTO_MS 8000
 +#define AGENT_CHECK_MAX_RETRANSMISSIONS 6
++#define AGENT_CONSENT_INTERVAL_MS 1000
 +#define AGENT_STUN_POLL_TIMEOUT_MS 50
 +#define AGENT_STUN_RECV_MAXTIMES 20
 +#ifndef AGENT_ENABLE_DEBUG_LOGS
@@ -68,6 +69,14 @@ index 6055e0f..96c9cfa 100644
 +#else
 +#define agent_ice_debug_log(...) ((void)0)
 +#endif
++static void agent_create_binding_request(Agent* agent,
++                                         IceCandidatePair* pair,
++                                         int use_candidate,
++                                         StunMessage* msg);
++static int agent_socket_send(Agent* agent,
++                             Address* addr,
++                             const uint8_t* buf,
++                             int len);
 +static int agent_candidate_pair_index(Agent* agent, IceCandidatePair* pair) {
 +  if (!agent || !pair) {
 +    return -1;
@@ -93,7 +102,7 @@ index 6055e0f..96c9cfa 100644
 +  return ((uint64_t)minimum << 32) + (uint64_t)maximum * 2u +
 +         (controlling > controlled ? 1u : 0u);
 +}
- 
++
 +static void agent_initialize_candidate_pair(Agent* agent,
 +                                            IceCandidatePair* pair,
 +                                            IceCandidate* local,
@@ -132,7 +141,7 @@ index 6055e0f..96c9cfa 100644
 +  agent_initialize_candidate_pair(agent, pair, local, remote);
 +  return pair;
 +}
-+
+ 
 +static void agent_recalculate_pair_priorities(Agent* agent) {
 +  for (int i = 0; i < agent->candidate_pairs_num; i++) {
 +    IceCandidatePair* pair = &agent->candidate_pairs[i];
@@ -151,10 +160,49 @@ index 6055e0f..96c9cfa 100644
 +  agent->debug_send_logs = 0;
 +  agent->debug_recv_logs = 0;
 +  agent->debug_stun_logs = 0;
++}
++
++static int agent_send_consent_check_now(Agent* agent,
++                                        IceCandidatePair* pair,
++                                        uint32_t now) {
++  StunMessage msg;
++  memset(pair->transaction_id, 0, sizeof(pair->transaction_id));
++  agent_create_binding_request(agent, pair, 0, &msg);
++  const int ret = agent_socket_send(agent, &pair->remote->addr,
++                                    msg.buf, msg.size);
++  if (ret < 0) {
++    memset(pair->transaction_id, 0, sizeof(pair->transaction_id));
++    pair->consent_check_pending = 0;
++    return ret;
++  }
++  pair->last_check_time = now;
++  pair->consent_check_pending = 1;
++  return 0;
++}
++
++int agent_send_consent_check(Agent* agent) {
++  if (!agent || !agent->nominated_pair ||
++      !agent->nominated_pair->nominated ||
++      !agent->nominated_pair->local || !agent->nominated_pair->remote) {
++    return -1;
++  }
++  IceCandidatePair* pair = agent->nominated_pair;
++  const uint32_t now = ports_get_epoch_time();
++  if (pair->consent_check_pending &&
++      now - pair->last_check_time < AGENT_CHECK_RTO_MS) {
++    return 0;
++  }
++  if (agent->last_check_time != 0 &&
++      now - agent->last_check_time < AGENT_CONSENT_INTERVAL_MS) {
++    return 0;
++  }
++  const int ret = agent_send_consent_check_now(agent, pair, now);
++  if (ret >= 0) agent->last_check_time = now;
++  return ret;
  }
  
  int agent_create(Agent* agent) {
-@@ -33,10 +140,11 @@ int agent_create(Agent* agent) {
+@@ -33,10 +188,11 @@ int agent_create(Agent* agent) {
  
  #if CONFIG_IPV6
    if ((ret = udp_socket_open(&agent->udp_sockets[1], AF_INET6, 0)) < 0) {
@@ -169,7 +217,7 @@ index 6055e0f..96c9cfa 100644
  #endif
  
    agent_clear_candidates(agent);
-@@ -57,7 +165,11 @@ void agent_destroy(Agent* agent) {
+@@ -57,7 +213,11 @@ void agent_destroy(Agent* agent) {
  #endif
  }
  
@@ -182,7 +230,7 @@ index 6055e0f..96c9cfa 100644
    int ret = -1;
    int i = 0;
    int maxfd = -1;
-@@ -70,7 +182,7 @@ static int agent_socket_recv(Agent* agent, Address* addr, uint8_t* buf, int len)
+@@ -70,7 +230,7 @@ static int agent_socket_recv(Agent* agent, Address* addr, uint8_t* buf, int len)
    };
  
    tv.tv_sec = 0;
@@ -191,7 +239,7 @@ index 6055e0f..96c9cfa 100644
    FD_ZERO(&rfds);
  
    for (i = 0; i < sizeof(addr_type) / sizeof(addr_type[0]); i++) {
-@@ -88,7 +200,10 @@ static int agent_socket_recv(Agent* agent, Address* addr, uint8_t* buf, int len)
+@@ -88,9 +248,11 @@ static int agent_socket_recv(Agent* agent, Address* addr, uint8_t* buf, int len)
    } else if (ret == 0) {
      // timeout
    } else {
@@ -201,9 +249,11 @@ index 6055e0f..96c9cfa 100644
 +        continue;
 +      }
        if (FD_ISSET(agent->udp_sockets[i].fd, &rfds)) {
-         memset(buf, 0, len);
+-        memset(buf, 0, len);
          ret = udp_socket_recvfrom(&agent->udp_sockets[i], addr, buf, len);
-@@ -100,11 +215,19 @@ static int agent_socket_recv(Agent* agent, Address* addr, uint8_t* buf, int len)
+         break;
+       }
+@@ -100,11 +262,19 @@ static int agent_socket_recv(Agent* agent, Address* addr, uint8_t* buf, int len)
    return ret;
  }
  
@@ -224,7 +274,7 @@ index 6055e0f..96c9cfa 100644
        break;
      }
    }
-@@ -122,6 +245,59 @@ static int agent_socket_send(Agent* agent, Address* addr, const uint8_t* buf, in
+@@ -122,6 +292,59 @@ static int agent_socket_send(Agent* agent, Address* addr, const uint8_t* buf, in
    return -1;
  }
  
@@ -284,7 +334,7 @@ index 6055e0f..96c9cfa 100644
  static int agent_create_host_addr(Agent* agent) {
    int i, j;
    const char* iface_prefx[] = {CONFIG_IFACE_PREFIX};
-@@ -171,10 +347,29 @@ static int agent_create_stun_addr(Agent* agent, Address* serv_addr) {
+@@ -171,10 +394,29 @@ static int agent_create_stun_addr(Agent* agent, Address* serv_addr) {
      return ret;
    }
  
@@ -314,7 +364,7 @@ index 6055e0f..96c9cfa 100644
    return ret;
  }
  
-@@ -202,9 +397,12 @@ static int agent_create_turn_addr(Agent* agent, Address* serv_addr, const char*
+@@ -202,9 +444,12 @@ static int agent_create_turn_addr(Agent* agent, Address* serv_addr, const char*
      return ret;
    }
  
@@ -328,7 +378,7 @@ index 6055e0f..96c9cfa 100644
      memset(&send_msg, 0, sizeof(send_msg));
      stun_msg_create(&send_msg, STUN_METHOD_ALLOCATE);
      stun_msg_write_attr(&send_msg, STUN_ATTR_TYPE_REQUESTED_TRANSPORT, sizeof(attr), (char*)&attr);  // UDP
-@@ -223,13 +421,22 @@ static int agent_create_turn_addr(Agent* agent, Address* serv_addr, const char*
+@@ -223,13 +468,22 @@ static int agent_create_turn_addr(Agent* agent, Address* serv_addr, const char*
      return -1;
    }
  
@@ -352,7 +402,7 @@ index 6055e0f..96c9cfa 100644
    memcpy(&turn_addr, &recv_msg.relayed_addr, sizeof(Address));
    IceCandidate* ice_candidate = agent->local_candidates + agent->local_candidates_count++;
    ice_candidate_create(ice_candidate, agent->local_candidates_count, ICE_CANDIDATE_TYPE_RELAY, &turn_addr);
-@@ -251,18 +458,25 @@ void agent_gather_candidate(Agent* agent, const char* urls, const char* username
+@@ -251,18 +505,25 @@ void agent_gather_candidate(Agent* agent, const char* urls, const char* username
      return;
    }
  
@@ -387,7 +437,7 @@ index 6055e0f..96c9cfa 100644
  
    for (i = 0; i < sizeof(addr_type) / sizeof(addr_type[0]); i++) {
      if (ports_resolve_addr(hostname, &resolved_addr) == 0) {
-@@ -287,6 +501,10 @@ void agent_create_ice_credential(Agent* agent) {
+@@ -287,6 +548,10 @@ void agent_create_ice_credential(Agent* agent) {
  
    utils_random_string(agent->local_ufrag, 4);
    utils_random_string(agent->local_upwd, 24);
@@ -398,7 +448,7 @@ index 6055e0f..96c9cfa 100644
  }
  
  void agent_get_local_description(Agent* agent, char* description, int length) {
-@@ -303,7 +521,10 @@ int agent_send(Agent* agent, const uint8_t* buf, int len) {
+@@ -303,7 +568,10 @@ int agent_send(Agent* agent, const uint8_t* buf, int len) {
    return agent_socket_send(agent, &agent->nominated_pair->remote->addr, buf, len);
  }
  
@@ -410,7 +460,7 @@ index 6055e0f..96c9cfa 100644
    int size = 0;
    char username[584];
    char mapped_address[32];
-@@ -311,45 +532,250 @@ static void agent_create_binding_response(Agent* agent, StunMessage* msg, Addres
+@@ -311,45 +579,250 @@ static void agent_create_binding_response(Agent* agent, StunMessage* msg, Addres
    StunHeader* header;
    stun_msg_create(msg, STUN_CLASS_RESPONSE | STUN_METHOD_BINDING);
    header = (StunHeader*)msg->buf;
@@ -675,7 +725,7 @@ index 6055e0f..96c9cfa 100644
        }
        break;
      default:
-@@ -357,11 +783,79 @@ void agent_process_stun_request(Agent* agent, StunMessage* stun_msg, Address* ad
+@@ -357,11 +830,86 @@ void agent_process_stun_request(Agent* agent, StunMessage* stun_msg, Address* ad
    }
  }
  
@@ -739,6 +789,13 @@ index 6055e0f..96c9cfa 100644
 +        if (measured_rtt > 0) {
 +          pair->rtt_ms = measured_rtt;
 +        }
++        if (pair->consent_check_pending) {
++          pair->consent_check_pending = 0;
++          memset(pair->transaction_id, 0, sizeof(pair->transaction_id));
++          pair->state = ICE_CANDIDATE_STATE_SUCCEEDED;
++          pair->valid = 1;
++          break;
++        }
 +        pair->valid = 1;
 +        pair->state = ICE_CANDIDATE_STATE_SUCCEEDED;
 +        pair->triggered = 0;
@@ -757,7 +814,7 @@ index 6055e0f..96c9cfa 100644
        }
        break;
      default:
-@@ -369,17 +863,50 @@ void agent_process_stun_response(Agent* agent, StunMessage* stun_msg) {
+@@ -369,17 +917,50 @@ void agent_process_stun_response(Agent* agent, StunMessage* stun_msg) {
    }
  }
  
@@ -809,7 +866,7 @@ index 6055e0f..96c9cfa 100644
      memcpy(stun_msg.buf, buf, ret);
      stun_msg.size = ret;
      stun_parse_msg_buf(&stun_msg);
-@@ -391,6 +918,7 @@ int agent_recv(Agent* agent, uint8_t* buf, int len) {
+@@ -391,6 +972,7 @@ int agent_recv(Agent* agent, uint8_t* buf, int len) {
        agent_process_stun_response(agent, &stun_msg);
        break;
      case STUN_CLASS_ERROR:
@@ -817,7 +874,7 @@ index 6055e0f..96c9cfa 100644
        break;
      default:
        break;
-@@ -442,71 +970,231 @@ void agent_set_remote_description(Agent* agent, char* description) {
+@@ -442,71 +1024,231 @@ void agent_set_remote_description(Agent* agent, char* description) {
  
  void agent_update_candidate_pairs(Agent* agent) {
    int i, j;
@@ -1024,15 +1081,15 @@ index 6055e0f..96c9cfa 100644
 +  if (!pair) {
 +    return 0;
 +  }
-+
-+  return agent_send_connectivity_check(agent, pair, use_candidate, now);
-+}
  
 -  if (agent->nominated_pair->conncheck % AGENT_CONNCHECK_PERIOD == 0) {
 -    addr_to_string(&agent->nominated_pair->remote->addr, addr_string, sizeof(addr_string));
 -    LOGD("send binding request to remote ip: %s, port: %d", addr_string, agent->nominated_pair->remote->addr.port);
 -    agent_create_binding_request(agent, &msg);
 -    agent_socket_send(agent, &agent->nominated_pair->remote->addr, msg.buf, msg.size);
++  return agent_send_connectivity_check(agent, pair, use_candidate, now);
++}
++
 +int agent_connectivity_check(Agent* agent) {
 +  uint8_t buf[1400];
 +  if (agent->selected_pair && agent->selected_pair->nominated) {
@@ -1089,7 +1146,7 @@ index 6055e0f..96c9cfa 100644
 +  return active ? 0 : -1;
  }
 diff --git a/src/agent.h b/src/agent.h
-index 382d5a4..a20382e 100644
+index 382d5a4..cdb43d6 100644
 --- a/src/agent.h
 +++ b/src/agent.h
 @@ -17,7 +17,7 @@
@@ -1116,7 +1173,17 @@ index 382d5a4..a20382e 100644
  };
  
  void agent_gather_candidate(Agent* agent, const char* urls, const char* username, const char* credential);
-@@ -96,4 +104,8 @@ void agent_destroy(Agent* agent);
+@@ -88,6 +96,9 @@ int agent_select_candidate_pair(Agent* agent);
+ 
+ int agent_connectivity_check(Agent* agent);
+ 
++// Refresh the nominated pair RTT without changing ICE nomination state.
++int agent_send_consent_check(Agent* agent);
++
+ void agent_clear_candidates(Agent* agent);
+ 
+ int agent_create(Agent* agent);
+@@ -96,4 +107,8 @@ void agent_destroy(Agent* agent);
  
  void agent_update_candidate_pairs(Agent* agent);
  
@@ -1538,10 +1605,10 @@ index 756e961..abce36a 100644
    return 0;
  }
 diff --git a/src/ice.h b/src/ice.h
-index 2628a54..1f24d72 100644
+index 2628a54..f616e8f 100644
 --- a/src/ice.h
 +++ b/src/ice.h
-@@ -50,10 +50,21 @@ struct IceCandidatePair {
+@@ -50,10 +50,22 @@ struct IceCandidatePair {
    IceCandidate* remote;
    int conncheck;
    uint64_t priority;
@@ -1554,6 +1621,7 @@ index 2628a54..1f24d72 100644
 +  int nominated;
 +  int triggered;
 +  int request_controlling;
++  int consent_check_pending;
  };
  
  void ice_candidate_create(IceCandidate* ice_candidate, int foundation, IceCandidateType type, Address* addr);
@@ -1564,9 +1632,18 @@ index 2628a54..1f24d72 100644
  
  int ice_candidate_from_description(IceCandidate* candidate, char* description, char* end);
 diff --git a/src/peer_connection.c b/src/peer_connection.c
-index fe0f63e..88973a0 100644
+index fe0f63e..99e114f 100644
 --- a/src/peer_connection.c
 +++ b/src/peer_connection.c
+@@ -15,7 +15,7 @@
+ #include "sctp.h"
+ #include "sdp.h"
+ 
+-#define PEER_CONNECTION_MAX_PACKETS_PER_LOOP 64
++#define PEER_CONNECTION_MAX_PACKETS_PER_LOOP 128
+ #define PEER_CONNECTION_RTP_QUEUE_CAPACITY 4096
+ #define PEER_CONNECTION_RTP_DECODE_BUDGET 64
+ 
 @@ -25,7 +25,7 @@
  
  typedef struct QueuedRtpPacket {
@@ -1615,7 +1692,7 @@ index fe0f63e..88973a0 100644
  };
  
  #if PEER_CONNECTION_ENABLE_DEBUG_LOGS
-@@ -99,12 +108,19 @@ static void peer_connection_debug_log(const char* format, ...) {
+@@ -99,18 +108,30 @@ static void peer_connection_debug_log(const char* format, ...) {
  #define peer_connection_debug_log(...) ((void)0)
  #endif
  
@@ -1632,11 +1709,24 @@ index fe0f63e..88973a0 100644
    }
  
    if (pc->rtp_queue_count >= PEER_CONNECTION_RTP_QUEUE_CAPACITY) {
+-    if (pc->debug_rtp_queue_logs < 16) {
++    if (!pc->media_enabled) {
++      pc->rtp_queue_head = (pc->rtp_queue_head + 1) %
++                           PEER_CONNECTION_RTP_QUEUE_CAPACITY;
++      pc->rtp_queue_count--;
++    }
 +    pc->rtp_queue_drops++;
-     if (pc->debug_rtp_queue_logs < 16) {
++    if (pc->media_enabled && pc->debug_rtp_queue_logs < 16) {
        peer_connection_debug_log("RTP queue overflow len=%d count=%d",
                                  len, pc->rtp_queue_count);
-@@ -118,15 +134,110 @@ static int peer_connection_enqueue_rtp(PeerConnection* pc, const uint8_t* data,
+       pc->debug_rtp_queue_logs++;
+     }
+-    return -1;
++    if (pc->media_enabled) return -1;
+   }
+ 
+   int index = (pc->rtp_queue_head + pc->rtp_queue_count) %
+@@ -118,15 +139,110 @@ static int peer_connection_enqueue_rtp(PeerConnection* pc, const uint8_t* data,
    pc->rtp_queue[index].len = len;
    memcpy(pc->rtp_queue[index].data, data, len);
    pc->rtp_queue_count++;
@@ -1748,7 +1838,7 @@ index fe0f63e..88973a0 100644
    if (pc->debug_rtp_logs < 64) {
      peer_connection_debug_log("rtp branch after decrypt len=%d first=0x%02x",
                                len,
-@@ -160,6 +271,7 @@ static void peer_connection_decode_rtp_packet(PeerConnection* pc, uint8_t* packe
+@@ -160,6 +276,7 @@ static void peer_connection_decode_rtp_packet(PeerConnection* pc, uint8_t* packe
        pc->debug_rtp_logs++;
      }
    } else if (ssrc == pc->remote_vssrc) {
@@ -1756,7 +1846,7 @@ index fe0f63e..88973a0 100644
      if (pc->debug_rtp_logs < 64) {
        peer_connection_debug_log("rtp decode video begin len=%d", len);
        pc->debug_rtp_logs++;
-@@ -189,14 +301,19 @@ static int peer_connection_drain_rtp_queue(PeerConnection* pc, int budget) {
+@@ -189,14 +306,19 @@ static int peer_connection_drain_rtp_queue(PeerConnection* pc, int budget) {
    return decoded;
  }
  
@@ -1778,7 +1868,7 @@ index fe0f63e..88973a0 100644
    int ret = -1;
    DtlsSrtp* dtls_srtp = (DtlsSrtp*)ctx;
    PeerConnection* pc = (PeerConnection*)dtls_srtp->user_data;
-@@ -221,26 +338,25 @@ static int peer_connection_dtls_srtp_recv(void* ctx, unsigned char* buf, size_t
+@@ -221,26 +343,25 @@ static int peer_connection_dtls_srtp_recv(void* ctx, unsigned char* buf, size_t
      return MBEDTLS_ERR_SSL_WANT_READ;
    }
  
@@ -1813,7 +1903,7 @@ index fe0f63e..88973a0 100644
  }
  
  static int peer_connection_dtls_srtp_send(void* ctx, const uint8_t* buf, size_t len) {
-@@ -261,9 +377,30 @@ static void peer_connection_incoming_rtcp(PeerConnection* pc, uint8_t* buf, size
+@@ -261,9 +382,30 @@ static void peer_connection_incoming_rtcp(PeerConnection* pc, uint8_t* buf, size
    size_t pos = 0;
  
    while (pos < len) {
@@ -1844,7 +1934,7 @@ index fe0f63e..88973a0 100644
        case RTCP_RR:
          LOGD("RTCP_PR");
          if (rtcp_header->rc > 0) {
-@@ -291,7 +428,7 @@ static void peer_connection_incoming_rtcp(PeerConnection* pc, uint8_t* buf, size
+@@ -291,7 +433,7 @@ static void peer_connection_incoming_rtcp(PeerConnection* pc, uint8_t* buf, size
          break;
      }
  
@@ -1853,7 +1943,7 @@ index fe0f63e..88973a0 100644
    }
  }
  
-@@ -351,6 +488,8 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
+@@ -351,6 +493,8 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
  
      rtp_decoder_init(&pc->vrtp_decoder, pc->config.video_codec,
                       pc->config.onvideotrack, pc->config.user_data);
@@ -1862,7 +1952,7 @@ index fe0f63e..88973a0 100644
    }
  
    return pc;
-@@ -358,10 +497,19 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
+@@ -358,10 +502,19 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
  
  void peer_connection_destroy(PeerConnection* pc) {
    if (pc) {
@@ -1882,7 +1972,7 @@ index fe0f63e..88973a0 100644
      pc = NULL;
    }
  }
-@@ -421,6 +569,42 @@ void peer_connection_set_media_enabled(PeerConnection* pc, int enabled) {
+@@ -421,6 +574,42 @@ void peer_connection_set_media_enabled(PeerConnection* pc, int enabled) {
    peer_connection_debug_log("media enabled=%d", pc->media_enabled);
  }
  
@@ -1925,7 +2015,7 @@ index fe0f63e..88973a0 100644
  int peer_connection_create_datachannel(PeerConnection* pc, DecpChannelType channel_type, uint16_t priority, uint32_t reliability_parameter, char* label, char* protocol) {
    return peer_connection_create_datachannel_sid(pc, channel_type, priority, reliability_parameter, label, protocol, 0);
  }
-@@ -476,13 +660,17 @@ int peer_connection_create_datachannel_sid(PeerConnection* pc, DecpChannelType c
+@@ -476,13 +665,17 @@ int peer_connection_create_datachannel_sid(PeerConnection* pc, DecpChannelType c
    return rtrn;
  }
  
@@ -1944,7 +2034,7 @@ index fe0f63e..88973a0 100644
  
    switch (pc->state) {
      case PEER_CONNECTION_NEW:
-@@ -520,6 +708,9 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -520,6 +713,9 @@ int peer_connection_loop(PeerConnection* pc) {
          }
  
          STATE_CHANGED(pc, PEER_CONNECTION_COMPLETED);
@@ -1954,7 +2044,18 @@ index fe0f63e..88973a0 100644
        }
        break;
      }
-@@ -554,7 +745,20 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -532,8 +728,9 @@ int peer_connection_loop(PeerConnection* pc) {
+       int dtls_read_positive = 0;
+       int dtls_read_nonpositive = 0;
+       int rtp_decoded_packets = 0;
++      rtp_decoded_packets += peer_connection_drain_rtp_queue(
++          pc, PEER_CONNECTION_RTP_DECODE_BUDGET);
+       while (packets_processed < PEER_CONNECTION_MAX_PACKETS_PER_LOOP) {
+-        memset(pc->agent_buf, 0, sizeof(pc->agent_buf));
+         pc->agent_ret = agent_recv(&pc->agent, pc->agent_buf, sizeof(pc->agent_buf));
+         if (pc->agent_ret <= 0) {
+           break;
+@@ -554,7 +751,20 @@ int peer_connection_loop(PeerConnection* pc) {
          if (rtcp_probe(pc->agent_buf, pc->agent_ret)) {
            rtcp_packets++;
            LOGD("Got RTCP packet");
@@ -1976,7 +2077,7 @@ index fe0f63e..88973a0 100644
            peer_connection_incoming_rtcp(pc, pc->agent_buf, pc->agent_ret);
  
          } else if (dtls_srtp_probe(pc->agent_buf)) {
-@@ -568,6 +772,7 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -568,6 +778,7 @@ int peer_connection_loop(PeerConnection* pc) {
  
            if (ret > 0) {
              dtls_read_positive++;
@@ -1984,7 +2085,7 @@ index fe0f63e..88973a0 100644
              sctp_incoming_data(&pc->sctp, (char*)pc->temp_buf, ret);
            } else {
              dtls_read_nonpositive++;
-@@ -585,6 +790,7 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -585,6 +796,7 @@ int peer_connection_loop(PeerConnection* pc) {
                break;
              }
              dtls_read_positive++;
@@ -1992,7 +2093,7 @@ index fe0f63e..88973a0 100644
              sctp_incoming_data(&pc->sctp, (char*)pc->temp_buf, ret);
            }
  
-@@ -598,13 +804,6 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -598,13 +810,6 @@ int peer_connection_loop(PeerConnection* pc) {
                                        pc->agent_buf[0]);
              pc->debug_rtp_logs++;
            }
@@ -2006,16 +2107,20 @@ index fe0f63e..88973a0 100644
            if (peer_connection_enqueue_rtp(pc, pc->agent_buf, pc->agent_ret) < 0) {
              if (pc->debug_rtp_queue_logs < 16) {
                peer_connection_debug_log("RTP enqueue failed len=%d count=%d",
-@@ -619,7 +818,7 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -618,8 +823,10 @@ int peer_connection_loop(PeerConnection* pc) {
+           LOGW("Unknown data");
          }
        }
-       rtp_decoded_packets = peer_connection_drain_rtp_queue(pc, PEER_CONNECTION_RTP_DECODE_BUDGET);
+-      rtp_decoded_packets = peer_connection_drain_rtp_queue(pc, PEER_CONNECTION_RTP_DECODE_BUDGET);
 -      (void)rtp_decoded_packets;
++      rtp_decoded_packets += peer_connection_drain_rtp_queue(
++          pc, PEER_CONNECTION_RTP_DECODE_BUDGET);
++      agent_send_consent_check(&pc->agent);
 +      loop_work = packets_processed + rtp_decoded_packets;
  
        if (packets_processed > 0 && pc->debug_completed_summary_logs < 64) {
          peer_connection_debug_log("completed summary processed=%d rtcp=%d dtls=%d rtp=%d rtp_decoded=%d rtp_queued=%d unknown=%d dtls_read_pos=%d dtls_read_nonpos=%d",
-@@ -653,7 +852,10 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -653,7 +860,10 @@ int peer_connection_loop(PeerConnection* pc) {
        break;
    }
  
@@ -2027,7 +2132,7 @@ index fe0f63e..88973a0 100644
  }
  
  void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp, SdpType type) {
-@@ -663,6 +865,7 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
+@@ -663,6 +873,7 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
    char* val_start = NULL;
    uint32_t* ssrc = NULL;
    DtlsSrtpRole role = DTLS_SRTP_ROLE_SERVER;
@@ -2035,7 +2140,7 @@ index fe0f63e..88973a0 100644
    int is_update = 0;
    Agent* agent = &pc->agent;
  
-@@ -673,6 +876,10 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
+@@ -673,6 +884,10 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
  
      if (strstr(buf, "a=setup:passive")) {
        role = DTLS_SRTP_ROLE_CLIENT;
@@ -2046,7 +2151,7 @@ index fe0f63e..88973a0 100644
      }
  
      if (strstr(buf, "a=fingerprint")) {
-@@ -703,6 +910,13 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
+@@ -703,6 +918,13 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
      return;
    }
  
@@ -2060,7 +2165,7 @@ index fe0f63e..88973a0 100644
    agent_set_remote_description(&pc->agent, (char*)sdp);
    if (type == SDP_TYPE_ANSWER) {
      agent_update_candidate_pairs(&pc->agent);
-@@ -748,7 +962,7 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
+@@ -748,7 +970,7 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
    sdp_append(pc->sdp, "a=ice-ufrag:%s", pc->agent.local_ufrag);
    sdp_append(pc->sdp, "a=ice-pwd:%s", pc->agent.local_upwd);
    sdp_append(pc->sdp, "a=fingerprint:sha-256 %s", pc->dtls_srtp.local_fingerprint);
@@ -2069,7 +2174,7 @@ index fe0f63e..88973a0 100644
  
    if (pc->config.video_codec == CODEC_H264) {
      sdp_append_h264(pc->sdp);
-@@ -782,10 +996,12 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
+@@ -782,10 +1004,12 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
    }
  
    agent_get_local_description(&pc->agent, description, sizeof(pc->temp_buf));
@@ -2084,7 +2189,7 @@ index fe0f63e..88973a0 100644
    }
  
    return pc->sdp;
-@@ -802,17 +1018,202 @@ const char* peer_connection_create_answer(PeerConnection* pc) {
+@@ -802,17 +1026,202 @@ const char* peer_connection_create_answer(PeerConnection* pc) {
    return sdp;
  }
  
@@ -2294,7 +2399,7 @@ index fe0f63e..88973a0 100644
  }
  
  // callbacks
-@@ -891,11 +1292,13 @@ int peer_connection_add_ice_candidate(PeerConnection* pc, char* candidate) {
+@@ -891,11 +1300,13 @@ int peer_connection_add_ice_candidate(PeerConnection* pc, char* candidate) {
        if (exists) {
          continue;
        }

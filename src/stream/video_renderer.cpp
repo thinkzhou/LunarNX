@@ -1519,22 +1519,16 @@ void VideoRenderer::present(){
   if(shouldLogRender())lunar::diagnosticLog("render","present submit width=%d height=%d",s->frame_w,s->frame_h);
 }
 
-void VideoRenderer::drainDecoderFrames(){
-  if(video_backend_==VideoBackend::Software){
-    SoftwareVideoFrameSink::instance().clear();
-    return;
-  }
+void VideoRenderer::prepareDecoderReset(){
+  if(video_backend_==VideoBackend::Software)return;
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);
   if(!s)return;
   std::lock_guard<std::mutex> lock(s->render_mutex);
-  if(s->q)s->q.waitIdle();
-  s->present_slice_active=false;
-  releaseRetainedFrames(*s);
-  s->fms.clear();
-  s->fi=-1;
-  s->mapped_luma_w=0;
-  s->mapped_luma_h=0;
-  lunar::diagnosticLog("render", "decoder frames drained");
+  // pending_frame has not reached a GPU command list and can be released
+  // immediately. Keep current/submitted frames and NvMap mappings alive until
+  // their normal command-ring fences retire, avoiding a recovery-time waitIdle.
+  if(s->pending_frame)av_frame_free(&s->pending_frame);
+  lunar::diagnosticLog("render", "decoder reset prepared without GPU idle wait");
 }
 
 bool VideoRenderer::pollEvents(){return true;}
@@ -1615,7 +1609,7 @@ bool VideoRenderer::render(const VideoFrame& f){
   SDL_RenderClear(r);SDL_RenderCopy(r,t,nullptr,nullptr);SDL_RenderPresent(r);return true;
 }
 void VideoRenderer::present(){}
-void VideoRenderer::drainDecoderFrames(){}
+void VideoRenderer::prepareDecoderReset(){}
 bool VideoRenderer::pollEvents(){SDL_Event e;while(SDL_PollEvent(&e))if(e.type==SDL_QUIT||(e.type==SDL_KEYDOWN&&e.key.keysym.sym==SDLK_ESCAPE))return false;return true;}
 void VideoRenderer::shutdown(){
   std::lock_guard<std::mutex> lock(sdl_mutex_);

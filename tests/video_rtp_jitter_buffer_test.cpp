@@ -235,6 +235,37 @@ void test_buffer_caps_are_hard_limits() {
     assert(h.jitter.stats().overflow_frames > 0);
 }
 
+void test_large_frame_defers_assembly_and_reuses_payload_storage() {
+    Harness h;
+    openWithIdr(h, 1000, 1000);
+    const auto baseline = h.jitter.stats();
+
+    std::vector<uint8_t> payload(1000, 0x11);
+    payload[0] = 0x61;
+    constexpr size_t packet_count = 512;
+    for (size_t i = 0; i < packet_count; ++i) {
+        h.push(rtp(static_cast<uint16_t>(1001 + i),
+                   2000,
+                   false,
+                   payload),
+               1);
+    }
+
+    const auto buffered = h.jitter.stats();
+    assert(buffered.assembly_attempts == baseline.assembly_attempts);
+    assert(buffered.payload_storage_reallocations -
+               baseline.payload_storage_reallocations < 32);
+
+    h.push(rtp(static_cast<uint16_t>(1001 + packet_count),
+               2000,
+               true,
+               {0x61, 0x22}),
+           2);
+    const auto completed = h.jitter.stats();
+    assert(completed.assembly_attempts == baseline.assembly_attempts + 1);
+    assert(h.frames.size() == 2);
+}
+
 } // namespace
 
 int main() {
@@ -248,6 +279,7 @@ int main() {
     test_malformed_payload_is_not_reported_as_overflow();
     test_access_unit_limit_is_enforced_without_unbounded_growth();
     test_buffer_caps_are_hard_limits();
+    test_large_frame_defers_assembly_and_reuses_payload_storage();
     std::cout << "Video RTP jitter buffer tests passed\n";
     return 0;
 }

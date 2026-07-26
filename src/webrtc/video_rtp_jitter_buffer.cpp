@@ -189,13 +189,16 @@ struct VideoRtpJitterBuffer::Impl {
         uint16_t sequence = 0;
         uint32_t extended_sequence = 0;
         bool marker = false;
-        std::vector<uint8_t> payload;
+        size_t payload_offset = 0;
+        size_t payload_size = 0;
     };
 
     struct Frame {
         uint32_t timestamp = 0;
         uint64_t first_seen_ms = 0;
+        bool marker_seen = false;
         std::vector<Packet> packets;
+        std::vector<uint8_t> payload_storage;
     };
 
     enum class AssembleResult {
@@ -379,11 +382,16 @@ struct VideoRtpJitterBuffer::Impl {
 
     void removeFrontFrame() {
         if (frames.empty()) return;
-        for (const auto& packet : frames.front().packets) {
-            buffered_bytes -= packet.payload.size();
-            buffered_packets--;
-        }
+        buffered_bytes -= frames.front().payload_storage.size();
+        buffered_packets -= frames.front().packets.size();
         frames.pop_front();
+    }
+
+    static const uint8_t* packetPayload(const Frame& frame,
+                                        const Packet& packet) {
+        return packet.payload_size > 0
+            ? frame.payload_storage.data() + packet.payload_offset
+            : nullptr;
     }
 
     void notifyRecovery(const RecoveryCallback& recovery,
@@ -429,31 +437,18 @@ struct VideoRtpJitterBuffer::Impl {
                             std::vector<uint8_t>& access_unit,
                             uint16_t& marker_sequence,
                             uint32_t& marker_extended_sequence) {
-        bool have_marker = false;
-        for (const auto& packet : frame.packets) {
-            if (packet.marker && !packet.payload.empty()) {
-                have_marker = true;
-                break;
-            }
-        }
-        if (!have_marker) return AssembleResult::Incomplete;
-
-        std::vector<const Packet*> ordered;
-        ordered.reserve(frame.packets.size());
-        for (const auto& packet : frame.packets) ordered.push_back(&packet);
-        std::sort(ordered.begin(), ordered.end(), [](const Packet* left,
-                                                     const Packet* right) {
-            return left->extended_sequence < right->extended_sequence;
-        });
+        counters.assembly_attempts++;
+        if (!frame.marker_seen) return AssembleResult::Incomplete;
 
         const Packet* marker = nullptr;
         const Packet* first_media = nullptr;
-        for (const Packet* packet : ordered) {
-            if (!packet->payload.empty() && !first_media) first_media = packet;
-            if (packet->marker && !packet->payload.empty()) marker = packet;
+        for (const auto& packet : frame.packets) {
+            if (packet.payload_size > 0 && !first_media) first_media = &packet;
+            if (packet.marker && packet.payload_size > 0) marker = &packet;
         }
         if (!marker || !first_media) return AssembleResult::Incomplete;
-        if (!isPartitionHead(first_media->payload.data(), first_media->payload.size())) {
+        if (!isPartitionHead(packetPayload(frame, *first_media),
+                             first_media->payload_size)) {
             return AssembleResult::Incomplete;
         }
         if (first_media->extended_sequence > marker->extended_sequence) {
@@ -465,14 +460,17 @@ struct VideoRtpJitterBuffer::Impl {
         }
 
         access_unit.clear();
+        access_unit.reserve(std::min(kMaxAccessUnitBytes,
+                                     frame.payload_storage.size() +
+                                         frame.packets.size() * sizeof(kStartCode)));
         H264AssemblyState assembly_state;
-        for (const Packet* packet : ordered) {
-            if (packet->extended_sequence < first_media->extended_sequence ||
-                packet->extended_sequence > marker->extended_sequence ||
-                packet->payload.empty()) {
+        for (const auto& packet : frame.packets) {
+            if (packet.extended_sequence < first_media->extended_sequence ||
+                packet.extended_sequence > marker->extended_sequence ||
+                packet.payload_size == 0) {
                 continue;
             }
-            switch (depacketize(packet->payload.data(), packet->payload.size(),
+            switch (depacketize(packetPayload(frame, packet), packet.payload_size,
                                 access_unit, assembly_state)) {
                 case DepacketizeResult::Ok:
                     break;
@@ -507,9 +505,10 @@ struct VideoRtpJitterBuffer::Impl {
             Frame& front = frames.front();
             uint16_t marker_sequence = 0;
             uint32_t marker_extended_sequence = 0;
-            const AssembleResult result = assemble(front, access_unit,
-                                                   marker_sequence,
-                                                   marker_extended_sequence);
+            const AssembleResult result = front.marker_seen
+                ? assemble(front, access_unit, marker_sequence,
+                           marker_extended_sequence)
+                : AssembleResult::Incomplete;
             if (result == AssembleResult::Complete) {
                 const uint32_t timestamp = front.timestamp;
                 last_timestamp = timestamp;
@@ -613,10 +612,6 @@ struct VideoRtpJitterBuffer::Impl {
                 return;
             }
         }
-        for (const auto& existing : frame->packets) {
-            if (existing.extended_sequence == sequence.extended_sequence) return;
-        }
-
         if (buffered_packets >= kMaxBufferedPackets ||
             parsed.payload_size > kMaxBufferedBytes - buffered_bytes) {
             overflow(recovery, now_ms);
@@ -627,9 +622,24 @@ struct VideoRtpJitterBuffer::Impl {
         buffered.sequence = parsed.sequence;
         buffered.extended_sequence = sequence.extended_sequence;
         buffered.marker = parsed.marker;
-        buffered.payload.assign(parsed.payload,
-                                parsed.payload + parsed.payload_size);
-        frame->packets.push_back(std::move(buffered));
+        buffered.payload_offset = frame->payload_storage.size();
+        buffered.payload_size = parsed.payload_size;
+        const size_t previous_capacity = frame->payload_storage.capacity();
+        frame->payload_storage.insert(frame->payload_storage.end(),
+                                      parsed.payload,
+                                      parsed.payload + parsed.payload_size);
+        if (frame->payload_storage.capacity() != previous_capacity) {
+            counters.payload_storage_reallocations++;
+        }
+        const auto position = std::lower_bound(
+            frame->packets.begin(), frame->packets.end(),
+            buffered.extended_sequence,
+            [](const Packet& packet, uint32_t extended_sequence) {
+                return packet.extended_sequence < extended_sequence;
+            });
+        frame->packets.insert(position, buffered);
+        frame->marker_seen = frame->marker_seen ||
+                             (parsed.marker && parsed.payload_size > 0);
         buffered_packets++;
         buffered_bytes += parsed.payload_size;
         drain(now_ms, emit, recovery);

@@ -465,7 +465,7 @@ void MediaPipeline::videoWorkerLoop() {
 
 bool MediaPipeline::resetVideoDecoderForKeyframe() {
     if (!video_decoder_) return false;
-    if (video_renderer_) video_renderer_->drainDecoderFrames();
+    if (video_renderer_) video_renderer_->prepareDecoderReset();
     return video_decoder_->resetForKeyframe();
 }
 

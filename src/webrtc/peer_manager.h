@@ -30,7 +30,9 @@ struct PeerCallbacks {
     MediaFrameCallback on_audio_frame;
     std::function<void(const std::string& label, const uint8_t* data, size_t len)> on_datachannel_message;
     std::function<void(const std::string& error)> on_error;
-    // True discards decoder reference state before waiting for a fresh IDR.
+    // True marks the first transition into keyframe recovery. The media layer
+    // keeps fenced/displayed frames alive and asks the sender for a fresh IDR;
+    // decoder flushes remain reserved for actual decoder/queue failures.
     std::function<void(bool reset_decoder)> on_video_recovery;
 
     // Xbox 4-motor rumble. Called when Xbox sends vibration data.
@@ -92,7 +94,6 @@ private:
     RtpClockMapper video_clock_{90000};
     RtpClockMapper audio_clock_{48000};
     VideoRtpJitterBuffer video_jitter_;
-    std::chrono::steady_clock::time_point last_jitter_keyframe_request_;
 
     static void onIceCandidate(char* sdp_text, void* userdata);
     static void onIceStateChange(PeerConnectionState state, void* userdata);

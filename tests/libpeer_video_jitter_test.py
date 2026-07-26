@@ -39,10 +39,20 @@ def main():
         "PeerManager must send NACK and report jitter-buffer loss accounting",
     )
     require(
+        peer_manager.count("peer_connection_send_rtcp_pil") == 1
+        and "jitter recovery RTCP PLI" not in peer_manager,
+        "Jitter recovery must coalesce PLI through the session request path",
+    )
+    require(
+        "std::max<uint64_t>(\n                60" in peer_manager
+        and "std::min<uint64_t>(180" in peer_manager,
+        "Adaptive jitter hold must stay within the low-latency 60-180 ms window",
+    )
+    require(
         "on_video_recovery" in peer_header
         and "media_.requestVideoRecovery" in session
         and "requestVideoRecovery" in media,
-        "RTP damage must reset decoder reference state before the next IDR",
+        "RTP damage must request a fresh IDR without flushing fenced frames",
     )
     require(
         "kMaxBufferedFrames = 32" in jitter_header

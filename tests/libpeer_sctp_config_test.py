@@ -98,6 +98,11 @@ def main():
             "peer_connection_drain_rtp_queue" in peer_connection and
             "rtp_queue_count" in peer_connection,
             "Completed-state loop should queue RTP while draining DTLS/SCTP control packets, then decode queued media without packet loss")
+    require("if (!pc->media_enabled)" in peer_connection and
+            "pc->rtp_queue_head = (pc->rtp_queue_head + 1) %" in peer_connection,
+            "Disabled-media overflow must retain the newest contiguous RTP tail instead of freezing an old full queue")
+    require(peer_connection.count("peer_connection_drain_rtp_queue(") >= 3,
+            "Completed-state media handling must drain startup RTP before reading another socket burst")
     budget_match = re.search(r"#define\s+PEER_CONNECTION_RTP_DECODE_BUDGET\s+(\d+)", peer_connection)
     max_packets_match = re.search(r"#define\s+PEER_CONNECTION_MAX_PACKETS_PER_LOOP\s+(\d+)", peer_connection)
     media_pipeline = Path("src/stream/media_pipeline.cpp").read_text()

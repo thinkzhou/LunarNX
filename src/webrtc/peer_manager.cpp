@@ -220,25 +220,12 @@ void PeerManager::onVideoTrack(uint8_t* data,
 }
 
 void PeerManager::handleVideoJitterRecovery(bool reset_decoder) noexcept {
-    if (reset_decoder && callbacks_.on_video_recovery) {
+    if (callbacks_.on_video_recovery) {
         try {
-            callbacks_.on_video_recovery(true);
+            callbacks_.on_video_recovery(reset_decoder);
         } catch (...) {
             lunar::diagnosticLog("webrtc", "video recovery callback failed");
         }
-    }
-    const auto now = std::chrono::steady_clock::now();
-    if (last_jitter_keyframe_request_.time_since_epoch().count() != 0 &&
-        now - last_jitter_keyframe_request_ < std::chrono::seconds(1)) {
-        return;
-    }
-    last_jitter_keyframe_request_ = now;
-    if (pc_) {
-        const int ret = peer_connection_send_rtcp_pil(pc_, 0);
-        lunar::diagnosticLog("webrtc",
-                             "jitter recovery RTCP PLI reset=%s result=%d",
-                             reset_decoder ? "true" : "false",
-                             ret);
     }
 }
 
@@ -330,7 +317,6 @@ bool PeerManager::initialize() {
     video_clock_.reset();
     audio_clock_.reset();
     video_jitter_.reset();
-    last_jitter_keyframe_request_ = {};
 
     PeerConfiguration config = {};
     config.video_codec = CODEC_H264;
@@ -476,7 +462,6 @@ bool PeerManager::sendMessageData(const uint8_t* data, size_t len) {
 bool PeerManager::requestVideoKeyframe() {
     if (!pc_ || !connected_) return false;
     const int ret = peer_connection_send_rtcp_pil(pc_, 0);
-    last_jitter_keyframe_request_ = std::chrono::steady_clock::now();
     lunar::diagnosticLog("webrtc", "send RTCP PLI result=%d", ret);
     return ret >= 0;
 }
@@ -566,9 +551,9 @@ void PeerManager::processEvents() {
         peer_connection_get_media_stats(pc_, &network_stats);
         if (network_stats.ice_rtt_ms > 0) {
             const uint64_t hold_ms = std::max<uint64_t>(
-                120,
-                std::min<uint64_t>(300,
-                                   static_cast<uint64_t>(network_stats.ice_rtt_ms) * 2 + 40));
+                60,
+                std::min<uint64_t>(180,
+                                   static_cast<uint64_t>(network_stats.ice_rtt_ms) * 2 + 20));
             video_jitter_.setHoldMs(hold_ms);
         }
         if (log_index < 16) {
@@ -593,7 +578,6 @@ void PeerManager::disconnect() {
     connected_ = false;
     data_channels_created_ = false;
     video_jitter_.reset();
-    last_jitter_keyframe_request_ = {};
     nack_logs_ = 0;
     if (initialized_) {
         lunar::diagnosticLog("webrtc", "disconnect peer_deinit begin");
