@@ -70,7 +70,7 @@ int languageIndex(const std::string& language) {
     return 0;
 }
 
-void saveRegion(const char* ip) {
+cJSON* readConfig() {
     const char* path = lunar::get_config_path();
     cJSON* root = nullptr;
     FILE* input = std::fopen(path, "rb");
@@ -89,17 +89,57 @@ void saveRegion(const char* ip) {
         std::fclose(input);
     }
     if (!root) root = cJSON_CreateObject();
-    cJSON_DeleteItemFromObject(root, "force_region_ip");
-    cJSON_AddStringToObject(root, "force_region_ip", ip ? ip : "");
+    return root;
+}
+
+bool writeConfig(cJSON* root) {
+    if (!root) return false;
     char* json = cJSON_Print(root);
-    cJSON_Delete(root);
-    if (!json) return;
-    FILE* output = std::fopen(path, "wb");
+    if (!json) return false;
+    FILE* output = std::fopen(lunar::get_config_path(), "wb");
+    const bool written = output != nullptr;
     if (output) {
         std::fputs(json, output);
         std::fclose(output);
     }
     std::free(json);
+    return written;
+}
+
+void saveRegion(const char* ip) {
+    cJSON* root = readConfig();
+    cJSON_DeleteItemFromObject(root, "force_region_ip");
+    cJSON_AddStringToObject(root, "force_region_ip", ip ? ip : "");
+    writeConfig(root);
+    cJSON_Delete(root);
+}
+
+void saveRumbleSettings(bool enabled, int strength_percent) {
+    cJSON* root = readConfig();
+    cJSON_DeleteItemFromObject(root, "vibration");
+    cJSON_AddBoolToObject(root, "vibration", enabled);
+    cJSON_DeleteItemFromObject(root, "rumble_strength_percent");
+    cJSON_AddNumberToObject(root, "rumble_strength_percent", strength_percent);
+    const bool written = writeConfig(root);
+    cJSON_Delete(root);
+    lunar::diagnosticLog("ui-settings",
+                         "rumble saved=%s enabled=%s strength=%d%%",
+                         written ? "true" : "false",
+                         enabled ? "true" : "false",
+                         strength_percent);
+}
+
+constexpr int kRumbleStrengths[] = {25, 50, 75, 100};
+
+int rumbleStrengthIndex(int percent) {
+    int closest = 0;
+    for (int i = 1; i < 4; ++i) {
+        if (std::abs(kRumbleStrengths[i] - percent) <
+            std::abs(kRumbleStrengths[closest] - percent)) {
+            closest = i;
+        }
+    }
+    return closest;
 }
 
 } // namespace
@@ -280,6 +320,33 @@ brls::View* StreamSettingsActivity::createContentView() {
     root->addView(image_card);
 
     root->addView(makeSectionHeader(
+        brls::getStr("lunarnx/settings/controller_section"),
+        brls::getStr("lunarnx/settings/controller_section_detail")));
+    auto* controller_card = makeUiCard();
+    controller_card->setPadding(4, 8, 4, 8);
+
+    auto* vibration = new brls::BooleanCell();
+    vibration->init(brls::getStr("lunarnx/settings/vibration"),
+        settings_.vibration_enabled,
+        [this](bool enabled) {
+            settings_.vibration_enabled = enabled;
+            ctrl_->setRumbleEnabled(enabled);
+        });
+    controller_card->addView(vibration);
+
+    auto* rumble_strength = new brls::SelectorCell();
+    rumble_strength->init(brls::getStr("lunarnx/settings/rumble_strength"),
+        {"25%", "50%", "75%", "100%"},
+        rumbleStrengthIndex(settings_.rumble_strength_percent),
+        [this](int selected) {
+            selected = std::max(0, std::min(selected, 3));
+            settings_.rumble_strength_percent = kRumbleStrengths[selected];
+            ctrl_->setRumbleStrengthPercent(settings_.rumble_strength_percent);
+        });
+    controller_card->addView(rumble_strength);
+    root->addView(controller_card);
+
+    root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/region_section"),
         brls::getStr("lunarnx/settings/region_section_detail")));
     auto* cloud_card = makeUiCard();
@@ -326,6 +393,8 @@ brls::View* StreamSettingsActivity::createContentView() {
 void StreamSettingsActivity::closeSettings() {
     if (closed_) return;
     closed_ = true;
+    saveRumbleSettings(settings_.vibration_enabled,
+                       settings_.rumble_strength_percent);
     if (completion_) completion_(settings_);
     brls::Application::popActivity(brls::TransitionAnimation::NONE);
 }

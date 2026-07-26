@@ -34,8 +34,11 @@ bool parseXboxVibrationPacket(const uint8_t* data,
     }
     if (len < offset + kVibrationSize) return false;
 
-    offset += 2; // rumble type and gamepad index
+    const uint8_t rumble_type = data[offset++];
+    if (rumble_type != 0) return false; // FourMotorRumble
+
     XboxVibrationCommand parsed;
+    parsed.gamepad_index = data[offset++];
     parsed.left_motor = data[offset++] / 100.0f;
     parsed.right_motor = data[offset++] / 100.0f;
     parsed.left_trigger = data[offset++] / 100.0f;

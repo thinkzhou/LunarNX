@@ -185,12 +185,37 @@ static int test_generic_opus_preserves_rtp_metadata(void) {
   return 0;
 }
 
+static int test_h264_passthrough_preserves_raw_rtp(void) {
+  RtpDecoder decoder;
+  uint8_t packet[128];
+  rtp_decoder_init(&decoder, CODEC_H264, on_packet, NULL);
+  rtp_decoder_set_passthrough(&decoder, 1);
+  reset_callback();
+
+  const uint8_t idr[] = {0x65, 0xaa, 0xbb};
+  size_t packet_size = make_rtp(packet, 0x3456, 0x10203040, 1,
+                                idr, sizeof(idr));
+  rtp_decoder_decode(&decoder, packet, packet_size);
+
+  if (require_int(callback_count == 1,
+                  "H264 passthrough should callback once per raw RTP packet")) return 1;
+  if (require_int(callback_size == packet_size,
+                  "H264 passthrough should preserve the complete RTP packet")) return 1;
+  if (require_int(memcmp(callback_data, packet, packet_size) == 0,
+                  "H264 passthrough must not depacketize before the jitter buffer")) return 1;
+  if (require_int(callback_sequences[0] == 0x3456 &&
+                  callback_timestamps[0] == 0x10203040,
+                  "H264 passthrough should preserve RTP metadata")) return 1;
+  return 0;
+}
+
 int main(void) {
   if (test_marker_flushes_complete_access_unit()) return 1;
   if (test_timestamp_change_flushes_previous_access_unit()) return 1;
   if (test_fu_a_gap_drops_corrupt_access_unit()) return 1;
   if (test_timestamp_change_drops_unfinished_fu_a()) return 1;
   if (test_generic_opus_preserves_rtp_metadata()) return 1;
+  if (test_h264_passthrough_preserves_raw_rtp()) return 1;
   printf("H264 RTP depacketizer tests passed\n");
   return 0;
 }

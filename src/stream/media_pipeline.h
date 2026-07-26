@@ -94,6 +94,10 @@ public:
     // after a throttled control/PLI request succeeds.
     bool hasVideoRecoveryRequest() const { return video_recovery_request_.load(); }
     void clearVideoRecoveryRequest() { video_recovery_request_ = false; }
+    // Ask the transport for an IDR without destroying the active decoder.
+    // Packet-loss recovery already gates non-IDR access units in the jitter
+    // buffer; flushing here would blank the zero-copy surface on every loss.
+    void requestVideoRecovery(const char* reason);
     void presentVideoFrame();
 
     bool isRunning() const { return running_.load(); }
@@ -115,6 +119,7 @@ private:
     void videoWorkerLoop();
     void audioWorkerLoop();
     void processVideoPacket(const QueuedVideoPacket& packet);
+    bool resetVideoDecoderForKeyframe();
     void markVideoRecovery(const char* reason);
 
     bool isGenerationActive(uint32_t generation) const;

@@ -37,10 +37,13 @@ def main() -> None:
             "Decoded frames must not enqueue an independent Borealis presentation")
     require("AVFrame* current_frame=nullptr" in renderer,
             "The renderer should retain the latest frame for repeated UI draws")
-    require("DkFence" not in renderer and ".fence.wait(" not in renderer,
-            "Borealis draw must not wait on per-frame GPU fences")
-    require("s->q.submitCommands(s->direct_cl)" in renderer,
-            "The direct path should reuse a static Moonlight-style command list")
+    require("s->present_ring->begin(s->present_cb)" in renderer and
+            "recordPresentPipeline(*s,fb,db,perf_)" in renderer,
+            "Every Borealis draw must use the command ring and current framebuffer")
+    present_start = renderer.index("void VideoRenderer::present()")
+    present_end = renderer.index("void VideoRenderer::drainDecoderFrames()", present_start)
+    require("s->q.waitIdle()" not in renderer[present_start:present_end],
+            "Borealis draw must not wait for queue idle before endFrame/presentImage")
     require("updateFrameMapping(*s,s->current_frame)" in renderer,
             "NvMap descriptors should update from the displayed frame on the Borealis thread")
 

@@ -3,6 +3,7 @@
 #include "stream_overlay.h"
 #include "perf_overlay.h"
 #include "ui_style.h"
+#include "../diagnostics.h"
 #include "../platform/network_worker.h"
 #include "../stream/software_video_frame.h"
 #include <switch.h>
@@ -22,6 +23,10 @@ bool isExitComboPressed() {
     u64 buttons = padGetButtons(&pad);
     return (buttons & HidNpadButton_Minus) && (buttons & HidNpadButton_Plus);
 }
+
+constexpr float kQuickMenuEdgeWidth = 96.0f;
+constexpr float kQuickMenuSwipeDistance = 120.0f;
+constexpr auto kQuickDisconnectConfirmWindow = std::chrono::seconds(3);
 
 class SoftwareVideoView : public brls::View {
 public:
@@ -133,8 +138,31 @@ StreamView::~StreamView() {
 brls::View* StreamView::createContentView() {
     const auto& p = uiPalette();
     auto* root = new brls::Box(brls::Axis::COLUMN);
+    content_root_ = root;
     root->setFocusable(true);
     root->setHideHighlight(true);
+
+    // Touch shortcut inspired by XStreaming's in-stream options menu. A
+    // leftward swipe beginning at the right edge opens it; a rightward swipe
+    // closes it without consuming a controller button used by the game.
+    root->addGestureRecognizer(new brls::PanGestureRecognizer(
+        [this](brls::PanGestureStatus status, brls::Sound*) {
+            if (status.state == brls::GestureState::UNSURE) {
+                swipe_start_x_ = status.position.x;
+                return;
+            }
+            if (status.state != brls::GestureState::END) return;
+            const float distance = status.position.x - swipe_start_x_;
+            if (!quick_menu_visible_ &&
+                swipe_start_x_ >= brls::Application::ORIGINAL_WINDOW_WIDTH - kQuickMenuEdgeWidth &&
+                distance <= -kQuickMenuSwipeDistance) {
+                setQuickMenuVisible(true);
+            } else if (quick_menu_visible_ &&
+                       distance >= kQuickMenuSwipeDistance) {
+                setQuickMenuVisible(false);
+            }
+        },
+        brls::PanAxis::HORIZONTAL));
 
     // Minus + Plus: stop with double-press confirmation. Keep single Minus as Xbox View.
     auto stop_handler = [this](brls::View*) -> bool {
@@ -161,7 +189,7 @@ brls::View* StreamView::createContentView() {
     root->registerAction(brls::getStr("lunarnx/stream/toggle_stats"),
         brls::ControllerButton::BUTTON_RSB,
         [this](brls::View*) -> bool {
-            if (perf_overlay_) perf_overlay_->toggle();
+            if (performance_visible_ && perf_overlay_) perf_overlay_->toggle();
             return true;
         });
 
@@ -191,6 +219,86 @@ brls::View* StreamView::createContentView() {
     perf_overlay_->detach();
     perf_overlay_->setDetachedPosition(10, 76);
     root->addView(perf_overlay_);
+
+    // Right-edge quick menu. It remains detached and hidden until the edge
+    // swipe is recognized, so normal streaming and controller input stay
+    // untouched.
+    quick_menu_ = new brls::Box(brls::Axis::COLUMN);
+    quick_menu_->setWidth(390);
+    quick_menu_->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
+    quick_menu_->setPadding(42, 28, 36, 28);
+    quick_menu_->setBackgroundColor(nvgRGBA(15, 22, 19, 246));
+    quick_menu_->setBorderThickness(1);
+    quick_menu_->setBorderColor(p.border);
+    quick_menu_->setVisibility(brls::Visibility::GONE);
+    quick_menu_->detach();
+    quick_menu_->setDetachedPosition(
+        brls::Application::ORIGINAL_WINDOW_WIDTH - 390, 0);
+    quick_menu_->registerAction(brls::getStr("lunarnx/stream/menu_close"),
+        brls::ControllerButton::BUTTON_B,
+        [this](brls::View*) -> bool {
+            setQuickMenuVisible(false);
+            return true;
+        });
+
+    auto* menu_title = new brls::Label();
+    menu_title->setText(brls::getStr("lunarnx/stream/menu_title"));
+    menu_title->setFontSize(25);
+    menu_title->setTextColor(p.accent);
+    menu_title->setHeight(52);
+    quick_menu_->addView(menu_title);
+
+    auto* menu_hint = new brls::Label();
+    menu_hint->setText(brls::getStr("lunarnx/stream/menu_hint"));
+    menu_hint->setFontSize(13);
+    menu_hint->setTextColor(nvgRGB(159, 178, 164));
+    menu_hint->setHeight(58);
+    quick_menu_->addView(menu_hint);
+
+    performance_button_ = new brls::Button();
+    performance_button_->setHeight(64);
+    performance_button_->setStyle(&brls::BUTTONSTYLE_DEFAULT);
+    performance_button_->registerClickAction([this](brls::View*) -> bool {
+        performance_visible_ = !performance_visible_;
+        updatePerformanceVisibility();
+        return true;
+    });
+    quick_menu_->addView(performance_button_);
+
+    auto* xbox_button = new brls::Button();
+    xbox_button->setHeight(64);
+    xbox_button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
+    xbox_button->setText(brls::getStr("lunarnx/stream/menu_xbox_button"));
+    xbox_button->registerClickAction([this](brls::View*) -> bool {
+        setQuickMenuVisible(false);
+        ctrl_->requestGuideButton();
+        return true;
+    });
+    quick_menu_->addView(xbox_button);
+
+    auto* spacer = new brls::Box(brls::Axis::COLUMN);
+    spacer->setGrow(1.0f);
+    quick_menu_->addView(spacer);
+
+    disconnect_button_ = new brls::Button();
+    disconnect_button_->setHeight(64);
+    disconnect_button_->setStyle(&brls::BUTTONSTYLE_BORDERED);
+    disconnect_button_->setTextColor(nvgRGB(255, 125, 120));
+    disconnect_button_->registerClickAction([this](brls::View*) -> bool {
+        handleQuickDisconnect();
+        return true;
+    });
+    quick_menu_->addView(disconnect_button_);
+
+    auto* close_hint = new brls::Label();
+    close_hint->setText(brls::getStr("lunarnx/stream/menu_close_hint"));
+    close_hint->setFontSize(12);
+    close_hint->setTextColor(nvgRGB(159, 178, 164));
+    close_hint->setHeight(36);
+    close_hint->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    quick_menu_->addView(close_hint);
+    root->addView(quick_menu_);
+    updatePerformanceVisibility();
 
     // Exit confirmation — absolutely positioned at center
     confirm_box_ = new brls::Box(brls::Axis::COLUMN);
@@ -239,6 +347,64 @@ brls::View* StreamView::createContentView() {
     return root;
 }
 
+void StreamView::setQuickMenuVisible(bool visible) {
+    if (!quick_menu_ || quick_menu_visible_ == visible) return;
+    quick_menu_visible_ = visible;
+    quick_menu_->setVisibility(
+        visible ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+    updateInputSuppression();
+
+    disconnect_armed_ = false;
+    if (disconnect_button_) {
+        disconnect_button_->setText(brls::getStr("lunarnx/stream/menu_disconnect"));
+    }
+    if (visible && performance_button_) {
+        brls::Application::giveFocus(performance_button_);
+    } else if (!visible && content_root_) {
+        brls::Application::giveFocus(content_root_);
+    }
+}
+
+void StreamView::updateInputSuppression() {
+    ctrl_->setInputSuppressed(quick_menu_visible_ || exit_pending_.load());
+}
+
+void StreamView::updatePerformanceVisibility() {
+    if (overlay_) {
+        overlay_->setVisibility(performance_visible_
+            ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+    }
+    if (!performance_visible_ && perf_overlay_) {
+        perf_overlay_->setVisible(false);
+    }
+    if (performance_button_) {
+        performance_button_->setText(brls::getStr(performance_visible_
+            ? "lunarnx/stream/menu_hide_performance"
+            : "lunarnx/stream/menu_show_performance"));
+    }
+}
+
+void StreamView::handleQuickDisconnect() {
+    const auto now = std::chrono::steady_clock::now();
+    if (disconnect_armed_.load()) {
+        const auto armed_at = std::chrono::steady_clock::time_point(
+            std::chrono::steady_clock::duration(disconnect_arm_ticks_.load()));
+        if (now - armed_at < kQuickDisconnectConfirmWindow) {
+            running_ = false;
+            ctrl_->setInputSuppressed(false);
+            brls::Application::popActivity(brls::TransitionAnimation::NONE);
+            return;
+        }
+    }
+
+    disconnect_arm_ticks_ = now.time_since_epoch().count();
+    disconnect_armed_ = true;
+    if (disconnect_button_) {
+        disconnect_button_->setText(
+            brls::getStr("lunarnx/stream/menu_disconnect_confirm"));
+    }
+}
+
 void StreamView::runLoop() {
     using namespace std::chrono;
     auto last_stats = steady_clock::now();
@@ -255,6 +421,24 @@ void StreamView::runLoop() {
         last_frames = frames;
         last_stats = now;
 
+        if (disconnect_armed_.load()) {
+            const auto disconnect_arm_ticks = disconnect_arm_ticks_.load();
+            const auto disconnect_armed_at = steady_clock::time_point(
+                steady_clock::duration(disconnect_arm_ticks));
+            if (now - disconnect_armed_at >= kQuickDisconnectConfirmWindow) {
+                auto alive = alive_;
+                brls::sync([alive, this, disconnect_arm_ticks]() {
+                    if (!alive->load() || !disconnect_armed_.load() ||
+                        disconnect_arm_ticks_.load() != disconnect_arm_ticks) return;
+                    disconnect_armed_ = false;
+                    if (disconnect_button_) {
+                        disconnect_button_->setText(
+                            brls::getStr("lunarnx/stream/menu_disconnect"));
+                    }
+                });
+            }
+        }
+
         // Clear exit confirmation after timeout
         if (exit_pending_.load()) {
             auto alive = alive_;
@@ -265,7 +449,7 @@ void StreamView::runLoop() {
                     std::chrono::duration_cast<std::chrono::seconds>(
                         now - exit_press_time_).count() >= 3) {
                     exit_pending_ = false;
-                    ctrl_->setInputSuppressed(false);
+                    updateInputSuppression();
                     if (confirm_box_) confirm_box_->setVisibility(brls::Visibility::GONE);
                 }
             });

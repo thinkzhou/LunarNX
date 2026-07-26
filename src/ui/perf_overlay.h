@@ -15,6 +15,8 @@ public:
     void update(float fps, const std::string& resolution,
                 const std::string& video_backend);
     void toggle();
+    void setVisible(bool visible);
+    bool isVisible() const { return visible_; }
 
 private:
     brls::Label* label_;

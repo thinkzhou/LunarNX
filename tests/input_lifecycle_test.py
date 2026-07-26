@@ -31,20 +31,16 @@ def main():
     probe_pos = initialize_rumble.index("hidInitializeVibrationDevices")
     require("stop();" in initialize_rumble,
             "rumble initialize must stop old output before probing handles")
-    require("hid_rumble_initialized_ = false;" in initialize_rumble,
-            "rumble initialize must clear old initialization state")
-    require("vibration_handle_count_ = 0;" in initialize_rumble,
-            "rumble initialize must clear old handle count")
-    require("vibration_handles_.fill(0);" in initialize_rumble,
-            "rumble initialize must clear old handles")
+    require("handheld_device_ = {};" in initialize_rumble,
+            "rumble initialize must clear the handheld vibration device")
+    require("player_devices_ = {};" in initialize_rumble,
+            "rumble initialize must clear player vibration devices")
     require(initialize_rumble.index("stop();") < probe_pos,
             "rumble initialize must stop old output before probing handles")
-    require(initialize_rumble.index("hid_rumble_initialized_ = false;") < probe_pos,
-            "rumble initialize must clear old initialization state")
-    require(initialize_rumble.index("vibration_handle_count_ = 0;") < probe_pos,
-            "rumble initialize must clear old handle count")
-    require(initialize_rumble.index("vibration_handles_.fill(0);") < probe_pos,
-            "rumble initialize must clear old handles")
+    require(initialize_rumble.index("handheld_device_ = {};") < probe_pos,
+            "rumble initialize must clear handheld handles before probing")
+    require(initialize_rumble.index("player_devices_ = {};") < probe_pos,
+            "rumble initialize must clear player handles before probing")
 
     print("Input lifecycle tests passed")
 

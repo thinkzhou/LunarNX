@@ -384,6 +384,16 @@ std::shared_ptr<app::StreamController> AuthActivity::controller() {
                     ctrl_->setDefaultVideoBackend(video_backend);
                 }
 
+                cJSON* vibration = cJSON_GetObjectItem(root, "vibration");
+                if (vibration && cJSON_IsBool(vibration)) {
+                    ctrl_->setRumbleEnabled(cJSON_IsTrue(vibration));
+                }
+                cJSON* rumble_strength =
+                    cJSON_GetObjectItem(root, "rumble_strength_percent");
+                if (rumble_strength && cJSON_IsNumber(rumble_strength)) {
+                    ctrl_->setRumbleStrengthPercent(rumble_strength->valueint);
+                }
+
                 cJSON* base = cJSON_GetObjectItem(root, "base_url");
                 if (base && cJSON_IsString(base) && base->valuestring &&
                     strlen(base->valuestring) > 0) {

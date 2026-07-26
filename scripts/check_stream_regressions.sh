@@ -86,14 +86,16 @@ for symbol in getFrameColorInfo AVCOL_SPC_BT2020_NCL bt2020 AVCOL_RANGE_JPEG; do
   fi
 done
 
-if ! rg -n 'sz == size && co == chroma_offset' src/stream/video_renderer.cpp >/dev/null ||
-   ! rg -n 'w == width && hgt == height' src/stream/video_renderer.cpp >/dev/null; then
-  fail "Switch NVTEGRA frame mapping cache must compare size, chroma offset, and dimensions"
+if ! rg -n 'lo == luma_offset' src/stream/video_renderer.cpp >/dev/null ||
+   ! rg -n 'co == chroma_offset' src/stream/video_renderer.cpp >/dev/null ||
+   ! rg -n 'w == width && hgt == height' src/stream/video_renderer.cpp >/dev/null ||
+   ! rg -n 'linear == is_linear' src/stream/video_renderer.cpp >/dev/null; then
+  fail "Switch NVTEGRA frame mapping cache must compare both plane offsets, dimensions, and layout"
 fi
 
-if ! rg -n 'frame->width[[:space:]]*!=[[:space:]]*s\.frame_w[[:space:]]*\|\|[[:space:]]*frame->height[[:space:]]*!=[[:space:]]*s\.frame_h' src/stream/video_renderer.cpp >/dev/null ||
-   ! rg -n 's\.fms\.clear\(\)' src/stream/video_renderer.cpp >/dev/null; then
-  fail "Switch renderer must reset frame mappings when decoded frame dimensions change"
+if ! rg -n 'mapping\.ll|mapping\.cll' src/stream/video_renderer.cpp >/dev/null ||
+   ! rg -n 'DkTileSize_TwoGobs|setPitchStride' src/stream/video_renderer.cpp >/dev/null; then
+  fail "Switch renderer must retain per-mapping layouts for real NVTEGRA surface geometry"
 fi
 
 if ! rg -n 'canUpscaleFrame' src/stream/video_renderer.cpp >/dev/null ||

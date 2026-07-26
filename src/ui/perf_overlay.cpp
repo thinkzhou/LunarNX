@@ -96,7 +96,11 @@ void PerfOverlay::update(float fps, const std::string& resolution,
 }
 
 void PerfOverlay::toggle() {
-    visible_ = !visible_;
+    setVisible(!visible_);
+}
+
+void PerfOverlay::setVisible(bool visible) {
+    visible_ = visible;
     this->setVisibility(visible_ ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
 }
 

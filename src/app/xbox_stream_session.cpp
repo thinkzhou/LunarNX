@@ -15,7 +15,7 @@ constexpr std::chrono::milliseconds kIceGatherTimeout{5000};
 constexpr std::chrono::milliseconds kInputPollInterval{16};
 constexpr std::chrono::seconds kDataChannelTimeout{45};
 constexpr std::chrono::seconds kStartupKeyframeRetryInterval{1};
-constexpr std::chrono::seconds kRecoveryKeyframeInterval{8};
+constexpr std::chrono::seconds kRecoveryKeyframeInterval{1};
 constexpr std::chrono::seconds kReceiverFeedbackInterval{1};
 constexpr uint32_t kRecoveryMissingPacketsThreshold = 12;
 constexpr uint32_t kRecoveryCorruptFramesThreshold = 4;
@@ -410,6 +410,9 @@ webrtc::PeerCallbacks XboxStreamSession::createPeerCallbacks() {
             perf_.recordVideoPacket(len, timestamp);
             media_.decodeVideoPacket(data, len, timestamp);
         },
+        [this](size_t bytes) {
+            perf_.recordVideoNetworkBytes(bytes);
+        },
         [this](const uint8_t* data, size_t len, uint16_t sequence, uint64_t timestamp) {
             perf_.recordPackets(1, 0);
             perf_.recordAudioPacket();
@@ -423,14 +426,21 @@ webrtc::PeerCallbacks XboxStreamSession::createPeerCallbacks() {
         [](const std::string& error) {
             std::fprintf(stderr, "[ctrl] %s\n", error.c_str());
         },
-        [this](float left,
+        [this](bool reset_decoder) {
+            if (reset_decoder) {
+                media_.requestVideoRecovery("RTP loss timeout");
+            }
+        },
+        [this](uint8_t gamepad_index,
+               float left,
                float right,
                float left_trigger,
                float right_trigger,
                uint16_t duration_ms,
                uint16_t delay_ms,
                uint8_t repeat) {
-            rumble_.setRumble(left,
+            rumble_.setRumble(gamepad_index,
+                              left,
                               right,
                               left_trigger,
                               right_trigger,
@@ -483,7 +493,15 @@ void XboxStreamSession::runLoop(StreamProfile profile,
         } catch (...) {
             // Keep zeroed state.
         }
-        if (callbacks.input_suppressed && callbacks.input_suppressed()) {
+        const bool guide_requested = control_started && input_connected &&
+                                     callbacks.consume_guide_button &&
+                                     callbacks.consume_guide_button();
+        if (guide_requested) {
+            // Send an unambiguous one-frame Nexus pulse. This also prevents
+            // the menu activation button from leaking into the game.
+            gamepad_state = {};
+            gamepad_state.guide = true;
+        } else if (callbacks.input_suppressed && callbacks.input_suppressed()) {
             gamepad_state.view = false;
             gamepad_state.menu = false;
         }

@@ -1164,7 +1164,7 @@ index c655d38..da49367 100644
  // #define LOG_LEVEL LEVEL_DEBUG
  #ifndef LOG_REDIRECT
 diff --git a/src/dtls_srtp.c b/src/dtls_srtp.c
-index 4d750e0..1ff0174 100644
+index 4d750e0..0c91ea5 100644
 --- a/src/dtls_srtp.c
 +++ b/src/dtls_srtp.c
 @@ -60,9 +60,15 @@ static void dtls_srtp_x509_digest(const mbedtls_x509_crt* crt, char* buf) {
@@ -1401,7 +1401,7 @@ index 4d750e0..1ff0174 100644
    const mbedtls_x509_crt* remote_crt;
    if ((remote_crt = mbedtls_ssl_get_peer_cert(&dtls_srtp->ssl)) != NULL) {
      dtls_srtp_x509_digest(remote_crt, dtls_srtp->actual_remote_fingerprint);
-@@ -567,18 +633,18 @@ int dtls_srtp_probe(uint8_t* buf) {
+@@ -567,18 +633,26 @@ int dtls_srtp_probe(uint8_t* buf) {
    return (buf[0] == 0x17);
  }
  
@@ -1423,11 +1423,19 @@ index 4d750e0..1ff0174 100644
  
 -void dtls_srtp_encrypt_rctp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes) {
 -  srtp_protect_rtcp(dtls_srtp->srtp_out, packet, bytes);
-+int dtls_srtp_encrypt_rctp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes) {
++int dtls_srtp_encrypt_rctp_packet(DtlsSrtp* dtls_srtp,
++                                  uint8_t* packet,
++                                  int* bytes,
++                                  size_t packet_capacity) {
++  if (!dtls_srtp || !packet || !bytes || *bytes < 0 ||
++      (size_t)*bytes > packet_capacity ||
++      packet_capacity - (size_t)*bytes < SRTP_MAX_TRAILER_LEN + 4) {
++    return srtp_err_status_bad_param;
++  }
 +  return srtp_protect_rtcp(dtls_srtp->srtp_out, packet, bytes);
  }
 diff --git a/src/dtls_srtp.h b/src/dtls_srtp.h
-index 8bfce43..63f7560 100644
+index 8bfce43..5466302 100644
 --- a/src/dtls_srtp.h
 +++ b/src/dtls_srtp.h
 @@ -81,6 +81,8 @@ typedef struct DtlsSrtp {
@@ -1439,7 +1447,7 @@ index 8bfce43..63f7560 100644
  void dtls_srtp_deinit(DtlsSrtp* dtls_srtp);
  
  int dtls_srtp_create_cert(DtlsSrtp* dtls_srtp);
-@@ -99,12 +101,12 @@ void dtls_srtp_sctp_to_dtls(DtlsSrtp* dtls_srtp, uint8_t* packet, int bytes);
+@@ -99,12 +101,15 @@ void dtls_srtp_sctp_to_dtls(DtlsSrtp* dtls_srtp, uint8_t* packet, int bytes);
  
  int dtls_srtp_probe(uint8_t* buf);
  
@@ -1452,7 +1460,10 @@ index 8bfce43..63f7560 100644
  void dtls_srtp_encrypt_rtp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes);
  
 -void dtls_srtp_encrypt_rctp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes);
-+int dtls_srtp_encrypt_rctp_packet(DtlsSrtp* dtls_srtp, uint8_t* packet, int* bytes);
++int dtls_srtp_encrypt_rctp_packet(DtlsSrtp* dtls_srtp,
++                                  uint8_t* packet,
++                                  int* bytes,
++                                  size_t packet_capacity);
  
  #endif  // DTLS_SRTP_H_
 diff --git a/src/ice.c b/src/ice.c
@@ -1553,7 +1564,7 @@ index 2628a54..1f24d72 100644
  
  int ice_candidate_from_description(IceCandidate* candidate, char* description, char* end);
 diff --git a/src/peer_connection.c b/src/peer_connection.c
-index fe0f63e..ccf3431 100644
+index fe0f63e..88973a0 100644
 --- a/src/peer_connection.c
 +++ b/src/peer_connection.c
 @@ -25,7 +25,7 @@
@@ -1842,7 +1853,16 @@ index fe0f63e..ccf3431 100644
    }
  }
  
-@@ -358,10 +495,19 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
+@@ -351,6 +488,8 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
+ 
+     rtp_decoder_init(&pc->vrtp_decoder, pc->config.video_codec,
+                      pc->config.onvideotrack, pc->config.user_data);
++    rtp_decoder_set_passthrough(&pc->vrtp_decoder,
++                                pc->config.raw_video_rtp);
+   }
+ 
+   return pc;
+@@ -358,10 +497,19 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
  
  void peer_connection_destroy(PeerConnection* pc) {
    if (pc) {
@@ -1862,7 +1882,7 @@ index fe0f63e..ccf3431 100644
      pc = NULL;
    }
  }
-@@ -421,6 +567,42 @@ void peer_connection_set_media_enabled(PeerConnection* pc, int enabled) {
+@@ -421,6 +569,42 @@ void peer_connection_set_media_enabled(PeerConnection* pc, int enabled) {
    peer_connection_debug_log("media enabled=%d", pc->media_enabled);
  }
  
@@ -1905,7 +1925,7 @@ index fe0f63e..ccf3431 100644
  int peer_connection_create_datachannel(PeerConnection* pc, DecpChannelType channel_type, uint16_t priority, uint32_t reliability_parameter, char* label, char* protocol) {
    return peer_connection_create_datachannel_sid(pc, channel_type, priority, reliability_parameter, label, protocol, 0);
  }
-@@ -476,13 +658,17 @@ int peer_connection_create_datachannel_sid(PeerConnection* pc, DecpChannelType c
+@@ -476,13 +660,17 @@ int peer_connection_create_datachannel_sid(PeerConnection* pc, DecpChannelType c
    return rtrn;
  }
  
@@ -1924,7 +1944,7 @@ index fe0f63e..ccf3431 100644
  
    switch (pc->state) {
      case PEER_CONNECTION_NEW:
-@@ -520,6 +706,9 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -520,6 +708,9 @@ int peer_connection_loop(PeerConnection* pc) {
          }
  
          STATE_CHANGED(pc, PEER_CONNECTION_COMPLETED);
@@ -1934,7 +1954,7 @@ index fe0f63e..ccf3431 100644
        }
        break;
      }
-@@ -554,7 +743,20 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -554,7 +745,20 @@ int peer_connection_loop(PeerConnection* pc) {
          if (rtcp_probe(pc->agent_buf, pc->agent_ret)) {
            rtcp_packets++;
            LOGD("Got RTCP packet");
@@ -1956,7 +1976,7 @@ index fe0f63e..ccf3431 100644
            peer_connection_incoming_rtcp(pc, pc->agent_buf, pc->agent_ret);
  
          } else if (dtls_srtp_probe(pc->agent_buf)) {
-@@ -568,6 +770,7 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -568,6 +772,7 @@ int peer_connection_loop(PeerConnection* pc) {
  
            if (ret > 0) {
              dtls_read_positive++;
@@ -1964,7 +1984,7 @@ index fe0f63e..ccf3431 100644
              sctp_incoming_data(&pc->sctp, (char*)pc->temp_buf, ret);
            } else {
              dtls_read_nonpositive++;
-@@ -585,6 +788,7 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -585,6 +790,7 @@ int peer_connection_loop(PeerConnection* pc) {
                break;
              }
              dtls_read_positive++;
@@ -1972,7 +1992,7 @@ index fe0f63e..ccf3431 100644
              sctp_incoming_data(&pc->sctp, (char*)pc->temp_buf, ret);
            }
  
-@@ -598,13 +802,6 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -598,13 +804,6 @@ int peer_connection_loop(PeerConnection* pc) {
                                        pc->agent_buf[0]);
              pc->debug_rtp_logs++;
            }
@@ -1986,7 +2006,7 @@ index fe0f63e..ccf3431 100644
            if (peer_connection_enqueue_rtp(pc, pc->agent_buf, pc->agent_ret) < 0) {
              if (pc->debug_rtp_queue_logs < 16) {
                peer_connection_debug_log("RTP enqueue failed len=%d count=%d",
-@@ -619,7 +816,7 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -619,7 +818,7 @@ int peer_connection_loop(PeerConnection* pc) {
          }
        }
        rtp_decoded_packets = peer_connection_drain_rtp_queue(pc, PEER_CONNECTION_RTP_DECODE_BUDGET);
@@ -1995,7 +2015,7 @@ index fe0f63e..ccf3431 100644
  
        if (packets_processed > 0 && pc->debug_completed_summary_logs < 64) {
          peer_connection_debug_log("completed summary processed=%d rtcp=%d dtls=%d rtp=%d rtp_decoded=%d rtp_queued=%d unknown=%d dtls_read_pos=%d dtls_read_nonpos=%d",
-@@ -653,7 +850,10 @@ int peer_connection_loop(PeerConnection* pc) {
+@@ -653,7 +852,10 @@ int peer_connection_loop(PeerConnection* pc) {
        break;
    }
  
@@ -2007,7 +2027,7 @@ index fe0f63e..ccf3431 100644
  }
  
  void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp, SdpType type) {
-@@ -663,6 +863,7 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
+@@ -663,6 +865,7 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
    char* val_start = NULL;
    uint32_t* ssrc = NULL;
    DtlsSrtpRole role = DTLS_SRTP_ROLE_SERVER;
@@ -2015,7 +2035,7 @@ index fe0f63e..ccf3431 100644
    int is_update = 0;
    Agent* agent = &pc->agent;
  
-@@ -673,6 +874,10 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
+@@ -673,6 +876,10 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
  
      if (strstr(buf, "a=setup:passive")) {
        role = DTLS_SRTP_ROLE_CLIENT;
@@ -2026,7 +2046,7 @@ index fe0f63e..ccf3431 100644
      }
  
      if (strstr(buf, "a=fingerprint")) {
-@@ -703,6 +908,13 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
+@@ -703,6 +910,13 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
      return;
    }
  
@@ -2040,7 +2060,7 @@ index fe0f63e..ccf3431 100644
    agent_set_remote_description(&pc->agent, (char*)sdp);
    if (type == SDP_TYPE_ANSWER) {
      agent_update_candidate_pairs(&pc->agent);
-@@ -748,7 +960,7 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
+@@ -748,7 +962,7 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
    sdp_append(pc->sdp, "a=ice-ufrag:%s", pc->agent.local_ufrag);
    sdp_append(pc->sdp, "a=ice-pwd:%s", pc->agent.local_upwd);
    sdp_append(pc->sdp, "a=fingerprint:sha-256 %s", pc->dtls_srtp.local_fingerprint);
@@ -2049,7 +2069,7 @@ index fe0f63e..ccf3431 100644
  
    if (pc->config.video_codec == CODEC_H264) {
      sdp_append_h264(pc->sdp);
-@@ -782,10 +994,12 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
+@@ -782,10 +996,12 @@ static const char* peer_connection_create_sdp(PeerConnection* pc, SdpType sdp_ty
    }
  
    agent_get_local_description(&pc->agent, description, sizeof(pc->temp_buf));
@@ -2064,9 +2084,39 @@ index fe0f63e..ccf3431 100644
    }
  
    return pc->sdp;
-@@ -803,18 +1017,153 @@ const char* peer_connection_create_answer(PeerConnection* pc) {
+@@ -802,17 +1018,202 @@ const char* peer_connection_create_answer(PeerConnection* pc) {
+   return sdp;
  }
  
++static int peer_connection_send_rtcp_packet(PeerConnection* pc,
++                                             const uint8_t* packet,
++                                             int packet_len) {
++  if (!pc || !packet || packet_len <= 0) return -1;
++
++  // libSRTP protects RTCP in place and may append
++  // SRTP_MAX_TRAILER_LEN + 4 bytes.  NACK and REMB used exact-size stack
++  // arrays before reaching this helper, so the first feedback packet could
++  // overwrite the caller's stack on Switch.  Copy every plain RTCP packet
++  // into one aligned, capacity-checked scratch buffer before protection.
++  union {
++    uint32_t alignment;
++    uint8_t bytes[CONFIG_PACKET_BUFFER_SIZE];
++  } protected_packet;
++  const size_t trailer_capacity = SRTP_MAX_TRAILER_LEN + 4;
++  if ((size_t)packet_len > sizeof(protected_packet.bytes) - trailer_capacity) {
++    return -1;
++  }
++  memcpy(protected_packet.bytes, packet, (size_t)packet_len);
++
++  int protected_len = packet_len;
++  int protect_ret = dtls_srtp_encrypt_rctp_packet(&pc->dtls_srtp,
++                                                  protected_packet.bytes,
++                                                  &protected_len,
++                                                  sizeof(protected_packet.bytes));
++  if (protect_ret != srtp_err_status_ok) return -1;
++  return agent_send(&pc->agent, protected_packet.bytes, protected_len);
++}
++
  int peer_connection_send_rtcp_pil(PeerConnection* pc, uint32_t ssrc) {
 -  int ret = -1;
 +  if (!pc || pc->state != PEER_CONNECTION_COMPLETED) {
@@ -2089,27 +2139,33 @@ index fe0f63e..ccf3431 100644
 -  // guint size = 12;
 -  // dtls_transport_encrypt_rctp_packet(pc->dtls_transport, plibuf, &size);
 -  // ret = nice_agent_send(pc->nice_agent, pc->stream_id, pc->component_id, size, (gchar*)plibuf);
-+  int protect_ret = dtls_srtp_encrypt_rctp_packet(&pc->dtls_srtp, plibuf, &size);
-+  if (protect_ret != srtp_err_status_ok) {
-+    peer_connection_debug_log("PLI SRTCP protect failed ret=%d", protect_ret);
++  return peer_connection_send_rtcp_packet(pc, plibuf, size);
++}
+ 
+-  return ret;
++int peer_connection_send_nack(PeerConnection* pc, uint16_t pid, uint16_t blp) {
++  if (!pc || pc->state != PEER_CONNECTION_COMPLETED ||
++      pc->remote_vssrc == 0) {
 +    return -1;
 +  }
- 
-+  int ret = agent_send(&pc->agent, plibuf, size);
-+  peer_connection_debug_log("PLI sent media_ssrc=%" PRIu32 " bytes=%d ret=%d",
-+                            media_ssrc, size, ret);
-   return ret;
- }
- 
-+static int peer_connection_send_rtcp_packet(PeerConnection* pc,
-+                                             uint8_t* packet,
-+                                             int packet_len) {
-+  if (!pc || !packet || packet_len <= 0) return -1;
-+  int protect_ret = dtls_srtp_encrypt_rctp_packet(&pc->dtls_srtp,
-+                                                  packet,
-+                                                  &packet_len);
-+  if (protect_ret != srtp_err_status_ok) return -1;
-+  return agent_send(&pc->agent, packet, packet_len);
++
++  uint8_t packet[16];
++  memset(packet, 0, sizeof(packet));
++  RtcpHeader* header = (RtcpHeader*)packet;
++  header->version = 2;
++  header->rc = 1;  // RTPFB FMT=1, Generic NACK.
++  header->type = RTCP_RTPFB;
++  header->length = htons(3);
++
++  uint32_t sender_ssrc = htonl(SSRC_H264);
++  uint32_t media_ssrc = htonl(pc->remote_vssrc);
++  uint16_t network_pid = htons(pid);
++  uint16_t network_blp = htons(blp);
++  memcpy(packet + 4, &sender_ssrc, sizeof(sender_ssrc));
++  memcpy(packet + 8, &media_ssrc, sizeof(media_ssrc));
++  memcpy(packet + 12, &network_pid, sizeof(network_pid));
++  memcpy(packet + 14, &network_blp, sizeof(network_blp));
++  return peer_connection_send_rtcp_packet(pc, packet, sizeof(packet));
 +}
 +
 +static int peer_connection_send_remb(PeerConnection* pc, uint32_t bitrate_bps) {
@@ -2143,7 +2199,8 @@ index fe0f63e..ccf3431 100644
 +static int peer_connection_send_receiver_report(PeerConnection* pc,
 +                                                 uint8_t fraction_lost,
 +                                                 uint32_t cumulative_lost,
-+                                                 uint32_t highest_seq_ext) {
++                                                 uint32_t highest_seq_ext,
++                                                 uint32_t jitter) {
 +  uint8_t packet[128];
 +  memset(packet, 0, sizeof(packet));
 +  static const char kCname[] = "lunarnx";
@@ -2162,8 +2219,8 @@ index fe0f63e..ccf3431 100644
 +  memcpy(packet + 12, &loss, sizeof(loss));
 +  uint32_t highest = htonl(highest_seq_ext);
 +  memcpy(packet + 16, &highest, sizeof(highest));
-+  uint32_t jitter = 0;
-+  memcpy(packet + 20, &jitter, sizeof(jitter));
++  uint32_t network_jitter = htonl(jitter);
++  memcpy(packet + 20, &network_jitter, sizeof(network_jitter));
 +  uint32_t lsr = htonl(pc->rtcp_last_sr_lsr);
 +  memcpy(packet + 24, &lsr, sizeof(lsr));
 +  uint32_t dlsr = 0;
@@ -2216,15 +2273,28 @@ index fe0f63e..ccf3431 100644
 +  uint32_t cumulative = stats.missing_packets > 0x00ffffff
 +      ? 0x00ffffff : stats.missing_packets;
 +  int rr_ret = peer_connection_send_receiver_report(pc, fraction, cumulative,
-+                                                     stats.highest_seq_ext);
++                                                     stats.highest_seq_ext, 0);
 +  int remb_ret = peer_connection_send_remb(pc, bitrate_bps);
 +  return rr_ret < 0 ? rr_ret : remb_ret;
 +}
 +
++int peer_connection_send_receiver_feedback_stats(PeerConnection* pc,
++                                                  uint8_t fraction_lost,
++                                                  uint32_t cumulative_lost,
++                                                  uint32_t highest_seq_ext,
++                                                  uint32_t jitter,
++                                                  uint32_t bitrate_bps) {
++  if (!pc || pc->state != PEER_CONNECTION_COMPLETED || bitrate_bps == 0) {
++    return -1;
++  }
++  int rr_ret = peer_connection_send_receiver_report(
++      pc, fraction_lost, cumulative_lost, highest_seq_ext, jitter);
++  int remb_ret = peer_connection_send_remb(pc, bitrate_bps);
++  return rr_ret < 0 ? rr_ret : remb_ret;
+ }
+ 
  // callbacks
- void peer_connection_on_connected(PeerConnection* pc, void (*on_connected)(void* userdata)) {
-   pc->on_connected = on_connected;
-@@ -891,11 +1240,13 @@ int peer_connection_add_ice_candidate(PeerConnection* pc, char* candidate) {
+@@ -891,11 +1292,13 @@ int peer_connection_add_ice_candidate(PeerConnection* pc, char* candidate) {
        if (exists) {
          continue;
        }
@@ -2244,10 +2314,10 @@ index fe0f63e..ccf3431 100644
      }
    }
 diff --git a/src/peer_connection.h b/src/peer_connection.h
-index 9d3e900..46cc5b3 100644
+index 9d3e900..963dd74 100644
 --- a/src/peer_connection.h
 +++ b/src/peer_connection.h
-@@ -70,14 +70,22 @@ typedef struct IceServer {
+@@ -70,14 +70,25 @@ typedef struct IceServer {
  } IceServer;
  
  typedef struct PeerConfiguration {
@@ -2257,9 +2327,13 @@ index 9d3e900..46cc5b3 100644
    MediaCodec audio_codec;
    MediaCodec video_codec;
    DataChannelType datachannel;
- 
+-
 -  void (*onaudiotrack)(uint8_t* data, size_t size, void* userdata);
 -  void (*onvideotrack)(uint8_t* data, size_t size, void* userdata);
++  // Deliver decrypted H.264 RTP packets to onvideotrack without depacketizing.
++  // The application owns jitter buffering, reordering, NACK, and IDR gating.
++  int raw_video_rtp;
++
 +  void (*onaudiotrack)(uint8_t* data,
 +                       size_t size,
 +                       uint16_t sequence,
@@ -2273,7 +2347,7 @@ index 9d3e900..46cc5b3 100644
    void (*on_request_keyframe)(void* userdata);
    void* user_data;
  
-@@ -85,6 +93,26 @@ typedef struct PeerConfiguration {
+@@ -85,6 +96,26 @@ typedef struct PeerConfiguration {
  
  typedef struct PeerConnection PeerConnection;
  
@@ -2300,7 +2374,7 @@ index 9d3e900..46cc5b3 100644
  const char* peer_connection_state_to_string(PeerConnectionState state);
  
  PeerConnectionState peer_connection_get_state(PeerConnection* pc);
-@@ -119,10 +147,19 @@ int peer_connection_is_datachannel_connected(PeerConnection* pc);
+@@ -119,10 +150,30 @@ int peer_connection_is_datachannel_connected(PeerConnection* pc);
  
  void peer_connection_set_media_enabled(PeerConnection* pc, int enabled);
  
@@ -2312,10 +2386,21 @@ index 9d3e900..46cc5b3 100644
  
 +int peer_connection_send_rtcp_pil(PeerConnection* pc, uint32_t ssrc);
 +
++// Send RFC 4585 Generic NACK for PID and the following BLP packet mask.
++int peer_connection_send_nack(PeerConnection* pc, uint16_t pid, uint16_t blp);
++
 +// Send receiver-side bandwidth/loss feedback after media starts. The bitrate
 +// is the receiver capability in bits per second, not a local encoder target.
 +int peer_connection_send_receiver_feedback(PeerConnection* pc,
 +                                            uint32_t bitrate_bps);
++
++// Same feedback path using loss statistics from an application jitter buffer.
++int peer_connection_send_receiver_feedback_stats(PeerConnection* pc,
++                                                  uint8_t fraction_lost,
++                                                  uint32_t cumulative_lost,
++                                                  uint32_t highest_seq_ext,
++                                                  uint32_t jitter,
++                                                  uint32_t bitrate_bps);
 +
  void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp, SdpType sdp_type);
  
@@ -2474,7 +2559,7 @@ index f888d05..9aeba87 100644
  int rtcp_get_fir(uint8_t* packet, int len, int* seqnr);
  
 diff --git a/src/rtp.c b/src/rtp.c
-index ea46c69..eaab1a4 100644
+index ea46c69..7d0549e 100644
 --- a/src/rtp.c
 +++ b/src/rtp.c
 @@ -96,12 +96,73 @@ static uint32_t rtp_timestamp(uint8_t* packet, size_t size) {
@@ -2629,13 +2714,27 @@ index ea46c69..eaab1a4 100644
    }
    h264_reset_frame(rtp_decoder);
    return sent;
-@@ -349,15 +422,19 @@ static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
-   if (rtp_payload(buf, size, &payload, &payload_size) < 0 || payload_size == 0) {
+@@ -346,18 +419,32 @@ static int h264_flush_frame(RtpDecoder* rtp_decoder) {
+ static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
+   uint8_t* payload = NULL;
+   size_t payload_size = 0;
+-  if (rtp_payload(buf, size, &payload, &payload_size) < 0 || payload_size == 0) {
++  if (rtp_payload(buf, size, &payload, &payload_size) < 0) {
      return -1;
    }
 +  rtp_decoder->stats.packets++;
    uint16_t seq = rtp_sequence(buf, size);
    uint32_t timestamp = rtp_timestamp(buf, size);
++  if (rtp_decoder->passthrough) {
++    if (rtp_decoder->on_packet != NULL) {
++      rtp_decoder->on_packet(buf, size, seq, timestamp,
++                             rtp_decoder->user_data);
++    }
++    return (int)size;
++  }
++  if (payload_size == 0) {
++    return (int)size;
++  }
    int marker = rtp_marker(buf, size);
    uint8_t nalu_type = *payload & 0x1f;
 +  int sequence_gap = rtp_note_sequence(rtp_decoder, seq);
@@ -2651,7 +2750,7 @@ index ea46c69..eaab1a4 100644
    if (timestamp_changed) {
      if (rtp_decoder->h264_fu_started) {
        rtp_decoder->h264_frame_corrupt = 1;
-@@ -368,13 +445,6 @@ static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
+@@ -368,13 +455,6 @@ static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
      h264_begin_frame(rtp_decoder, timestamp);
    }
  
@@ -2665,7 +2764,7 @@ index ea46c69..eaab1a4 100644
    if (nalu_type > 0 && nalu_type < 24) {
      // NALU type 1-23 are single NALUs
      if (!rtp_decoder->h264_frame_corrupt) {
-@@ -439,11 +509,12 @@ static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
+@@ -439,11 +519,12 @@ static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
        rtp_decoder->h264_fu_started = 0;
      }
    } else {
@@ -2680,7 +2779,7 @@ index ea46c69..eaab1a4 100644
    if (marker) {
      if (rtp_decoder->h264_fu_started) {
        rtp_decoder->h264_frame_corrupt = 1;
-@@ -459,8 +530,16 @@ static int rtp_decode_generic(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size
+@@ -459,8 +540,16 @@ static int rtp_decode_generic(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size
    if (rtp_payload(buf, size, &payload, &payload_size) < 0) {
      return -1;
    }
@@ -2698,7 +2797,18 @@ index ea46c69..eaab1a4 100644
    // even if there is no callback set, assume everything is ok for caller and do not return an error
    return (int)size;
  }
-@@ -485,3 +564,14 @@ int rtp_decoder_decode(RtpDecoder* rtp_decoder, const uint8_t* buf, size_t size)
+@@ -480,8 +569,25 @@ void rtp_decoder_init(RtpDecoder* rtp_decoder, MediaCodec codec, RtpOnPacket on_
+   }
+ }
+ 
++void rtp_decoder_set_passthrough(RtpDecoder* rtp_decoder, int enabled) {
++  if (rtp_decoder) {
++    rtp_decoder->passthrough = enabled ? 1 : 0;
++  }
++}
++
+ int rtp_decoder_decode(RtpDecoder* rtp_decoder, const uint8_t* buf, size_t size) {
+   if (rtp_decoder->decode_func == NULL)
      return -1;
    return rtp_decoder->decode_func(rtp_decoder, (uint8_t*)buf, size);
  }
@@ -2714,10 +2824,10 @@ index ea46c69..eaab1a4 100644
 +  *stats = rtp_decoder->stats;
 +}
 diff --git a/src/rtp.h b/src/rtp.h
-index 9cd3e55..c7896bb 100644
+index 9cd3e55..f1ac40e 100644
 --- a/src/rtp.h
 +++ b/src/rtp.h
-@@ -73,7 +73,25 @@ typedef struct RtpMap {
+@@ -73,23 +73,45 @@ typedef struct RtpMap {
  
  typedef struct RtpEncoder RtpEncoder;
  typedef struct RtpDecoder RtpDecoder;
@@ -2744,7 +2854,12 @@ index 9cd3e55..c7896bb 100644
  
  struct RtpDecoder {
    RtpPayloadType type;
-@@ -85,11 +103,14 @@ struct RtpDecoder {
+   RtpOnPacket on_packet;
+   int (*decode_func)(RtpDecoder* rtp_decoder, uint8_t* data, size_t size);
+   void* user_data;
++  int passthrough;
+   uint8_t h264_buf[CONFIG_MAX_NALU_SIZE];
+   size_t h264_offset;
    uint8_t h264_frame_buf[CONFIG_MAX_NALU_SIZE];
    size_t h264_frame_offset;
    uint32_t h264_frame_timestamp;
@@ -2759,8 +2874,12 @@ index 9cd3e55..c7896bb 100644
  };
  
  struct RtpEncoder {
-@@ -114,6 +135,8 @@ void rtp_decoder_init(RtpDecoder* rtp_decoder, MediaCodec codec, RtpOnPacket on_
+@@ -112,8 +134,12 @@ int rtp_encoder_encode(RtpEncoder* rtp_encoder, const uint8_t* data, size_t size
  
+ void rtp_decoder_init(RtpDecoder* rtp_decoder, MediaCodec codec, RtpOnPacket on_packet, void* user_data);
+ 
++void rtp_decoder_set_passthrough(RtpDecoder* rtp_decoder, int enabled);
++
  int rtp_decoder_decode(RtpDecoder* rtp_decoder, const uint8_t* data, size_t size);
  
 +void rtp_decoder_get_stats(RtpDecoder* rtp_decoder, RtpDecoderStats* stats);

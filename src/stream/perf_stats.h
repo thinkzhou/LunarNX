@@ -21,6 +21,9 @@ struct PerfStats {
     std::atomic<uint32_t> audio_packets{0};
     // Encoded H.264 access-unit bytes, used for interval video bitrate.
     std::atomic<uint64_t> encoded_video_bytes{0};
+    // Raw RTP video payload bytes, including packets later discarded by the
+    // jitter buffer. This is the useful network bitrate signal during loss.
+    std::atomic<uint64_t> received_video_bytes{0};
     // Local pipeline drops; the HUD also includes decode and corrupt-frame drops.
     std::atomic<uint32_t> video_frame_drops{0};
     // Smoothed frame transit variation, derived from arrival and mapped RTP time.
@@ -76,6 +79,7 @@ struct PerfStats {
         audio_buffer_ms = 0; audio_overflow_ms = 0; input_packets = 0;
         video_packets = 0; audio_packets = 0;
         encoded_video_bytes = 0;
+        received_video_bytes = 0;
         video_frame_drops = 0; video_jitter_us = 0; network_rtt_ms = 0;
         video_decode_errors = 0;
         decode_total_us = 0; decode_samples = 0;
@@ -178,6 +182,7 @@ struct PerfStats {
             : current_us - (current_us - sample_us) / 16;
         video_jitter_us = updated_us;
     }
+    void recordVideoNetworkBytes(size_t bytes) { received_video_bytes += bytes; }
     void recordAudioPacket() { audio_packets++; }
     void recordVideoFrameDrop() { video_frame_drops++; }
     void recordVideoDecodeError() { video_decode_errors++; }

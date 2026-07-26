@@ -96,7 +96,7 @@ def main() -> None:
         "perf_overlay.cpp",
     ):
         source = (ROOT / "src/ui" / source_name).read_text()
-        require("brls::getStr(\"lunarnx/" in source,
+        require(re.search(r'brls::getStr\(\s*"lunarnx/', source),
                 f"{source_name} must use the LunarNX translation catalog")
 
     referenced_keys = set()

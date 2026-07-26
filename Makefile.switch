@@ -140,7 +140,8 @@ CXX_SRCS = src/main.cpp src/app/ice_candidate_processor.cpp src/app/stream_contr
     src/auth/token_store.cpp src/auth/xbox_signing.cpp src/auth/auth_manager.cpp src/auth/xbox_auth_errors.cpp \
     src/api/http_client.cpp src/api/xbox_api_client.cpp \
     src/platform/network_worker.cpp \
-    src/webrtc/peer_manager.cpp src/webrtc/xbox_input_feedback.cpp \
+    src/webrtc/peer_manager.cpp src/webrtc/video_rtp_jitter_buffer.cpp \
+    src/webrtc/xbox_input_feedback.cpp \
     src/stream/stream_backend_provider.cpp src/stream/media_pipeline.cpp \
     src/stream/audio_packet_reorder.cpp \
     src/stream/video_decoder.cpp src/stream/audio_decoder.cpp src/stream/video_renderer.cpp \

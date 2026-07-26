@@ -22,6 +22,17 @@ def main() -> None:
 
     require("setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);" in stream_overlay,
             "The detached top status bar must have an explicit full-screen width")
+    require("setJustifyContent(brls::JustifyContent::CENTER)" in stream_overlay and
+            "setHorizontalAlign(brls::HorizontalAlign::CENTER)" in stream_overlay,
+            "performance metrics must be symmetrically centered at the top")
+    require('"lunarnx/stream/live"' not in stream_overlay and
+            '"lunarnx/stream/details_stop"' not in stream_overlay,
+            "the compact performance HUD must not show live status or control hints")
+    require("makeUiCard" not in stream_overlay and
+            "setBackgroundColor" not in stream_overlay,
+            "the compact performance HUD must render text without a background")
+    require("setFontSize(12.0f)" in stream_overlay,
+            "the background-free performance text must remain readable")
 
     print("stream overlay layout test passed")
 

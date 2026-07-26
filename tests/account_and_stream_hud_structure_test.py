@@ -21,8 +21,9 @@ def main() -> None:
     require(main_source.count("gamer_tag_->setText(") == 3,
             "content loading and result counts must not overwrite account identity")
 
-    require(overlay_source.count("makeUiCard") == 1,
-            "the always-visible stream HUD must be one continuous card")
+    require("makeUiCard" not in overlay_source and
+            "setBackgroundColor" not in overlay_source,
+            "the stream performance HUD must render text without a background card")
     require("health_label_" not in overlay_header and
             "Axis::COLUMN" not in overlay_source,
             "the always-visible stream HUD must remain a compact single row")

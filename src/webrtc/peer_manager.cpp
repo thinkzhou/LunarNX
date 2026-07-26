@@ -4,6 +4,7 @@
 #include "../diagnostics.h"
 #include <cJSON.h>
 #include <peer.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <cctype>
@@ -162,18 +163,82 @@ void PeerManager::onVideoTrack(uint8_t* data,
                                void* userdata) {
     auto* self = static_cast<PeerManager*>(userdata);
     const uint64_t arrival_ns = elapsedNs(self->media_clock_start_);
-    const uint64_t mapped_timestamp = self->video_clock_.map(timestamp, arrival_ns);
     int log_index = self->video_callback_logs_.fetch_add(1);
     if (log_index < 8) {
         lunar::diagnosticLog("webrtc", "video callback begin len=%zu has_cb=%s",
                              size,
                              self->callbacks_.on_video_frame ? "true" : "false");
     }
-    if (self->callbacks_.on_video_frame) {
-        self->callbacks_.on_video_frame(data, size, sequence, mapped_timestamp);
+    if (self->callbacks_.on_video_packet) {
+        try {
+            self->callbacks_.on_video_packet(size);
+        } catch (...) {
+        }
+    }
+    try {
+        self->video_jitter_.receive(
+            data,
+            size,
+            arrival_ns / 1000000u,
+            [self, arrival_ns](const uint8_t* access_unit,
+                               size_t access_unit_size,
+                               uint16_t frame_sequence,
+                               uint32_t frame_timestamp) {
+                const uint64_t mapped_timestamp =
+                    self->video_clock_.map(frame_timestamp, arrival_ns);
+                if (self->callbacks_.on_video_frame) {
+                    self->callbacks_.on_video_frame(access_unit,
+                                                    access_unit_size,
+                                                    frame_sequence,
+                                                    mapped_timestamp);
+                }
+            },
+            [self](uint16_t pid, uint16_t blp) {
+                if (!self->pc_) return;
+                const int ret = peer_connection_send_nack(self->pc_, pid, blp);
+                if (self->nack_logs_.fetch_add(1) < 32) {
+                    lunar::diagnosticLog(
+                        "webrtc",
+                        "send RTCP NACK pid=%u blp=0x%04x result=%d",
+                        pid,
+                        blp,
+                        ret);
+                }
+            },
+            [self](bool reset_decoder) {
+                self->handleVideoJitterRecovery(reset_decoder);
+            });
+    } catch (...) {
+        // std::function construction happens before VideoRtpJitterBuffer can
+        // catch allocation failures. Never let a C++ exception cross libpeer's
+        // C callback boundary.
+        self->handleVideoJitterRecovery(true);
     }
     if (log_index < 8) {
         lunar::diagnosticLog("webrtc", "video callback done");
+    }
+}
+
+void PeerManager::handleVideoJitterRecovery(bool reset_decoder) noexcept {
+    if (reset_decoder && callbacks_.on_video_recovery) {
+        try {
+            callbacks_.on_video_recovery(true);
+        } catch (...) {
+            lunar::diagnosticLog("webrtc", "video recovery callback failed");
+        }
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (last_jitter_keyframe_request_.time_since_epoch().count() != 0 &&
+        now - last_jitter_keyframe_request_ < std::chrono::seconds(1)) {
+        return;
+    }
+    last_jitter_keyframe_request_ = now;
+    if (pc_) {
+        const int ret = peer_connection_send_rtcp_pil(pc_, 0);
+        lunar::diagnosticLog("webrtc",
+                             "jitter recovery RTCP PLI reset=%s result=%d",
+                             reset_decoder ? "true" : "false",
+                             ret);
     }
 }
 
@@ -212,7 +277,8 @@ void PeerManager::onDataChannelMessage(char* msg, size_t len, void* userdata, ui
             XboxVibrationCommand command;
             if (parseXboxVibrationPacket(data, len, command)) {
                 if (self->callbacks_.on_rumble) {
-                    self->callbacks_.on_rumble(command.left_motor,
+                    self->callbacks_.on_rumble(command.gamepad_index,
+                                               command.left_motor,
                                                command.right_motor,
                                                command.left_trigger,
                                                command.right_trigger,
@@ -259,14 +325,18 @@ bool PeerManager::initialize() {
     audio_callback_logs_ = 0;
     process_event_logs_ = 0;
     rumble_parse_logs_ = 0;
+    nack_logs_ = 0;
     media_clock_start_ = std::chrono::steady_clock::now();
     video_clock_.reset();
     audio_clock_.reset();
+    video_jitter_.reset();
+    last_jitter_keyframe_request_ = {};
 
     PeerConfiguration config = {};
     config.video_codec = CODEC_H264;
     config.audio_codec = CODEC_OPUS;
     config.datachannel = DATA_CHANNEL_STRING;
+    config.raw_video_rtp = 1;
 
     // Keep candidate gathering aligned with XStreaming's WebRTC configuration.
     config.ice_servers[0].urls = "stun:worldaz.relay.teams.microsoft.com:3478";
@@ -306,6 +376,7 @@ void PeerManager::setCallbacks(const PeerCallbacks& callbacks) {
     audio_callback_logs_ = 0;
     process_event_logs_ = 0;
     rumble_parse_logs_ = 0;
+    nack_logs_ = 0;
     callbacks_ = callbacks;
 }
 
@@ -405,13 +476,21 @@ bool PeerManager::sendMessageData(const uint8_t* data, size_t len) {
 bool PeerManager::requestVideoKeyframe() {
     if (!pc_ || !connected_) return false;
     const int ret = peer_connection_send_rtcp_pil(pc_, 0);
+    last_jitter_keyframe_request_ = std::chrono::steady_clock::now();
     lunar::diagnosticLog("webrtc", "send RTCP PLI result=%d", ret);
     return ret >= 0;
 }
 
 bool PeerManager::sendReceiverFeedback(uint32_t bitrate_bps) {
     if (!pc_ || !connected_) return false;
-    const int ret = peer_connection_send_receiver_feedback(pc_, bitrate_bps);
+    const auto report = video_jitter_.receiverReport();
+    const int ret = peer_connection_send_receiver_feedback_stats(
+        pc_,
+        report.fraction_lost,
+        report.cumulative_lost,
+        report.highest_sequence,
+        0,
+        bitrate_bps);
     lunar::diagnosticLog("webrtc", "send RTCP RR+REMB bitrate_bps=%u result=%d",
                          bitrate_bps, ret);
     return ret >= 0;
@@ -437,6 +516,16 @@ PeerConnectionMediaStats PeerManager::getMediaStats() const {
     if (pc_) {
         peer_connection_get_media_stats(pc_, &stats);
     }
+    const auto video = video_jitter_.stats();
+    stats.video_rtp_packets = video.packets;
+    stats.video_rtp_sequence_gaps = video.sequence_gaps;
+    stats.video_rtp_missing_packets = video.missing_packets;
+    stats.video_h264_frames = video.frames;
+    stats.video_h264_corrupt_frames = video.corrupt_frames;
+    stats.video_h264_unsupported_nalus = video.unsupported_nalus;
+    stats.video_h264_overflow_frames = video.overflow_frames;
+    stats.video_h264_max_frame_bytes = video.max_frame_bytes;
+    stats.video_rtp_highest_seq_ext = video.highest_sequence;
     return stats;
 }
 
@@ -473,6 +562,15 @@ void PeerManager::processEvents() {
             lunar::diagnosticLog("webrtc", "datachannel connected, creating channels");
             createDataChannels();
         }
+        PeerConnectionMediaStats network_stats = {};
+        peer_connection_get_media_stats(pc_, &network_stats);
+        if (network_stats.ice_rtt_ms > 0) {
+            const uint64_t hold_ms = std::max<uint64_t>(
+                120,
+                std::min<uint64_t>(300,
+                                   static_cast<uint64_t>(network_stats.ice_rtt_ms) * 2 + 40));
+            video_jitter_.setHoldMs(hold_ms);
+        }
         if (log_index < 16) {
             lunar::diagnosticLog("webrtc", "processEvents done index=%d", log_index);
         }
@@ -494,6 +592,9 @@ void PeerManager::disconnect() {
     }
     connected_ = false;
     data_channels_created_ = false;
+    video_jitter_.reset();
+    last_jitter_keyframe_request_ = {};
+    nack_logs_ = 0;
     if (initialized_) {
         lunar::diagnosticLog("webrtc", "disconnect peer_deinit begin");
         peer_deinit();

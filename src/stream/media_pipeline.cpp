@@ -199,6 +199,11 @@ void MediaPipeline::shutdownUnlocked() {
     running_ = false;
     video_recovery_request_ = false;
     video_decoder_reset_pending_ = false;
+    if (video_renderer_) {
+        lunar::diagnosticLog("media", "shutdown video renderer begin");
+        video_renderer_->shutdown();
+        lunar::diagnosticLog("media", "shutdown video renderer done");
+    }
     if (video_decoder_) {
         lunar::diagnosticLog("media", "shutdown video decoder begin");
         video_decoder_->shutdown();
@@ -208,11 +213,6 @@ void MediaPipeline::shutdownUnlocked() {
         lunar::diagnosticLog("media", "shutdown audio decoder begin");
         audio_decoder_->shutdown();
         lunar::diagnosticLog("media", "shutdown audio decoder done");
-    }
-    if (video_renderer_) {
-        lunar::diagnosticLog("media", "shutdown video renderer begin");
-        video_renderer_->shutdown();
-        lunar::diagnosticLog("media", "shutdown video renderer done");
     }
     if (audio_player_) {
         lunar::diagnosticLog("media", "shutdown audio player begin");
@@ -251,6 +251,14 @@ void MediaPipeline::markVideoRecovery(const char* reason) {
     const bool was_pending = video_recovery_request_.exchange(true);
     if (!was_pending) {
         lunar::diagnosticLog("media", "video recovery requested reason=%s",
+                             reason ? reason : "unknown");
+    }
+}
+
+void MediaPipeline::requestVideoRecovery(const char* reason) {
+    const bool was_pending = video_recovery_request_.exchange(true);
+    if (!was_pending) {
+        lunar::diagnosticLog("media", "video keyframe requested reason=%s",
                              reason ? reason : "unknown");
     }
 }
@@ -443,7 +451,7 @@ void MediaPipeline::videoWorkerLoop() {
             queued_video_bytes_ -= packet.data.size();
         }
         if (video_decoder_reset_pending_.exchange(false) && video_decoder_) {
-            if (!video_decoder_->resetForKeyframe()) {
+            if (!resetVideoDecoderForKeyframe()) {
                 lunar::diagnosticLog("media", "video decoder reset for keyframe failed");
             }
         }
@@ -453,6 +461,12 @@ void MediaPipeline::videoWorkerLoop() {
         processVideoPacket(packet);
     }
     lunar::diagnosticLog("media", "video worker loop end");
+}
+
+bool MediaPipeline::resetVideoDecoderForKeyframe() {
+    if (!video_decoder_) return false;
+    if (video_renderer_) video_renderer_->drainDecoderFrames();
+    return video_decoder_->resetForKeyframe();
 }
 
 void MediaPipeline::audioWorkerLoop() {
@@ -508,7 +522,7 @@ void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet) {
             markVideoRecovery("video decoder error");
             // Keep the reset on the video worker so FFmpeg/NVDEC is never
             // touched concurrently by the WebRTC pump or UI thread.
-            video_decoder_->resetForKeyframe();
+            resetVideoDecoderForKeyframe();
             video_decoder_reset_pending_ = false;
         }
     }

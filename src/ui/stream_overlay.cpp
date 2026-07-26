@@ -7,50 +7,27 @@ namespace lunar::ui {
 StreamOverlay::StreamOverlay(const stream::PerfStats* perf)
     : Box(brls::Axis::ROW), perf_(perf) {
     const auto& p = uiPalette();
-    this->setPadding(7, 10, 7, 10);
+    this->setPadding(8, 24, 4, 24);
     this->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
-    this->setHeight(70);
-
-    auto* hud = makeUiCard(brls::Axis::ROW);
-    hud->setWidth(1260);
-    hud->setHeight(56);
-    hud->setPadding(5, 12, 5, 12);
-    hud->setCornerRadius(10);
-    hud->setBackgroundColor(p.stream_overlay);
-    hud->setAlignItems(brls::AlignItems::CENTER);
-
-    auto* live = new brls::Label();
-    live->setWidth(70);
-    live->setText(brls::getStr("lunarnx/stream/live"));
-    live->setFontSize(11);
-    live->setTextColor(p.success);
-    live->setVerticalAlign(brls::VerticalAlign::CENTER);
-    hud->addView(live);
+    this->setHeight(40);
+    this->setJustifyContent(brls::JustifyContent::CENTER);
+    this->setAlignItems(brls::AlignItems::CENTER);
 
     metrics_label_ = new brls::Label();
-    metrics_label_->setFontSize(10.5f);
-    metrics_label_->setTextColor(nvgRGB(244, 248, 243));
+    metrics_label_->setFontSize(12.0f);
+    metrics_label_->setTextColor(p.text);
     metrics_label_->setSingleLine(true);
+    metrics_label_->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     metrics_label_->setVerticalAlign(brls::VerticalAlign::CENTER);
     metrics_label_->setGrow(1.0f);
-    hud->addView(metrics_label_);
-
-    auto* hints = new brls::Label();
-    hints->setWidth(148);
-    hints->setText(brls::getStr("lunarnx/stream/details_stop"));
-    hints->setFontSize(10.5f);
-    hints->setTextColor(nvgRGB(159, 178, 164));
-    hints->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
-    hints->setVerticalAlign(brls::VerticalAlign::CENTER);
-    hud->addView(hints);
-    this->addView(hud);
+    this->addView(metrics_label_);
 }
 
 void StreamOverlay::update(float fps, const std::string& resolution) {
     if (!metrics_label_ || !perf_) return;
 
     const auto now = std::chrono::steady_clock::now();
-    const uint64_t encoded_bytes = perf_->encoded_video_bytes.load();
+    const uint64_t encoded_bytes = perf_->received_video_bytes.load();
     const uint64_t decode_total_us = perf_->decode_total_us.load();
     const uint32_t decode_samples = perf_->decode_samples.load();
     if (last_sample_time_.time_since_epoch().count() == 0) {

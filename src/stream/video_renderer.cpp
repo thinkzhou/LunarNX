@@ -32,14 +32,20 @@ namespace lunar::stream {
 namespace {
   static constexpr unsigned UpdateCmdSliceSize = 0x1000;
   static constexpr unsigned PresentCmdSliceSize = 0x8000;
-  static constexpr unsigned DirectCmdSize = 0x10000;
+  static constexpr size_t MaxRetiredTargets =
+      brls::FRAMEBUFFERS_COUNT * 6;
   static constexpr int RenderLogLimit = 64;
-
+  static constexpr uint64_t HardwareProbeFrameLimit = 24;
   using RenderClock = std::chrono::steady_clock;
   std::atomic<int> render_logs{0};
 
   bool shouldLogRender() {
     return render_logs.fetch_add(1) < RenderLogLimit;
+  }
+
+  bool shouldLogHardwareProbe(uint64_t frame_id) {
+    return frame_id > 0 &&
+           (frame_id <= HardwareProbeFrameLimit || frame_id % 120 == 0);
   }
 
   struct Vertex { float position[3]; float uv[2]; };
@@ -343,16 +349,24 @@ namespace {
   struct FrameMapping {
     uint32_t h=0;
     void* a=nullptr;
-    uint32_t sz=0,co=0;
+    uint32_t sz=0,lo=0,co=0;
     int w=0,hgt=0;
+    uint32_t lw=0,lh=0,cw=0,chh=0;
+    bool linear=false;
+    dk::ImageLayout ll{},cll{};
     dk::UniqueMemBlock mb{};
     dk::Image lu{},ch{};
     dk::ImageDescriptor ld{},cd{};
 
     bool matches(uint32_t handle, void* addr, uint32_t size,
-                 uint32_t chroma_offset, int width, int height) const {
-      return h == handle && a == addr && sz == size && co == chroma_offset &&
-             w == width && hgt == height;
+                 uint32_t luma_offset, uint32_t chroma_offset,
+                 int width, int height, bool is_linear,
+                 uint32_t luma_width, uint32_t luma_height,
+                 uint32_t chroma_width, uint32_t chroma_height) const {
+      return h == handle && a == addr && sz == size && lo == luma_offset &&
+             co == chroma_offset && w == width && hgt == height &&
+             linear == is_linear && lw == luma_width && lh == luma_height &&
+             cw == chroma_width && chh == chroma_height;
     }
   };
 
@@ -369,6 +383,11 @@ namespace {
     bool allocated() const {
       return static_cast<bool>(handle);
     }
+  };
+
+  struct RetiredTarget {
+    CMemPool::Handle handle;
+    uint32_t pending_slice_mask = 0;
   };
 
   bool canUpscaleFrame(int frame_width, int frame_height,
@@ -425,26 +444,23 @@ struct Deko3DRenderContext {
   std::optional<CMemPool> pc,pd,pi;
   dk::UniqueCmdBuf update_cb{};
   dk::UniqueCmdBuf present_cb{};
-  dk::UniqueCmdBuf direct_cb{};
   DkCmdList cl=0;
-  DkCmdList direct_cl=0;
   CShader vs,fs,blit_fs,upscaling_fs,rcas_fs;
   CMemPool::Handle tu;
   CMemPool::Handle easu_uniform;
   CMemPool::Handle rcas_uniform;
   CMemPool::Handle dithering_uniform;
   CMemPool::Handle vertex_buf;
-  CMemPool::Handle direct_cmd_mem;
   std::vector<FrameMapping> fms;
   int fi=-1;
   int li=-1,ci=-1;
-  dk::ImageLayout ll,cll;
   std::optional<CCmdMemRing<brls::FRAMEBUFFERS_COUNT>> update_ring;
   std::optional<CCmdMemRing<brls::FRAMEBUFFERS_COUNT>> present_ring;
   RenderTarget source_target;
   RenderTarget upscale_target;
   RenderTarget rcas_target;
   int frame_w=1280, frame_h=720;
+  uint32_t mapped_luma_w=0, mapped_luma_h=0;
   int target_w=1280, target_h=720;
   AVColorSpace color_space=AVCOL_SPC_SMPTE170M;
   bool color_full=false;
@@ -457,19 +473,43 @@ struct Deko3DRenderContext {
   std::mutex render_mutex;
   AVFrame* pending_frame=nullptr;
   AVFrame* current_frame=nullptr;
-  std::array<AVFrame*, brls::FRAMEBUFFERS_COUNT + 1> retired_frames{};
-  size_t next_retired_frame=0;
+  std::array<AVFrame*, brls::FRAMEBUFFERS_COUNT> submitted_frames{};
+  size_t next_submitted_frame=0;
+  std::vector<RetiredTarget> retired_targets;
+  size_t active_present_slice=0;
+  bool present_slice_active=false;
+  uint64_t present_frame_id=0;
 };
 
 namespace {
 
+void hardwareProbeLog(uint64_t frame_id, const char* stage,
+                      const char* format = nullptr, ...) {
+  if (!shouldLogHardwareProbe(frame_id)) return;
+
+  char details[384] = {};
+  if (format) {
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(details, sizeof(details), format, args);
+    va_end(args);
+  }
+  lunar::diagnosticLog(
+      "render-hwdiag",
+      "frame=%llu stage=%s%s%s",
+      static_cast<unsigned long long>(frame_id),
+      stage ? stage : "?",
+      format ? " " : "",
+      format ? details : "");
+}
+
 void releaseRetainedFrames(Deko3DRenderContext& s) {
   if(s.pending_frame)av_frame_free(&s.pending_frame);
   if(s.current_frame)av_frame_free(&s.current_frame);
-  for(auto*& frame:s.retired_frames){
+  for(auto*& frame:s.submitted_frames){
     if(frame)av_frame_free(&frame);
   }
-  s.next_retired_frame=0;
+  s.next_submitted_frame=0;
 }
 
 void resetRenderTarget(RenderTarget& target) {
@@ -482,6 +522,73 @@ void resetRenderTarget(RenderTarget& target) {
   target.descriptor_current = false;
 }
 
+constexpr uint32_t allPresentSlicesMask() {
+  static_assert(brls::FRAMEBUFFERS_COUNT > 0 &&
+                brls::FRAMEBUFFERS_COUNT <= 32,
+                "present slice count must fit the retirement mask");
+  if constexpr (brls::FRAMEBUFFERS_COUNT == 32) {
+    return UINT32_MAX;
+  } else {
+    return (uint32_t{1} << brls::FRAMEBUFFERS_COUNT) - 1u;
+  }
+}
+
+void retireCompletedTargets(Deko3DRenderContext& s, size_t slice) {
+  if (slice >= brls::FRAMEBUFFERS_COUNT) return;
+  const uint32_t completed_bit = uint32_t{1} << slice;
+  for (size_t i = 0; i < s.retired_targets.size();) {
+    auto& retired = s.retired_targets[i];
+    retired.pending_slice_mask &= ~completed_bit;
+    if (retired.pending_slice_mask == 0) {
+      retired.handle.destroy();
+      s.retired_targets.erase(s.retired_targets.begin() + i);
+      continue;
+    }
+    ++i;
+  }
+}
+
+bool retireRenderTarget(Deko3DRenderContext& s, RenderTarget& target) {
+  if (!target.handle) return true;
+  if (s.retired_targets.size() >= MaxRetiredTargets) {
+    lunar::diagnosticLog("render",
+                         "post-process target retirement limit reached; keeping target alive");
+    return false;
+  }
+
+  uint32_t pending_mask = allPresentSlicesMask();
+  if (s.present_slice_active) {
+    // present_ring->begin() already waited for this slice before recording the
+    // current command list. The old target is not referenced by the new list,
+    // so this slice is already safe to retire.
+    pending_mask &= ~(uint32_t{1} << s.active_present_slice);
+  }
+
+  try {
+    s.retired_targets.push_back({target.handle, pending_mask});
+  } catch (...) {
+    lunar::diagnosticLog("render",
+                         "post-process target retirement allocation failed; keeping target alive");
+    return false;
+  }
+
+  target.handle = CMemPool::Handle{};
+  return true;
+}
+
+bool deferResetRenderTarget(Deko3DRenderContext& s, RenderTarget& target) {
+  if (!retireRenderTarget(s, target)) return false;
+  // The image metadata is invalid once its backing handle has been queued for
+  // retirement, even though the handle itself remains alive in the queue.
+  target.layout = dk::ImageLayout{};
+  target.image = dk::Image{};
+  target.descriptor = dk::ImageDescriptor{};
+  target.width = 0;
+  target.height = 0;
+  target.descriptor_current = false;
+  return true;
+}
+
 bool allocateRenderTarget(Deko3DRenderContext& s, RenderTarget& target,
                           int width, int height) {
   if (!s.pi || target.texture_slot < 0 || width <= 0 || height <= 0) return false;
@@ -489,7 +596,8 @@ bool allocateRenderTarget(Deko3DRenderContext& s, RenderTarget& target,
     return true;
   }
 
-  resetRenderTarget(target);
+  RenderTarget replacement;
+  replacement.texture_slot = target.texture_slot;
   dk::ImageLayoutMaker{s.dev}
       .setType(DkImageType_2D)
       .setFormat(DkImageFormat_RGBA8_Unorm)
@@ -497,23 +605,35 @@ bool allocateRenderTarget(Deko3DRenderContext& s, RenderTarget& target,
       .setFlags(DkImageFlags_UsageRender |
                 DkImageFlags_UsageLoadStore |
                 DkImageFlags_Usage2DEngine)
-      .initialize(target.layout);
+      .initialize(replacement.layout);
 
-  target.handle = s.pi->allocate(target.layout.getSize(),
-                                 target.layout.getAlignment());
-  if (!target.handle) return false;
+  replacement.handle = s.pi->allocate(replacement.layout.getSize(),
+                                      replacement.layout.getAlignment());
+  if (!replacement.handle) return false;
 
-  target.image.initialize(target.layout, target.handle.getMemBlock(),
-                          target.handle.getOffset());
-  target.descriptor.initialize(target.image);
-  target.width = width;
-  target.height = height;
-  target.descriptor_current = false;
+  replacement.image.initialize(replacement.layout,
+                               replacement.handle.getMemBlock(),
+                               replacement.handle.getOffset());
+  replacement.descriptor.initialize(replacement.image);
+  replacement.width = width;
+  replacement.height = height;
+  replacement.descriptor_current = false;
+
+  if (!deferResetRenderTarget(s, target)) {
+    resetRenderTarget(replacement);
+    return false;
+  }
+  target = replacement;
+  replacement.handle = CMemPool::Handle{};
   return true;
 }
 
 bool updateRenderTargetDescriptor(Deko3DRenderContext& s, RenderTarget& target) {
   if (!target.allocated() || target.texture_slot < 0) return false;
+  hardwareProbeLog(s.present_frame_id, "target-descriptor-begin",
+                   "slot=%d size=%dx%d queue_error=%d",
+                   target.texture_slot, target.width, target.height,
+                   s.q && s.q.isInErrorState() ? 1 : 0);
   s.update_ring->begin(s.update_cb);
   bool updated = s.vctx->updateImageDescriptor(s.update_cb,
                                                target.texture_slot,
@@ -521,6 +641,10 @@ bool updateRenderTargetDescriptor(Deko3DRenderContext& s, RenderTarget& target) 
   if (updated) s.vctx->invalidateImageDescriptors(s.update_cb);
   s.q.submitCommands(s.update_ring->end(s.update_cb));
   target.descriptor_current = updated;
+  hardwareProbeLog(s.present_frame_id, "target-descriptor-submit",
+                   "slot=%d updated=%d queue_error=%d",
+                   target.texture_slot, updated ? 1 : 0,
+                   s.q && s.q.isInErrorState() ? 1 : 0);
   return updated;
 }
 
@@ -535,7 +659,7 @@ bool ensurePostProcessTarget(Deko3DRenderContext& s, RenderTarget& target,
   if (!target.descriptor_current &&
       !updateRenderTargetDescriptor(s, target)) {
     fprintf(stderr, "[render] %s render target descriptor update fail\n", name);
-    resetRenderTarget(target);
+    deferResetRenderTarget(s, target);
     return false;
   }
   return true;
@@ -560,7 +684,7 @@ bool ensurePostProcessTargets(Deko3DRenderContext& s, bool need_upscale) {
       return false;
     }
   } else {
-    resetRenderTarget(s.source_target);
+    deferResetRenderTarget(s, s.source_target);
   }
 
   if (!ensurePostProcessTarget(s, s.upscale_target, s.target_w, s.target_h, "post-process")) {
@@ -574,21 +698,33 @@ bool ensurePostProcessTargets(Deko3DRenderContext& s, bool need_upscale) {
 bool ensureRcasTarget(Deko3DRenderContext& s) {
   if (!s.rcas_fs || !s.rcas_uniform) {
     fprintf(stderr, "[render] RCAS resources unavailable, falling back to base post pass\n");
-    resetRenderTarget(s.rcas_target);
+    deferResetRenderTarget(s, s.rcas_target);
     return false;
   }
   if (!ensurePostProcessTarget(s, s.rcas_target, s.target_w, s.target_h, "rcas")) {
     fprintf(stderr, "[render] RCAS target unavailable, falling back to base post pass\n");
-    resetRenderTarget(s.rcas_target);
+    deferResetRenderTarget(s, s.rcas_target);
     return false;
   }
   return true;
 }
 
 void releasePostProcessTargets(Deko3DRenderContext& s) {
+  deferResetRenderTarget(s, s.source_target);
+  deferResetRenderTarget(s, s.upscale_target);
+  deferResetRenderTarget(s, s.rcas_target);
+}
+
+void destroyRetiredTargets(Deko3DRenderContext& s) {
+  for (auto& retired : s.retired_targets) retired.handle.destroy();
+  s.retired_targets.clear();
+}
+
+void destroyPostProcessTargets(Deko3DRenderContext& s) {
   resetRenderTarget(s.source_target);
   resetRenderTarget(s.upscale_target);
   resetRenderTarget(s.rcas_target);
+  destroyRetiredTargets(s);
 }
 
 void refreshTargetSize(Deko3DRenderContext& s) {
@@ -646,12 +782,28 @@ void recordRenderTargetState(Deko3DRenderContext& s, RenderTarget& target) {
   s.present_cb.bindVtxBufferState(kVertexBufferState);
 }
 
+Tf cropToMappedSurface(const Deko3DRenderContext& s, Tf transform) {
+  if(s.frame_w<=0||s.frame_h<=0||s.mapped_luma_w==0||s.mapped_luma_h==0){
+    return transform;
+  }
+  const float scale_x=static_cast<float>(s.frame_w)/
+      static_cast<float>(s.mapped_luma_w);
+  const float scale_y=static_cast<float>(s.frame_h)/
+      static_cast<float>(s.mapped_luma_h);
+  transform.u[0]*=scale_x;
+  transform.u[1]*=scale_y;
+  transform.u[2]*=scale_x;
+  transform.u[3]*=scale_y;
+  return transform;
+}
+
 void recordNv12ToFramebufferPass(Deko3DRenderContext& s, const Tf& transform) {
   s.present_cb.bindShaders(DkStageFlag_GraphicsMask,{s.vs,s.fs});
   s.present_cb.bindTextures(DkStage_Fragment,0,dkMakeTextureHandle(s.li,0));
   s.present_cb.bindTextures(DkStage_Fragment,1,dkMakeTextureHandle(s.ci,0));
   s.present_cb.bindUniformBuffer(DkStage_Fragment,0,s.tu.getGpuAddr(),s.tu.getSize());
-  s.present_cb.pushConstants(s.tu.getGpuAddr(),sizeof(Tf),0,sizeof(Tf),&transform);
+  const Tf mapped_transform=cropToMappedSurface(s,transform);
+  s.present_cb.pushConstants(s.tu.getGpuAddr(),sizeof(Tf),0,sizeof(Tf),&mapped_transform);
   s.present_cb.draw(DkPrimitive_Quads,kQuadVertices.size(),1,0,0);
 }
 
@@ -660,7 +812,9 @@ void updateDitheringUniform(Deko3DRenderContext& s, bool enabled) {
   DitheringConstants constants{};
   constants.control[0] = enabled ? 1.0f : 0.0f;
   constants.control[1] = std::clamp(s.dithering_strength, 1.0f, 10.0f);
-  memcpy(s.dithering_uniform.getCpuAddr(), &constants, sizeof(constants));
+  s.present_cb.pushConstants(s.dithering_uniform.getGpuAddr(),
+                             s.dithering_uniform.getSize(),
+                             0, sizeof(constants), &constants);
 }
 
 void recordPostProcessBlitPass(Deko3DRenderContext& s,
@@ -685,13 +839,17 @@ void updateEasuUniform(Deko3DRenderContext& s) {
                         s.frame_h,
                         s.target_w,
                         s.target_h);
-  memcpy(s.easu_uniform.getCpuAddr(), &constants, sizeof(constants));
+  s.present_cb.pushConstants(s.easu_uniform.getGpuAddr(),
+                             s.easu_uniform.getSize(),
+                             0, sizeof(constants), &constants);
 }
 
 void updateRcasUniform(Deko3DRenderContext& s) {
   RcasConstants constants = {};
   populateRcasConstants(constants, s.rcas_strength);
-  memcpy(s.rcas_uniform.getCpuAddr(), &constants, sizeof(constants));
+  s.present_cb.pushConstants(s.rcas_uniform.getGpuAddr(),
+                             s.rcas_uniform.getSize(),
+                             0, sizeof(constants), &constants);
 }
 
 void recordUpscalePass(Deko3DRenderContext& s) {
@@ -734,7 +892,7 @@ void recordPresentPipeline(Deko3DRenderContext& s,
         releasePostProcessTargets(s);
       }
     } else {
-      resetRenderTarget(s.rcas_target);
+      deferResetRenderTarget(s, s.rcas_target);
     }
   } else {
     releasePostProcessTargets(s);
@@ -812,43 +970,12 @@ void recordPresentPipeline(Deko3DRenderContext& s,
   s.static_state_dirty = false;
 }
 
-bool recordDirectPresentCommands(Deko3DRenderContext& s) {
-  refreshTargetSize(s);
-  if(s.direct_cl && s.q)s.q.waitIdle();
-  s.direct_cb.clear();
-  s.direct_cb.addMemory(s.direct_cmd_mem.getMemBlock(),
-                        s.direct_cmd_mem.getOffset(),
-                        s.direct_cmd_mem.getSize());
-
-  dk::RasterizerState rasterizer_state;
-  dk::DepthStencilState depth_state;
-  dk::ColorState color_state;
-  dk::ColorWriteState color_write_state;
-  s.direct_cb.setViewports(0,{{{0.0f,0.0f,static_cast<float>(s.target_w),static_cast<float>(s.target_h),0.0f,1.0f}}});
-  s.direct_cb.setScissors(0,{{{0,0,static_cast<uint32_t>(s.target_w),static_cast<uint32_t>(s.target_h)}}});
-  s.direct_cb.bindRasterizerState(rasterizer_state);
-  s.direct_cb.bindDepthStencilState(depth_state.setDepthTestEnable(false).setDepthWriteEnable(false).setStencilTestEnable(false));
-  s.direct_cb.bindColorState(color_state);
-  s.direct_cb.bindColorWriteState(color_write_state);
-  s.direct_cb.bindVtxBuffer(0,s.vertex_buf.getGpuAddr(),s.vertex_buf.getSize());
-  s.direct_cb.bindVtxAttribState(kVertexAttribState);
-  s.direct_cb.bindVtxBufferState(kVertexBufferState);
-  s.direct_cb.clearColor(0,DkColorMask_RGBA,0.0f,0.0f,0.0f,1.0f);
-  s.direct_cb.bindShaders(DkStageFlag_GraphicsMask,{s.vs,s.fs});
-  s.direct_cb.bindTextures(DkStage_Fragment,0,dkMakeTextureHandle(s.li,0));
-  s.direct_cb.bindTextures(DkStage_Fragment,1,dkMakeTextureHandle(s.ci,0));
-  s.direct_cb.bindUniformBuffer(DkStage_Fragment,0,s.tu.getGpuAddr(),s.tu.getSize());
-  const auto transform=displayTransform(s.frame_w,s.frame_h,s.target_w,s.target_h,
-                                        s.color_space,s.color_full);
-  s.direct_cb.pushConstants(s.tu.getGpuAddr(),sizeof(Tf),0,sizeof(Tf),&transform);
-  s.direct_cb.draw(DkPrimitive_Quads,kQuadVertices.size(),1,0,0);
-  s.direct_cl=s.direct_cb.finishList();
-  s.static_state_dirty=false;
-  return s.direct_cl!=0;
-}
-
 bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
   if(!frame||frame->format!=AV_PIX_FMT_NVTEGRA)return false;
+  hardwareProbeLog(s.present_frame_id, "mapping-begin",
+                   "format=%d size=%dx%d queue_error=%d",
+                   frame->format, frame->width, frame->height,
+                   s.q && s.q.isInErrorState() ? 1 : 0);
   AVNVTegraMap* nvmap=av_nvtegra_frame_get_fbuf_map(frame);
   if(!nvmap){
     lunar::diagnosticLog("render","present reject missing nvtegra map width=%d height=%d",frame->width,frame->height);
@@ -858,75 +985,160 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
   const uint32_t handle=av_nvtegra_map_get_handle(nvmap);
   void* const address=av_nvtegra_map_get_addr(nvmap);
   const uint32_t size=av_nvtegra_map_get_size(nvmap);
-  const uint32_t chroma_offset=static_cast<uint32_t>(
-      static_cast<uint8_t*>(frame->data[1])-static_cast<uint8_t*>(frame->data[0]));
-  if(!handle||!address||size==0||chroma_offset>=size){
-    lunar::diagnosticLog("render","present reject invalid nvtegra map handle=%u addr=%p size=%u chroma=%u",handle,address,size,chroma_offset);
+  hardwareProbeLog(s.present_frame_id, "mapping-map-info",
+                   "handle=%u base=%p bytes=%u linear=%d y=%p uv=%p pitch=%d/%d",
+                   handle, address, size, nvmap->is_linear ? 1 : 0,
+                   frame->data[0], frame->data[1], frame->linesize[0],
+                   frame->linesize[1]);
+  if(!handle||!address||size==0||!frame->data[0]||!frame->data[1]||
+     frame->linesize[0]<=0||frame->linesize[1]<=0){
+    lunar::diagnosticLog("render","present reject invalid nvtegra map handle=%u addr=%p size=%u",handle,address,size);
+    return false;
+  }
+
+  const uintptr_t base_addr=reinterpret_cast<uintptr_t>(address);
+  const uintptr_t luma_addr=reinterpret_cast<uintptr_t>(frame->data[0]);
+  const uintptr_t chroma_addr=reinterpret_cast<uintptr_t>(frame->data[1]);
+  if(luma_addr<base_addr||chroma_addr<base_addr){
+    lunar::diagnosticLog("render","present reject nvtegra planes before map handle=%u addr=%p y=%p uv=%p",handle,address,frame->data[0],frame->data[1]);
+    return false;
+  }
+  const uint64_t luma_delta=static_cast<uint64_t>(luma_addr-base_addr);
+  const uint64_t chroma_delta=static_cast<uint64_t>(chroma_addr-base_addr);
+  if(luma_delta>=size||chroma_delta>=size||chroma_delta<=luma_delta||
+     luma_delta>UINT32_MAX||chroma_delta>UINT32_MAX){
+    lunar::diagnosticLog("render","present reject nvtegra plane offsets handle=%u size=%u y=%llu uv=%llu",handle,size,(unsigned long long)luma_delta,(unsigned long long)chroma_delta);
+    return false;
+  }
+  const uint32_t luma_offset=static_cast<uint32_t>(luma_delta);
+  const uint32_t chroma_offset=static_cast<uint32_t>(chroma_delta);
+  const bool is_linear=nvmap->is_linear;
+  const auto align_up=[](uint32_t value,uint32_t alignment){
+    return (value+alignment-1u)&~(alignment-1u);
+  };
+  const uint32_t luma_width=std::max<uint32_t>(
+      static_cast<uint32_t>(frame->linesize[0]),static_cast<uint32_t>(frame->width));
+  const uint32_t luma_height=align_up(static_cast<uint32_t>(frame->height),32u);
+  const uint32_t chroma_width=std::max<uint32_t>(
+      static_cast<uint32_t>((frame->linesize[1]+1)/2),
+      static_cast<uint32_t>((frame->width+1)/2));
+  const uint32_t chroma_height=align_up(static_cast<uint32_t>(frame->height+1)/2u,16u);
+  if(frame->width<=0||frame->height<=0||luma_width==0||luma_height==0||
+     chroma_width==0||chroma_height==0){
+    lunar::diagnosticLog("render","present reject invalid nvtegra geometry width=%d height=%d pitches=%d/%d",frame->width,frame->height,frame->linesize[0],frame->linesize[1]);
     return false;
   }
 
   if(frame->width!=s.frame_w||frame->height!=s.frame_h){
-    s.q.waitIdle();
-    s.fms.clear();
-    s.fi=-1;
     s.static_state_dirty=true;
   }
 
   int mapping_index=-1;
   for(size_t i=0;i<s.fms.size();++i){
-    if(s.fms[i].matches(handle,address,size,chroma_offset,frame->width,frame->height)){
+    if(s.fms[i].matches(handle,address,size,luma_offset,chroma_offset,
+                        frame->width,frame->height,is_linear,
+                        luma_width,luma_height,chroma_width,chroma_height)){
       mapping_index=static_cast<int>(i);
       break;
     }
   }
 
   if(mapping_index<0){
-    dk::ImageLayoutMaker{s.dev}
-        .setType(DkImageType_2D)
-        .setFormat(DkImageFormat_R8_Unorm)
-        .setDimensions(frame->width,frame->height,1)
-        .setFlags(DkImageFlags_UsageLoadStore|DkImageFlags_Usage2DEngine|DkImageFlags_UsageVideo)
-        .initialize(s.ll);
-    dk::ImageLayoutMaker{s.dev}
-        .setType(DkImageType_2D)
-        .setFormat(DkImageFormat_RG8_Unorm)
-        .setDimensions(frame->width/2,frame->height/2,1)
-        .setFlags(DkImageFlags_UsageLoadStore|DkImageFlags_Usage2DEngine|DkImageFlags_UsageVideo)
-        .initialize(s.cll);
-    if(s.ll.getSize()>size||chroma_offset+s.cll.getSize()>size){
-      lunar::diagnosticLog("render","present reject nvtegra layout handle=%u size=%u chroma=%u luma_layout=%llu chroma_layout=%llu",handle,size,chroma_offset,(unsigned long long)s.ll.getSize(),(unsigned long long)s.cll.getSize());
+    if(s.fms.size()>=32){
+      lunar::diagnosticLog("render","present reject nvtegra mapping cache full size=%zu",s.fms.size());
       return false;
     }
 
+    FrameMapping mapping;
+    mapping.h=handle;
+    mapping.a=address;
+    mapping.sz=size;
+    mapping.lo=luma_offset;
+    mapping.co=chroma_offset;
+    mapping.w=frame->width;
+    mapping.hgt=frame->height;
+    mapping.lw=luma_width;
+    mapping.lh=luma_height;
+    mapping.cw=chroma_width;
+    mapping.chh=chroma_height;
+    mapping.linear=is_linear;
+
+    const uint32_t layout_flags=DkImageFlags_UsageLoadStore|
+        DkImageFlags_Usage2DEngine|DkImageFlags_UsageVideo|
+        (is_linear?DkImageFlags_PitchLinear:DkImageFlags_CustomTileSize);
+    dk::ImageLayoutMaker luma_maker{s.dev};
+    luma_maker.setType(DkImageType_2D)
+        .setFormat(DkImageFormat_R8_Unorm)
+        .setDimensions(luma_width,luma_height,1)
+        .setFlags(layout_flags);
+    dk::ImageLayoutMaker chroma_maker{s.dev};
+    chroma_maker.setType(DkImageType_2D)
+        .setFormat(DkImageFormat_RG8_Unorm)
+        .setDimensions(chroma_width,chroma_height,1)
+        .setFlags(layout_flags);
+    if(is_linear){
+      luma_maker.setPitchStride(static_cast<uint32_t>(frame->linesize[0]));
+      chroma_maker.setPitchStride(static_cast<uint32_t>(frame->linesize[1]));
+    }else{
+      luma_maker.setTileSize(DkTileSize_TwoGobs);
+      chroma_maker.setTileSize(DkTileSize_TwoGobs);
+    }
+    luma_maker.initialize(mapping.ll);
+    chroma_maker.initialize(mapping.cll);
+    hardwareProbeLog(s.present_frame_id, "mapping-layout",
+                     "handle=%u y_off=%u uv_off=%u y_layout=%llu uv_layout=%llu "
+                     "y_align=%u uv_align=%u base_align=%u size_align=%u",
+                     handle, luma_offset, chroma_offset,
+                     static_cast<unsigned long long>(mapping.ll.getSize()),
+                     static_cast<unsigned long long>(mapping.cll.getSize()),
+                     mapping.ll.getAlignment(), mapping.cll.getAlignment(),
+                     static_cast<unsigned>(reinterpret_cast<uintptr_t>(address) & 0xfff),
+                     size & 0xfff);
+    const uint64_t luma_end=static_cast<uint64_t>(luma_offset)+mapping.ll.getSize();
+    const uint64_t chroma_end=static_cast<uint64_t>(chroma_offset)+mapping.cll.getSize();
+    if(luma_end>size||chroma_end>size){
+      lunar::diagnosticLog("render","present reject nvtegra layout handle=%u size=%u y=%u uv=%u luma_layout=%llu chroma_layout=%llu",handle,size,luma_offset,chroma_offset,(unsigned long long)mapping.ll.getSize(),(unsigned long long)mapping.cll.getSize());
+      return false;
+    }
+
+    hardwareProbeLog(s.present_frame_id, "mapping-memblock-before",
+                     "handle=%u base=%p size=%u y_off=%u uv_off=%u",
+                     handle, address, size, luma_offset, chroma_offset);
     auto external_mem=dk::MemBlockMaker{s.dev,size}
         .setFlags(DkMemBlockFlags_CpuUncached|DkMemBlockFlags_GpuCached|DkMemBlockFlags_Image)
         .setStorage(address)
         .create();
+    hardwareProbeLog(s.present_frame_id, "mapping-memblock-after",
+                     "handle=%u created=%d queue_error=%d",
+                     handle, external_mem ? 1 : 0,
+                     s.q && s.q.isInErrorState() ? 1 : 0);
     if(!external_mem){
       lunar::diagnosticLog("render","present reject external memblock handle=%u addr=%p size=%u",handle,address,size);
       return false;
     }
 
-    mapping_index=static_cast<int>(s.fms.size());
-    s.fms.emplace_back();
-    auto& mapping=s.fms.back();
-    mapping.h=handle;
-    mapping.a=address;
-    mapping.sz=size;
-    mapping.co=chroma_offset;
-    mapping.w=frame->width;
-    mapping.hgt=frame->height;
     mapping.mb=dk::UniqueMemBlock{std::move(external_mem)};
-    mapping.lu.initialize(s.ll,mapping.mb,0);
-    mapping.ch.initialize(s.cll,mapping.mb,chroma_offset);
+    mapping.lu.initialize(mapping.ll,mapping.mb,luma_offset);
+    mapping.ch.initialize(mapping.cll,mapping.mb,chroma_offset);
     mapping.ld.initialize(mapping.lu);
     mapping.cd.initialize(mapping.ch);
+    try{
+      mapping_index=static_cast<int>(s.fms.size());
+      s.fms.push_back(std::move(mapping));
+    }catch(...){
+      lunar::diagnosticLog("render","present reject nvtegra mapping allocation failed handle=%u size=%u",handle,size);
+      return false;
+    }
     if(shouldLogRender()){
-      lunar::diagnosticLog("render","nvtegra mapping added index=%d handle=%u addr=%p size=%u chroma=%u pitches=%d/%d layouts=%llu/%llu",mapping_index,handle,address,size,chroma_offset,frame->linesize[0],frame->linesize[1],(unsigned long long)s.ll.getSize(),(unsigned long long)s.cll.getSize());
+      lunar::diagnosticLog("render","nvtegra mapping added index=%d handle=%u addr=%p size=%u linear=%d y=%u uv=%u pitches=%d/%d layouts=%llu/%llu",mapping_index,handle,address,size,is_linear?1:0,luma_offset,chroma_offset,frame->linesize[0],frame->linesize[1],(unsigned long long)s.fms[mapping_index].ll.getSize(),(unsigned long long)s.fms[mapping_index].cll.getSize());
     }
   }
 
   if(mapping_index!=s.fi){
+    hardwareProbeLog(s.present_frame_id, "plane-descriptor-begin",
+                     "mapping=%d previous=%d luma_slot=%d chroma_slot=%d queue_error=%d",
+                     mapping_index, s.fi, s.li, s.ci,
+                     s.q && s.q.isInErrorState() ? 1 : 0);
     s.update_ring->begin(s.update_cb);
     auto& mapping=s.fms[mapping_index];
     const bool luma_ok=s.vctx->updateImageDescriptor(s.update_cb,s.li,mapping.ld);
@@ -940,8 +1152,15 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
       return false;
     }
     s.q.submitCommands(s.update_ring->end(s.update_cb));
+    hardwareProbeLog(s.present_frame_id, "plane-descriptor-submit",
+                     "mapping=%d luma_ok=%d chroma_ok=%d queue_error=%d",
+                     mapping_index, luma_ok ? 1 : 0, chroma_ok ? 1 : 0,
+                     s.q && s.q.isInErrorState() ? 1 : 0);
   }
 
+  const auto& active_mapping=s.fms[mapping_index];
+  s.mapped_luma_w=active_mapping.lw;
+  s.mapped_luma_h=active_mapping.lh;
   s.frame_w=frame->width;
   s.frame_h=frame->height;
   AVColorSpace color_space=s.color_space;
@@ -1025,15 +1244,14 @@ bool VideoRenderer::initialize(const char*,int w,int h){
     s->pi.emplace(s->dev,DkMemBlockFlags_GpuCached|DkMemBlockFlags_Image);
     s->update_cb=dk::CmdBufMaker{s->dev}.create();
     s->present_cb=dk::CmdBufMaker{s->dev}.create();
-    s->direct_cb=dk::CmdBufMaker{s->dev}.create();
+    s->present_frame_id=0;
     s->update_ring.emplace();
     s->present_ring.emplace();
+    s->retired_targets.reserve(MaxRetiredTargets);
     if(!s->update_ring->allocate(*s->pd,UpdateCmdSliceSize)||
        !s->present_ring->allocate(*s->pd,PresentCmdSliceSize)){
       fprintf(stderr,"[render] cmd ring alloc fail\n");return false;
     }
-    s->direct_cmd_mem=s->pd->allocate(DirectCmdSize,DK_CMDMEM_ALIGNMENT);
-    if(!s->direct_cmd_mem){fprintf(stderr,"[render] direct cmd alloc fail\n");return false;}
     s->fs.load(*s->pc,"romfs:/shaders/texture_fsh.dksh");
     s->vs.load(*s->pc,"romfs:/shaders/basic_vsh.dksh");
     s->blit_fs.load(*s->pc,"romfs:/shaders/upscaling_pass_fsh.dksh");
@@ -1219,41 +1437,104 @@ void VideoRenderer::present(){
   if(!s->pending_frame&&!s->current_frame){
     return;
   }
+  const uint64_t frame_id=++s->present_frame_id;
+  hardwareProbeLog(frame_id, "present-entry",
+                   "pending=%d current=%d queue_error=%d",
+                   s->pending_frame ? 1 : 0, s->current_frame ? 1 : 0,
+                   s->q && s->q.isInErrorState() ? 1 : 0);
   if(s->pending_frame){
-    auto& retired=s->retired_frames[
-        s->next_retired_frame++%s->retired_frames.size()];
-    if(retired)av_frame_free(&retired);
-    retired=s->current_frame;
+    if(s->current_frame)av_frame_free(&s->current_frame);
     s->current_frame=s->pending_frame;
     s->pending_frame=nullptr;
   }
-  if(!updateFrameMapping(*s,s->current_frame))return;
+  if(!updateFrameMapping(*s,s->current_frame)){
+    hardwareProbeLog(frame_id, "mapping-rejected",
+                     "queue_error=%d", s->q && s->q.isInErrorState() ? 1 : 0);
+    return;
+  }
+  hardwareProbeLog(frame_id, "mapping-ready",
+                   "frame=%dx%d mapped=%ux%u queue_error=%d",
+                   s->frame_w, s->frame_h, s->mapped_luma_w,
+                   s->mapped_luma_h, s->q && s->q.isInErrorState() ? 1 : 0);
 
   dk::Image* fb = s->vctx->getFramebuffer();
   dk::Image* db = s->vctx->getDepthBuffer();
+  hardwareProbeLog(frame_id, "framebuffer-acquire",
+                   "fb=%p db=%p queue_error=%d", fb, db,
+                   s->q && s->q.isInErrorState() ? 1 : 0);
   if(!fb||!db){
     if(shouldLogRender())lunar::diagnosticLog("render","present reject framebuffer=%s depth=%s",fb?"true":"false",db?"true":"false");
     return;
   }
 
-  const auto render_start = RenderClock::now();
-  const bool direct_path=s->post_process_mode_requested==PostProcessMode::Off&&
-                         !s->dithering_enabled;
-  if(direct_path){
-    if((s->static_state_dirty||!s->direct_cl)&&!recordDirectPresentCommands(*s)){
-      if(shouldLogRender())lunar::diagnosticLog("render","present reject direct command recording failed");
-      return;
-    }
-    s->q.submitCommands(s->direct_cl);
-  }else{
-    s->present_ring->begin(s->present_cb);
-    recordPresentPipeline(*s,fb,db,perf_);
-    s->cl=s->present_ring->end(s->present_cb);
-    s->q.submitCommands(s->cl);
-    s->cl=0;
+  if(!s->present_ring)return;
+  hardwareProbeLog(frame_id, "command-ring-begin-before",
+                   "slice=%zu queue_error=%d", s->next_submitted_frame,
+                   s->q && s->q.isInErrorState() ? 1 : 0);
+  s->present_ring->begin(s->present_cb);
+  hardwareProbeLog(frame_id, "command-ring-begin-after",
+                   "slice=%zu queue_error=%d", s->next_submitted_frame,
+                   s->q && s->q.isInErrorState() ? 1 : 0);
+  const size_t submitted_index=s->next_submitted_frame;
+  retireCompletedTargets(*s, submitted_index);
+  s->active_present_slice=submitted_index;
+  s->present_slice_active=true;
+  auto*& completed_frame=s->submitted_frames[submitted_index];
+  // CCmdMemRing::begin() waits for this command slice's fence.  The matching
+  // retained AVFrame can therefore be released without blocking the
+  // Borealis beginFrame/endFrame swapchain lifecycle.
+  if(completed_frame)av_frame_free(&completed_frame);
+
+  AVFrame* submitted_frame=av_frame_alloc();
+  if(!submitted_frame||av_frame_ref(submitted_frame,s->current_frame)<0){
+    if(submitted_frame)av_frame_free(&submitted_frame);
+    s->present_slice_active=false;
+    if(shouldLogRender())lunar::diagnosticLog("render","present reject in-flight frame ref failed");
+    return;
   }
+
+  const auto render_start = RenderClock::now();
+  hardwareProbeLog(frame_id, "record-pipeline-begin",
+                   "fb=%p db=%p static_dirty=%d queue_error=%d",
+                   fb, db, s->static_state_dirty ? 1 : 0,
+                   s->q && s->q.isInErrorState() ? 1 : 0);
+  recordPresentPipeline(*s,fb,db,perf_);
+  hardwareProbeLog(frame_id, "record-pipeline-end",
+                   "pipeline_passes=%zu target=%dx%d queue_error=%d",
+                   s->pipeline.pass_count, s->target_w, s->target_h,
+                   s->q && s->q.isInErrorState() ? 1 : 0);
+  s->cl=s->present_ring->end(s->present_cb);
+  hardwareProbeLog(frame_id, "finish-list-end",
+                   "cmdlist=%p queue_error=%d", reinterpret_cast<void*>(s->cl),
+                   s->q && s->q.isInErrorState() ? 1 : 0);
+  s->q.submitCommands(s->cl);
+  hardwareProbeLog(frame_id, "queue-submit-after",
+                   "slice=%zu queue_error=%d", submitted_index,
+                   s->q && s->q.isInErrorState() ? 1 : 0);
+  s->cl=0;
+  completed_frame=submitted_frame;
+  s->next_submitted_frame=(submitted_index+1)%s->submitted_frames.size();
+  s->present_slice_active=false;
   if(perf_)perf_->recordRenderSubmit(toMicroseconds(RenderClock::now()-render_start));
   if(shouldLogRender())lunar::diagnosticLog("render","present submit width=%d height=%d",s->frame_w,s->frame_h);
+}
+
+void VideoRenderer::drainDecoderFrames(){
+  if(video_backend_==VideoBackend::Software){
+    SoftwareVideoFrameSink::instance().clear();
+    return;
+  }
+  auto* s=static_cast<Deko3DRenderContext*>(ctx_);
+  if(!s)return;
+  std::lock_guard<std::mutex> lock(s->render_mutex);
+  if(s->q)s->q.waitIdle();
+  s->present_slice_active=false;
+  releaseRetainedFrames(*s);
+  s->fms.clear();
+  s->fi=-1;
+  s->mapped_luma_w=0;
+  s->mapped_luma_h=0;
+  lunar::diagnosticLog("render", "decoder frames drained");
 }
 
 bool VideoRenderer::pollEvents(){return true;}
@@ -1270,14 +1551,13 @@ void VideoRenderer::shutdown(){
   }
   SoftwareVideoFrameSink::instance().clear();
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);if(!s)return;
+  std::lock_guard<std::mutex> render_lock(s->render_mutex);
   if(!s->ok && !s->vctx && !s->pc && !s->pd && !s->pi)return;
   if(s->q)s->q.waitIdle();
+  s->present_slice_active=false;
   releaseRetainedFrames(*s);
   s->fms.clear();
-  releasePostProcessTargets(*s);
-  s->direct_cb.clear();
-  s->direct_cl=0;
-  s->direct_cmd_mem.destroy();
+  destroyPostProcessTargets(*s);
   s->vertex_buf.destroy();
   s->easu_uniform.destroy();
   s->rcas_uniform.destroy();
@@ -1290,7 +1570,6 @@ void VideoRenderer::shutdown(){
   if(s->vctx&&s->rcas_target.texture_slot>=0){s->vctx->freeImageIndex(s->rcas_target.texture_slot);s->rcas_target.texture_slot=-1;}
   s->update_cb={};
   s->present_cb={};
-  s->direct_cb={};
   s->update_ring.reset();
   s->present_ring.reset();
   s->pd.reset();
@@ -1299,6 +1578,9 @@ void VideoRenderer::shutdown(){
   s->vctx=nullptr;
   s->dev=nullptr;
   s->q=nullptr;
+  s->mapped_luma_w=0;
+  s->mapped_luma_h=0;
+  s->present_frame_id=0;
   configurePresentPipeline(s->pipeline, PostProcessMode::Off);
   s->static_state_dirty=true;
   s->ok=false;
@@ -1333,6 +1615,7 @@ bool VideoRenderer::render(const VideoFrame& f){
   SDL_RenderClear(r);SDL_RenderCopy(r,t,nullptr,nullptr);SDL_RenderPresent(r);return true;
 }
 void VideoRenderer::present(){}
+void VideoRenderer::drainDecoderFrames(){}
 bool VideoRenderer::pollEvents(){SDL_Event e;while(SDL_PollEvent(&e))if(e.type==SDL_QUIT||(e.type==SDL_KEYDOWN&&e.key.keysym.sym==SDLK_ESCAPE))return false;return true;}
 void VideoRenderer::shutdown(){
   std::lock_guard<std::mutex> lock(sdl_mutex_);

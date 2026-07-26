@@ -14,6 +14,7 @@ int main() {
     };
     XboxVibrationCommand command;
     assert(parseXboxVibrationPacket(vibration, sizeof(vibration), command));
+    assert(command.gamepad_index == 0);
     assert(command.left_motor == 0.25f);
     assert(command.right_motor == 0.50f);
     assert(command.left_trigger == 0.75f);
@@ -36,6 +37,23 @@ int main() {
     assert(command.left_trigger == 0.30f);
     assert(command.right_trigger == 0.40f);
     assert(command.duration_ms == 20);
+
+    const uint8_t second_gamepad[] = {
+        0x80, 0x00,
+        0x00, 0x03, 10, 20, 30, 40,
+        0x14, 0x00, 0x00, 0x00, 0x00,
+    };
+    assert(parseXboxVibrationPacket(second_gamepad,
+                                    sizeof(second_gamepad), command));
+    assert(command.gamepad_index == 3);
+
+    const uint8_t unsupported_rumble_type[] = {
+        0x80, 0x00,
+        0x01, 0x00, 10, 20, 30, 40,
+        0x14, 0x00, 0x00, 0x00, 0x00,
+    };
+    assert(!parseXboxVibrationPacket(unsupported_rumble_type,
+                                     sizeof(unsupported_rumble_type), command));
 
     const uint8_t unsupported_mixed[] = {0x82, 0x00, 0x00, 0x00};
     assert(!parseXboxVibrationPacket(unsupported_mixed,

@@ -17,6 +17,8 @@ struct StreamSettingsSnapshot {
     stream::VideoBackend video_backend = stream::VideoBackend::HardwareZeroCopy;
     stream::PostProcessMode post_process_mode = stream::PostProcessMode::Off;
     bool dithering_enabled = false;
+    bool vibration_enabled = true;
+    int rumble_strength_percent = 50;
 };
 
 class StreamSettingsActivity : public brls::Activity {

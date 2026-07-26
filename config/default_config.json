@@ -5,6 +5,7 @@
     "codec": "h264",
     "vibration": true,
     "rumble_intensity": 3,
+    "rumble_strength_percent": 50,
     "dead_zone": 0.1,
     "ipv6": false,
     "signaling_home_name": "",

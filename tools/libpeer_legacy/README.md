@@ -107,12 +107,42 @@ pipeline is ready, but packets are not discarded. This preserves the Xbox's
 startup SPS/PPS/IDR access unit; dropping RTP during that interval can leave
 the decoder receiving only P-frames indefinitely.
 
+For video, legacy libpeer now exposes decrypted raw RTP packets instead of
+depacketizing H.264 immediately. LunarNX applies a bounded, timestamp-ordered
+jitter buffer that waits 120-300 ms based on the measured ICE RTT, reorders
+late packets, and sends RFC 4585 Generic NACK feedback for short sequence gaps.
+Incomplete or malformed access units are never passed to FFmpeg: after the
+bounded wait expires, LunarNX resets decoder reference state, requests a PLI,
+and drops P-frames until a real IDR arrives. Receiver Reports use the same
+wrap-aware sequence accounting, so a late retransmission repairs the reported
+loss instead of permanently inflating it.
+
+The video jitter path has hard heap limits of 32 frames, 2048 packets, 3 MiB of
+buffered RTP payload, and 2 MiB per assembled H.264 access unit. Capacity or
+allocation failures clear only this bounded buffer and enter keyframe recovery;
+they do not allow an exception to escape the WebRTC callback. These buffers are
+dynamic and do not increase the Switch NRO BSS image.
+
 Receiver-side keyframe recovery matches the behavior supplied automatically by
 XStreaming's libwebrtc. LunarNX sends the Xbox control-channel
 `videoKeyframeRequested` message and an RFC 4585 RTCP PLI. Legacy libpeer's PLI
 function was previously an unsent TODO; the patch now writes the RTCP header in
 network byte order, protects it with the negotiated outbound SRTCP context, and
 sends it through the selected ICE pair.
+
+All outbound RTCP packets are copied into a 32-bit-aligned
+`CONFIG_PACKET_BUFFER_SIZE` scratch buffer before SRTCP protection. The
+encryption boundary also receives the buffer's actual capacity and rejects any
+packet that cannot reserve `SRTP_MAX_TRAILER_LEN + 4` trailing bytes. This is
+required because libsrtp protects RTCP in place; passing the exact 16-byte NACK
+or 24-byte REMB stack array directly would overwrite the caller's stack when
+libsrtp appends its authentication trailer.
+
+Run `python3 tests/libpeer_pli_send_test.py` to verify that both the active
+checkout and this tracked patch preserve the capacity contract. Run
+`make -f Makefile.desktop srtcp_capacity_tests` for the executable canary test:
+an exact-size 16-byte packet must be rejected without modifying adjacent stack
+bytes.
 
 The receiver also advertises its selected 720p/1080p/HQ capability through the
 message-channel `clientdevicecapabilities` and `dimensionschanged` messages.

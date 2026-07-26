@@ -39,6 +39,8 @@ std::string streamStateText(app::StreamState state, const std::string& info) {
 
 MainActivity::MainActivity(std::shared_ptr<app::StreamController> ctrl) : ctrl_(std::move(ctrl)) {
     video_backend_ = ctrl_->getDefaultVideoBackend();
+    vibration_enabled_ = ctrl_->getRumbleEnabled();
+    rumble_strength_percent_ = ctrl_->getRumbleStrengthPercent();
     if (ctrl_->getForceRegionIp().empty()) {
         ctrl_->setForceRegionIp("4.2.2.2");
     }
@@ -313,6 +315,8 @@ void MainActivity::openStreamSettings() {
     snapshot.video_backend = video_backend_;
     snapshot.post_process_mode = post_process_mode_;
     snapshot.dithering_enabled = dithering_enabled_;
+    snapshot.vibration_enabled = vibration_enabled_;
+    snapshot.rumble_strength_percent = rumble_strength_percent_;
 
     auto alive = alive_;
     brls::Application::pushActivity(
@@ -326,6 +330,8 @@ void MainActivity::openStreamSettings() {
                 video_backend_ = updated.video_backend;
                 post_process_mode_ = updated.post_process_mode;
                 dithering_enabled_ = updated.dithering_enabled;
+                vibration_enabled_ = updated.vibration_enabled;
+                rumble_strength_percent_ = updated.rumble_strength_percent;
                 if (status_) {
                     status_->setText(brls::getStr(
                         "lunarnx/main/settings_ready",
@@ -481,6 +487,8 @@ void MainActivity::startConsoleStream(const std::string& server_id,
                              connecting_->load() ? "true" : "false");
         return;
     }
+
+    PosterLoader::instance().beginBatch();
 
     lunar::diagnosticLog("ui-main", "Connect begin server=%s name=%s",
                          server_id.c_str(), console_name.c_str());
@@ -1093,6 +1101,8 @@ void MainActivity::startCloudTitleStream(const std::string& title_id,
         connecting_->store(false);
         return;
     }
+
+    PosterLoader::instance().beginBatch();
 
     status_->setText(brls::getStr("lunarnx/main/starting_xcloud", title_name));
 

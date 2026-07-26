@@ -5,6 +5,7 @@
 #include "../diagnostics.h"
 #include "stream_profile.h"
 #include <cJSON.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cstdio>
 #include <fstream>
@@ -74,6 +75,8 @@ void StreamController::ensureStreamingComponents() {
     }
     if (!rumble_) {
         rumble_ = std::make_unique<input::RumbleController>();
+        rumble_->setEnabled(rumble_enabled_.load());
+        rumble_->setStrengthPercent(rumble_strength_percent_.load());
     }
 }
 
@@ -110,6 +113,20 @@ void StreamController::setDefaultVideoBackend(stream::VideoBackend backend) {
 
 stream::VideoBackend StreamController::getDefaultVideoBackend() const {
     return default_video_backend_.load();
+}
+
+void StreamController::setRumbleEnabled(bool enabled) {
+    rumble_enabled_.store(enabled);
+    if (rumble_) rumble_->setEnabled(enabled);
+    lunar::diagnosticLog("stream-controller", "rumble enabled=%s",
+                         enabled ? "true" : "false");
+}
+
+void StreamController::setRumbleStrengthPercent(int percent) {
+    percent = std::clamp(percent, 0, 100);
+    rumble_strength_percent_.store(percent);
+    if (rumble_) rumble_->setStrengthPercent(percent);
+    lunar::diagnosticLog("stream-controller", "rumble strength=%d%%", percent);
 }
 
 void StreamController::setForceRegionIp(const std::string& ip) {
@@ -183,6 +200,7 @@ void StreamController::signOut() {
         session_id_.clear();
         streaming_ = false;
         input_suppressed_ = false;
+        guide_button_requested_ = false;
     }
     std::remove(lunar::get_token_path());
     setState(StreamState::Idle, "Signed out");
@@ -646,6 +664,14 @@ std::string StreamController::getLastStreamError() const {
     return last_stream_error_;
 }
 
+void StreamController::requestGuideButton() {
+    guide_button_requested_.store(true);
+}
+
+bool StreamController::consumeGuideButtonRequest() {
+    return guide_button_requested_.exchange(false);
+}
+
 bool StreamController::isStreamCancelled(uint32_t generation) const {
     return cancel_requested_.load() || stream_generation_.load() != generation;
 }
@@ -660,6 +686,7 @@ void StreamController::cleanupStreamResources(bool set_disconnected) {
         std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
         streaming_ = false;
         input_suppressed_ = false;
+        guide_button_requested_ = false;
         session_id_.clear();
     }
 
@@ -799,6 +826,7 @@ bool StreamController::startStreamWithProfile(
     const uint32_t generation = stream_generation_.fetch_add(1) + 1;
     cancel_requested_ = false;
     input_suppressed_ = false;
+    guide_button_requested_ = false;
 
     cleanupStreamResources(false);
     stream_session_.reset();
@@ -914,6 +942,9 @@ bool StreamController::startStreamWithProfile(
     };
     callbacks.input_suppressed = [this]() {
         return input_suppressed_.load();
+    };
+    callbacks.consume_guide_button = [this]() {
+        return consumeGuideButtonRequest();
     };
     callbacks.on_status = [this, generation](const std::string& info) {
         if (!isStreamCancelled(generation) && !streaming_.load()) {

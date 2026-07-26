@@ -6,6 +6,7 @@
 namespace lunar::webrtc {
 
 struct XboxVibrationCommand {
+    uint8_t gamepad_index = 0;
     float left_motor = 0.0f;
     float right_motor = 0.0f;
     float left_trigger = 0.0f;

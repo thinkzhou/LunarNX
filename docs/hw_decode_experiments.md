@@ -179,10 +179,15 @@ memset((uint8_t *)av_nvtegra_map_get_addr(input_map) + ctx->status_off,
   `StreamController::presentVideoFrame()`。
 - NvMap external-storage 映射、image descriptor 更新和 deko3d submit
   全部在 Borealis 绘制线程执行。
-- 无后处理时复用静态 direct command list，不使用逐帧 `DkFence`。
-- 当前帧和 framebuffer ring 对应的近期退役帧持续持有，避免 NVDEC surface
+- 每次 Borealis 绘制都使用 `CCmdMemRing<brls::FRAMEBUFFERS_COUNT>`，并绑定
+  当前 framebuffer；不在 `draw()` 内调用 `queue.waitIdle()`。
+- 当前帧和 command-ring slice 对应的近期提交帧持续持有，避免 NVDEC surface
   在 GPU 使用结束前被复用。
-- shutdown、分辨率变化和静态 command list 重录时保留 `queue.waitIdle()`。
+- NvMap 的 luma/chroma offset 都相对 map base 计算，block-linear surface 使用
+  NVDEC 的 32 行 luma / 16 行 chroma 对齐尺寸，并在 shader 中裁回可见区域。
+- 后处理 render target 的 backing handle 采用按 command-ring fence 延迟回收；
+  分辨率/模式变化不会销毁仍被 GPU 使用的 image。只有 shutdown 在
+  `queue.waitIdle()` 后释放全部资源。
 
 ### 1080p60 结果（2026-07-10）
 

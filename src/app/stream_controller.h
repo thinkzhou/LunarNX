@@ -80,11 +80,19 @@ public:
     int getStreamHeight() const { return stream_height_; }
     void setStateCallback(StateCallback cb);
     void setInputSuppressed(bool suppressed) { input_suppressed_ = suppressed; }
+    void requestGuideButton();
+    bool consumeGuideButtonRequest();
     void setBaseUrl(const std::string& url) { base_url_ = url; }
     void setForceRegionIp(const std::string& ip);
     std::string getForceRegionIp() const;
     void setDefaultVideoBackend(stream::VideoBackend backend);
     stream::VideoBackend getDefaultVideoBackend() const;
+    void setRumbleEnabled(bool enabled);
+    bool getRumbleEnabled() const { return rumble_enabled_.load(); }
+    void setRumbleStrengthPercent(int percent);
+    int getRumbleStrengthPercent() const {
+        return rumble_strength_percent_.load();
+    }
 
     // Bypass real auth for local/testing. Creates a mock API client with
     // dummy tokens that the mock_xbox server will accept.
@@ -140,9 +148,12 @@ private:
     std::atomic<bool> cancel_requested_{false};
     std::atomic<uint32_t> stream_generation_{0};
     std::atomic<bool> input_suppressed_{false};
+    std::atomic<bool> guide_button_requested_{false};
     std::atomic<bool> signing_out_{false};
     std::atomic<bool> mock_mode_{false};
     std::atomic<stream::VideoBackend> default_video_backend_{stream::VideoBackend::HardwareZeroCopy};
+    std::atomic<bool> rumble_enabled_{true};
+    std::atomic<int> rumble_strength_percent_{50};
     stream::PerfStats perf_;
     int stream_width_ = 1280;
     int stream_height_ = 720;

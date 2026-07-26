@@ -1,0 +1,710 @@
+#include "video_rtp_jitter_buffer.h"
+
+#include <algorithm>
+#include <bitset>
+#include <deque>
+#include <limits>
+#include <new>
+#include <utility>
+#include <vector>
+
+namespace lunar::webrtc {
+
+namespace {
+
+constexpr size_t kSequenceWindow = 4096;
+constexpr uint32_t kMaxNackGap = 255;
+constexpr size_t kMaxRtpPayloadBytes = 2048;
+constexpr uint8_t kStartCode[] = {0x00, 0x00, 0x00, 0x01};
+
+bool timestampNewer(uint32_t left, uint32_t right) {
+    const uint32_t delta = left - right;
+    return delta != 0 && delta < 0x80000000u;
+}
+
+struct ParsedRtp {
+    uint16_t sequence = 0;
+    uint32_t timestamp = 0;
+    bool marker = false;
+    const uint8_t* payload = nullptr;
+    size_t payload_size = 0;
+};
+
+bool parseRtp(const uint8_t* packet, size_t size, ParsedRtp& parsed) {
+    if (!packet || size < 12 || (packet[0] >> 6) != 2) return false;
+
+    const size_t csrc_count = packet[0] & 0x0f;
+    size_t offset = 12 + csrc_count * 4;
+    if (offset > size) return false;
+
+    if ((packet[0] & 0x10) != 0) {
+        if (offset + 4 > size) return false;
+        const size_t extension_words =
+            (static_cast<size_t>(packet[offset + 2]) << 8) |
+            packet[offset + 3];
+        if (extension_words > (size - offset - 4) / 4) return false;
+        offset += 4 + extension_words * 4;
+    }
+    if (offset > size) return false;
+
+    size_t payload_size = size - offset;
+    if ((packet[0] & 0x20) != 0) {
+        if (payload_size == 0) return false;
+        const size_t padding = packet[size - 1];
+        if (padding == 0 || padding > payload_size) return false;
+        payload_size -= padding;
+    }
+
+    parsed.sequence = static_cast<uint16_t>(packet[2] << 8 | packet[3]);
+    parsed.timestamp =
+        (static_cast<uint32_t>(packet[4]) << 24) |
+        (static_cast<uint32_t>(packet[5]) << 16) |
+        (static_cast<uint32_t>(packet[6]) << 8) |
+        packet[7];
+    parsed.marker = (packet[1] & 0x80) != 0;
+    parsed.payload = packet + offset;
+    parsed.payload_size = payload_size;
+    return true;
+}
+
+uint8_t naluType(const uint8_t* payload, size_t size) {
+    return size > 0 ? payload[0] & 0x1f : 0;
+}
+
+bool isPartitionHead(const uint8_t* payload, size_t size) {
+    const uint8_t type = naluType(payload, size);
+    if (type == 28) return size >= 2 && (payload[1] & 0x80) != 0;
+    return type >= 1 && type <= 24;
+}
+
+bool appendBytes(std::vector<uint8_t>& output,
+                 const uint8_t* data,
+                 size_t size) {
+    if (size > VideoRtpJitterBuffer::kMaxAccessUnitBytes - output.size()) {
+        return false;
+    }
+    output.insert(output.end(), data, data + size);
+    return true;
+}
+
+enum class DepacketizeResult {
+    Ok,
+    Invalid,
+    Unsupported,
+    Overflow,
+};
+
+struct H264AssemblyState {
+    bool fu_active = false;
+    uint8_t fu_nalu_header = 0;
+};
+
+DepacketizeResult depacketize(const uint8_t* payload,
+                              size_t size,
+                              std::vector<uint8_t>& output,
+                              H264AssemblyState& state) {
+    if (!payload || size == 0) return DepacketizeResult::Ok;
+    const uint8_t type = naluType(payload, size);
+    if (type >= 1 && type <= 23) {
+        if (state.fu_active) return DepacketizeResult::Invalid;
+        return appendBytes(output, kStartCode, sizeof(kStartCode)) &&
+                       appendBytes(output, payload, size)
+                   ? DepacketizeResult::Ok
+                   : DepacketizeResult::Overflow;
+    }
+    if (type == 24) {
+        if (state.fu_active || size < 4) return DepacketizeResult::Invalid;
+        size_t position = 1;
+        while (position + 2 <= size) {
+            const size_t nalu_size =
+                (static_cast<size_t>(payload[position]) << 8) |
+                payload[position + 1];
+            position += 2;
+            if (nalu_size == 0 || nalu_size > size - position) {
+                return DepacketizeResult::Invalid;
+            }
+            const uint8_t aggregated_type = naluType(payload + position,
+                                                      nalu_size);
+            if (aggregated_type == 0 || aggregated_type >= 24) {
+                return DepacketizeResult::Unsupported;
+            }
+            if (!appendBytes(output, kStartCode, sizeof(kStartCode)) ||
+                !appendBytes(output, payload + position, nalu_size)) {
+                return DepacketizeResult::Overflow;
+            }
+            position += nalu_size;
+        }
+        return position == size ? DepacketizeResult::Ok
+                                : DepacketizeResult::Invalid;
+    }
+    if (type == 28) {
+        if (size <= 2) return DepacketizeResult::Invalid;
+        const uint8_t fu_header = payload[1];
+        const bool start = (fu_header & 0x80) != 0;
+        const bool end = (fu_header & 0x40) != 0;
+        const bool reserved = (fu_header & 0x20) != 0;
+        const uint8_t fragmented_type = fu_header & 0x1f;
+        if (reserved || fragmented_type == 0 || fragmented_type >= 24 ||
+            (start && end)) {
+            return DepacketizeResult::Invalid;
+        }
+        const uint8_t reconstructed =
+            static_cast<uint8_t>((payload[0] & 0xe0) | fragmented_type);
+        if (start) {
+            if (state.fu_active) return DepacketizeResult::Invalid;
+            if (!appendBytes(output, kStartCode, sizeof(kStartCode)) ||
+                !appendBytes(output, &reconstructed, 1)) {
+                return DepacketizeResult::Overflow;
+            }
+            state.fu_active = true;
+            state.fu_nalu_header = reconstructed;
+        } else if (!state.fu_active ||
+                   state.fu_nalu_header != reconstructed) {
+            return DepacketizeResult::Invalid;
+        }
+        if (!appendBytes(output, payload + 2, size - 2)) {
+            return DepacketizeResult::Overflow;
+        }
+        if (end) state.fu_active = false;
+        return DepacketizeResult::Ok;
+    }
+    return DepacketizeResult::Unsupported;
+}
+
+bool containsIdr(const std::vector<uint8_t>& access_unit) {
+    for (size_t i = 0; i + 4 < access_unit.size(); ++i) {
+        if (access_unit[i] == 0 && access_unit[i + 1] == 0 &&
+            access_unit[i + 2] == 0 && access_unit[i + 3] == 1 &&
+            (access_unit[i + 4] & 0x1f) == 5) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+struct VideoRtpJitterBuffer::Impl {
+    struct Packet {
+        uint16_t sequence = 0;
+        uint32_t extended_sequence = 0;
+        bool marker = false;
+        std::vector<uint8_t> payload;
+    };
+
+    struct Frame {
+        uint32_t timestamp = 0;
+        uint64_t first_seen_ms = 0;
+        std::vector<Packet> packets;
+    };
+
+    enum class AssembleResult {
+        Complete,
+        Incomplete,
+        Invalid,
+        Overflow,
+    };
+
+    struct SequenceUpdate {
+        uint32_t extended_sequence = 0;
+        bool duplicate = false;
+    };
+
+    std::deque<Frame> frames;
+    std::bitset<kSequenceWindow> received_window;
+    uint64_t hold_ms = kDefaultHoldMs;
+    size_t buffered_bytes = 0;
+    size_t buffered_packets = 0;
+
+    bool waiting_keyframe = true;
+    bool have_sequence = false;
+    uint16_t max_sequence = 0;
+    uint32_t highest_sequence = 0;
+    uint32_t base_sequence = 0;
+    uint32_t unique_received = 0;
+    uint32_t expected_prior = 0;
+    uint32_t received_prior = 0;
+
+    bool have_last_timestamp = false;
+    uint32_t last_timestamp = 0;
+    bool have_last_consumed_sequence = false;
+    uint32_t last_consumed_sequence = 0;
+
+    bool recovery_notified = false;
+    uint64_t last_recovery_notify_ms = 0;
+
+    VideoRtpJitterStats counters;
+
+    void clearFrames() {
+        frames.clear();
+        buffered_bytes = 0;
+        buffered_packets = 0;
+    }
+
+    void reset() {
+        clearFrames();
+        received_window.reset();
+        waiting_keyframe = true;
+        have_sequence = false;
+        max_sequence = 0;
+        highest_sequence = 0;
+        base_sequence = 0;
+        unique_received = 0;
+        expected_prior = 0;
+        received_prior = 0;
+        have_last_timestamp = false;
+        last_timestamp = 0;
+        have_last_consumed_sequence = false;
+        last_consumed_sequence = 0;
+        recovery_notified = false;
+        last_recovery_notify_ms = 0;
+        counters = {};
+    }
+
+    bool wasReceived(uint32_t extended_sequence) const {
+        if (!have_sequence || extended_sequence > highest_sequence) return false;
+        const uint32_t distance = highest_sequence - extended_sequence;
+        return distance < kSequenceWindow && received_window.test(distance);
+    }
+
+    void updateMissingPackets() {
+        if (!have_sequence) {
+            counters.missing_packets = 0;
+            return;
+        }
+        const uint32_t expected = highest_sequence - base_sequence + 1;
+        counters.missing_packets =
+            expected > unique_received ? expected - unique_received : 0;
+        counters.highest_sequence = highest_sequence;
+    }
+
+    void sendNacks(uint32_t first_missing,
+                   uint32_t end,
+                   const NackCallback& nack) {
+        if (!nack || end <= first_missing || end - first_missing > kMaxNackGap) {
+            return;
+        }
+        uint32_t cursor = first_missing;
+        while (cursor < end) {
+            const uint16_t pid = static_cast<uint16_t>(cursor);
+            cursor++;
+            uint16_t blp = 0;
+            for (unsigned bit = 0; bit < 16 && cursor < end; ++bit, ++cursor) {
+                blp |= static_cast<uint16_t>(1u << bit);
+            }
+            try {
+                nack(pid, blp);
+                counters.nacks++;
+            } catch (...) {
+                return;
+            }
+        }
+    }
+
+    SequenceUpdate noteSequence(uint16_t sequence, const NackCallback& nack) {
+        SequenceUpdate update;
+        if (!have_sequence) {
+            have_sequence = true;
+            max_sequence = sequence;
+            highest_sequence = sequence;
+            base_sequence = sequence;
+            unique_received = 1;
+            received_window.set(0);
+            update.extended_sequence = sequence;
+            updateMissingPackets();
+            return update;
+        }
+
+        uint32_t extended = (highest_sequence & 0xffff0000u) | sequence;
+        const uint16_t highest_low = static_cast<uint16_t>(highest_sequence);
+        if (sequence < highest_low &&
+            static_cast<uint16_t>(highest_low - sequence) > 0x8000u) {
+            extended += 0x10000u;
+        } else if (sequence > highest_low &&
+                   static_cast<uint16_t>(sequence - highest_low) > 0x8000u &&
+                   extended >= 0x10000u) {
+            extended -= 0x10000u;
+        }
+        update.extended_sequence = extended;
+
+        if (extended > highest_sequence) {
+            const uint32_t previous_highest = highest_sequence;
+            const uint32_t delta = extended - highest_sequence;
+            if (delta >= kSequenceWindow) {
+                received_window.reset();
+            } else {
+                received_window <<= delta;
+            }
+            received_window.set(0);
+            highest_sequence = extended;
+            max_sequence = sequence;
+            unique_received++;
+            if (delta > 1) {
+                counters.sequence_gaps++;
+                sendNacks(previous_highest + 1, extended, nack);
+            }
+        } else {
+            const uint32_t distance = highest_sequence - extended;
+            if (distance >= kSequenceWindow || received_window.test(distance)) {
+                update.duplicate = true;
+                return update;
+            }
+            received_window.set(distance);
+            unique_received++;
+        }
+        updateMissingPackets();
+        return update;
+    }
+
+    Frame* findFrame(uint32_t timestamp) {
+        for (auto& frame : frames) {
+            if (frame.timestamp == timestamp) return &frame;
+        }
+        return nullptr;
+    }
+
+    Frame* createFrame(uint32_t timestamp, uint64_t now_ms) {
+        if (frames.size() >= kMaxBufferedFrames) return nullptr;
+
+        Frame frame;
+        frame.timestamp = timestamp;
+        frame.first_seen_ms = now_ms;
+        auto position = frames.begin();
+        while (position != frames.end() &&
+               timestampNewer(timestamp, position->timestamp)) {
+            ++position;
+        }
+        return &*frames.insert(position, std::move(frame));
+    }
+
+    void removeFrontFrame() {
+        if (frames.empty()) return;
+        for (const auto& packet : frames.front().packets) {
+            buffered_bytes -= packet.payload.size();
+            buffered_packets--;
+        }
+        frames.pop_front();
+    }
+
+    void notifyRecovery(const RecoveryCallback& recovery,
+                        bool reset_decoder,
+                        uint64_t now_ms,
+                        bool force) {
+        if (!recovery) return;
+        if (!force && recovery_notified &&
+            now_ms - last_recovery_notify_ms < 1000) {
+            return;
+        }
+        try {
+            recovery(reset_decoder);
+            recovery_notified = true;
+            last_recovery_notify_ms = now_ms;
+        } catch (...) {
+        }
+    }
+
+    void enterRecovery(const RecoveryCallback& recovery,
+                       uint64_t now_ms,
+                       const char*) {
+        const bool was_waiting = waiting_keyframe;
+        waiting_keyframe = true;
+        if (!was_waiting) {
+            notifyRecovery(recovery, true, now_ms, true);
+        } else {
+            notifyRecovery(recovery, false, now_ms, false);
+        }
+    }
+
+    bool sequenceRangeReceived(uint32_t first, uint32_t last) const {
+        if (last < first) return true;
+        if (last - first >= kSequenceWindow) return false;
+        for (uint32_t sequence = first; sequence <= last; ++sequence) {
+            if (!wasReceived(sequence)) return false;
+            if (sequence == std::numeric_limits<uint32_t>::max()) break;
+        }
+        return true;
+    }
+
+    AssembleResult assemble(const Frame& frame,
+                            std::vector<uint8_t>& access_unit,
+                            uint16_t& marker_sequence,
+                            uint32_t& marker_extended_sequence) {
+        bool have_marker = false;
+        for (const auto& packet : frame.packets) {
+            if (packet.marker && !packet.payload.empty()) {
+                have_marker = true;
+                break;
+            }
+        }
+        if (!have_marker) return AssembleResult::Incomplete;
+
+        std::vector<const Packet*> ordered;
+        ordered.reserve(frame.packets.size());
+        for (const auto& packet : frame.packets) ordered.push_back(&packet);
+        std::sort(ordered.begin(), ordered.end(), [](const Packet* left,
+                                                     const Packet* right) {
+            return left->extended_sequence < right->extended_sequence;
+        });
+
+        const Packet* marker = nullptr;
+        const Packet* first_media = nullptr;
+        for (const Packet* packet : ordered) {
+            if (!packet->payload.empty() && !first_media) first_media = packet;
+            if (packet->marker && !packet->payload.empty()) marker = packet;
+        }
+        if (!marker || !first_media) return AssembleResult::Incomplete;
+        if (!isPartitionHead(first_media->payload.data(), first_media->payload.size())) {
+            return AssembleResult::Incomplete;
+        }
+        if (first_media->extended_sequence > marker->extended_sequence) {
+            return AssembleResult::Invalid;
+        }
+        if (!sequenceRangeReceived(first_media->extended_sequence,
+                                   marker->extended_sequence)) {
+            return AssembleResult::Incomplete;
+        }
+
+        access_unit.clear();
+        H264AssemblyState assembly_state;
+        for (const Packet* packet : ordered) {
+            if (packet->extended_sequence < first_media->extended_sequence ||
+                packet->extended_sequence > marker->extended_sequence ||
+                packet->payload.empty()) {
+                continue;
+            }
+            switch (depacketize(packet->payload.data(), packet->payload.size(),
+                                access_unit, assembly_state)) {
+                case DepacketizeResult::Ok:
+                    break;
+                case DepacketizeResult::Unsupported:
+                    counters.unsupported_nalus++;
+                    return AssembleResult::Invalid;
+                case DepacketizeResult::Invalid:
+                    return AssembleResult::Invalid;
+                case DepacketizeResult::Overflow:
+                    return AssembleResult::Overflow;
+            }
+        }
+        if (assembly_state.fu_active) return AssembleResult::Invalid;
+        if (!waiting_keyframe && have_last_consumed_sequence &&
+            first_media->extended_sequence > last_consumed_sequence + 1 &&
+            !sequenceRangeReceived(last_consumed_sequence + 1,
+                                   first_media->extended_sequence - 1) &&
+            !containsIdr(access_unit)) {
+            return AssembleResult::Incomplete;
+        }
+        marker_sequence = marker->sequence;
+        marker_extended_sequence = marker->extended_sequence;
+        return access_unit.empty() ? AssembleResult::Invalid
+                                   : AssembleResult::Complete;
+    }
+
+    void drain(uint64_t now_ms,
+               const EmitCallback& emit,
+               const RecoveryCallback& recovery) {
+        std::vector<uint8_t> access_unit;
+        while (!frames.empty()) {
+            Frame& front = frames.front();
+            uint16_t marker_sequence = 0;
+            uint32_t marker_extended_sequence = 0;
+            const AssembleResult result = assemble(front, access_unit,
+                                                   marker_sequence,
+                                                   marker_extended_sequence);
+            if (result == AssembleResult::Complete) {
+                const uint32_t timestamp = front.timestamp;
+                last_timestamp = timestamp;
+                have_last_timestamp = true;
+                last_consumed_sequence = marker_extended_sequence;
+                have_last_consumed_sequence = true;
+                removeFrontFrame();
+
+                if (waiting_keyframe && !containsIdr(access_unit)) {
+                    counters.resyncs++;
+                    notifyRecovery(recovery, false, now_ms, false);
+                    continue;
+                }
+
+                waiting_keyframe = false;
+                recovery_notified = false;
+                counters.frames++;
+                counters.max_frame_bytes = std::max(
+                    counters.max_frame_bytes,
+                    static_cast<uint32_t>(access_unit.size()));
+                if (emit) {
+                    try {
+                        emit(access_unit.data(), access_unit.size(),
+                             marker_sequence, timestamp);
+                    } catch (...) {
+                    }
+                }
+                continue;
+            }
+
+            if (result == AssembleResult::Invalid ||
+                result == AssembleResult::Overflow ||
+                now_ms - front.first_seen_ms >= hold_ms) {
+                uint32_t last_sequence = 0;
+                bool have_last_sequence = false;
+                for (const auto& packet : front.packets) {
+                    if (!have_last_sequence ||
+                        packet.extended_sequence > last_sequence) {
+                        last_sequence = packet.extended_sequence;
+                        have_last_sequence = true;
+                    }
+                }
+                last_timestamp = front.timestamp;
+                have_last_timestamp = true;
+                if (have_last_sequence) {
+                    last_consumed_sequence = last_sequence;
+                    have_last_consumed_sequence = true;
+                }
+                removeFrontFrame();
+                counters.corrupt_frames++;
+                if (result == AssembleResult::Overflow) counters.overflow_frames++;
+                enterRecovery(recovery, now_ms, "incomplete frame");
+                continue;
+            }
+            break;
+        }
+    }
+
+    void overflow(const RecoveryCallback& recovery, uint64_t now_ms) {
+        clearFrames();
+        counters.overflow_frames++;
+        counters.corrupt_frames++;
+        enterRecovery(recovery, now_ms, "jitter buffer overflow");
+    }
+
+    void receive(const uint8_t* packet,
+                 size_t size,
+                 uint64_t now_ms,
+                 const EmitCallback& emit,
+                 const NackCallback& nack,
+                 const RecoveryCallback& recovery) {
+        ParsedRtp parsed;
+        if (!parseRtp(packet, size, parsed)) return;
+        counters.packets++;
+
+        const SequenceUpdate sequence = noteSequence(parsed.sequence, nack);
+        if (sequence.duplicate) return;
+
+        if (parsed.payload_size > kMaxRtpPayloadBytes) {
+            overflow(recovery, now_ms);
+            return;
+        }
+
+        Frame* frame = findFrame(parsed.timestamp);
+        if (parsed.payload_size == 0 && !frame) {
+            drain(now_ms, emit, recovery);
+            return;
+        }
+        if (!frame && have_last_timestamp &&
+            !timestampNewer(parsed.timestamp, last_timestamp)) {
+            // A retransmission may arrive after its frame timed out. It still
+            // repairs receiver-report accounting, but must not clear newer
+            // buffered frames or be mistaken for a capacity overflow.
+            drain(now_ms, emit, recovery);
+            return;
+        }
+        if (!frame) {
+            frame = createFrame(parsed.timestamp, now_ms);
+            if (!frame) {
+                overflow(recovery, now_ms);
+                return;
+            }
+        }
+        for (const auto& existing : frame->packets) {
+            if (existing.extended_sequence == sequence.extended_sequence) return;
+        }
+
+        if (buffered_packets >= kMaxBufferedPackets ||
+            parsed.payload_size > kMaxBufferedBytes - buffered_bytes) {
+            overflow(recovery, now_ms);
+            return;
+        }
+
+        Packet buffered;
+        buffered.sequence = parsed.sequence;
+        buffered.extended_sequence = sequence.extended_sequence;
+        buffered.marker = parsed.marker;
+        buffered.payload.assign(parsed.payload,
+                                parsed.payload + parsed.payload_size);
+        frame->packets.push_back(std::move(buffered));
+        buffered_packets++;
+        buffered_bytes += parsed.payload_size;
+        drain(now_ms, emit, recovery);
+    }
+
+    VideoRtpJitterStats stats() const {
+        VideoRtpJitterStats result = counters;
+        result.buffered_bytes = buffered_bytes;
+        result.buffered_packets = buffered_packets;
+        result.buffered_frames = frames.size();
+        result.highest_sequence = highest_sequence;
+        return result;
+    }
+
+    VideoRtpReceiverReport receiverReport() {
+        VideoRtpReceiverReport report;
+        if (!have_sequence) return report;
+        const uint32_t expected = highest_sequence - base_sequence + 1;
+        const uint32_t expected_interval = expected - expected_prior;
+        const uint32_t received_interval = unique_received - received_prior;
+        const uint32_t lost_interval = expected_interval > received_interval
+            ? expected_interval - received_interval
+            : 0;
+        expected_prior = expected;
+        received_prior = unique_received;
+        report.fraction_lost = expected_interval == 0
+            ? 0
+            : static_cast<uint8_t>(std::min<uint32_t>(
+                  255, (lost_interval << 8) / expected_interval));
+        report.cumulative_lost = counters.missing_packets > 0x00ffffffu
+            ? 0x00ffffffu
+            : counters.missing_packets;
+        report.highest_sequence = highest_sequence;
+        return report;
+    }
+};
+
+VideoRtpJitterBuffer::VideoRtpJitterBuffer()
+    : impl_(std::make_unique<Impl>()) {}
+
+VideoRtpJitterBuffer::~VideoRtpJitterBuffer() = default;
+
+void VideoRtpJitterBuffer::reset() {
+    impl_->reset();
+}
+
+void VideoRtpJitterBuffer::setHoldMs(uint64_t hold_ms) {
+    impl_->hold_ms = std::max<uint64_t>(1, std::min<uint64_t>(hold_ms, 1000));
+}
+
+void VideoRtpJitterBuffer::receive(const uint8_t* packet,
+                                   size_t size,
+                                   uint64_t now_ms,
+                                   const EmitCallback& emit,
+                                   const NackCallback& nack,
+                                   const RecoveryCallback& recovery) {
+    try {
+        impl_->receive(packet, size, now_ms, emit, nack, recovery);
+    } catch (const std::bad_alloc&) {
+        impl_->overflow(recovery, now_ms);
+    } catch (...) {
+        impl_->overflow(recovery, now_ms);
+    }
+}
+
+VideoRtpJitterStats VideoRtpJitterBuffer::stats() const {
+    return impl_->stats();
+}
+
+VideoRtpReceiverReport VideoRtpJitterBuffer::receiverReport() {
+    return impl_->receiverReport();
+}
+
+bool VideoRtpJitterBuffer::waitingForKeyframe() const {
+    return impl_->waiting_keyframe;
+}
+
+} // namespace lunar::webrtc

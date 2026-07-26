@@ -29,6 +29,7 @@ public:
         std::function<void(const std::string&)> on_session_id;
         std::function<bool()> external_cancel;
         std::function<bool()> input_suppressed;
+        std::function<bool()> consume_guide_button;
         std::function<bool()> refresh_tokens;
     };
 
