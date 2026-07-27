@@ -33,10 +33,13 @@ public:
     bool waitDataChannels(std::chrono::milliseconds timeout,
                           const CancelCallback& cancel);
     bool sendInputData(const uint8_t* data, size_t len);
+    bool sendLatestInputData(const uint8_t* data, size_t len);
     bool sendControlData(const uint8_t* data, size_t len);
     bool sendMessageData(const uint8_t* data, size_t len);
     bool requestVideoKeyframe();
     bool sendReceiverFeedback(uint32_t bitrate_bps);
+    bool hasPendingReliableData() const;
+    bool consumeReliableSendFailure();
     bool isDataChannelReady() const;
     void setMediaEnabled(bool enabled);
     webrtc::PeerMediaStats getMediaStats() const;

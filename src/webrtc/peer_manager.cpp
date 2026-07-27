@@ -194,16 +194,16 @@ void PeerManager::onVideoTrack(uint8_t* data,
                 }
             },
             [self](uint16_t pid, uint16_t blp) {
-                if (!self->pc_) return;
-                const int ret = peer_connection_send_nack(self->pc_, pid, blp);
+                const bool queued = self->enqueueNack(pid, blp);
                 if (self->nack_logs_.fetch_add(1) < 32) {
                     lunar::diagnosticLog(
                         "webrtc",
-                        "send RTCP NACK pid=%u blp=0x%04x result=%d",
+                        "queue RTCP NACK pid=%u blp=0x%04x result=%s",
                         pid,
                         blp,
-                        ret);
+                        queued ? "true" : "false");
                 }
+                return queued;
             },
             [self](bool reset_decoder) {
                 self->handleVideoJitterRecovery(reset_decoder);
@@ -313,10 +313,13 @@ bool PeerManager::initialize() {
     process_event_logs_ = 0;
     rumble_parse_logs_ = 0;
     nack_logs_ = 0;
+    reliable_send_failed_ = false;
+    outbound_drop_events_ = 0;
     media_clock_start_ = std::chrono::steady_clock::now();
     video_clock_.reset();
     audio_clock_.reset();
     video_jitter_.reset();
+    clearOutboundCommands();
 
     PeerConfiguration config = {};
     config.video_codec = CODEC_H264;
@@ -424,61 +427,299 @@ bool PeerManager::createDataChannels() {
     return true;
 }
 
+bool PeerManager::enqueueData(OutboundType type,
+                              const uint8_t* data,
+                              size_t len,
+                              bool replace_existing) {
+    if (!data || len == 0 || len > kMaxOutboundPayloadBytes ||
+        !connected_.load()) {
+        if (data && len > kMaxOutboundPayloadBytes) {
+            logOutboundDrop("payload_too_large", type,
+                            static_cast<int>(std::min<size_t>(len, INT32_MAX)));
+        }
+        return false;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(outbound_mutex_);
+        if (replace_existing) {
+            for (auto& command : outbound_commands_) {
+                if (command.type == type) {
+                    command.payload.assign(data, data + len);
+                    command.id = next_outbound_command_id_++;
+                    return true;
+                }
+            }
+        }
+        if (outbound_commands_.size() >= kMaxOutboundCommands) {
+            logOutboundDrop("queue_full", type);
+            return false;
+        }
+        OutboundCommand command;
+        command.type = type;
+        command.payload.assign(data, data + len);
+        command.id = next_outbound_command_id_++;
+        outbound_commands_.push_back(std::move(command));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool PeerManager::enqueueSimple(OutboundCommand command, bool high_priority) {
+    try {
+        std::lock_guard<std::mutex> lock(outbound_mutex_);
+        if (command.type == OutboundType::Pli) {
+            for (const auto& queued : outbound_commands_) {
+                if (queued.type == OutboundType::Pli) return true;
+            }
+        } else if (command.type == OutboundType::ReceiverFeedback) {
+            for (auto& queued : outbound_commands_) {
+                if (queued.type == OutboundType::ReceiverFeedback) {
+                    command.id = next_outbound_command_id_++;
+                    queued = std::move(command);
+                    return true;
+                }
+            }
+        }
+        if (outbound_commands_.size() >= kMaxOutboundCommands) {
+            if (!high_priority) {
+                logOutboundDrop("queue_full", command.type);
+                return false;
+            }
+            auto discard = std::find_if(
+                outbound_commands_.begin(),
+                outbound_commands_.end(),
+                [](const OutboundCommand& queued) {
+                    return queued.type == OutboundType::InputLatest ||
+                           queued.type == OutboundType::ReceiverFeedback ||
+                           queued.type == OutboundType::Nack;
+                });
+            if (discard == outbound_commands_.end()) {
+                logOutboundDrop("queue_full_reliable", command.type);
+                return false;
+            }
+            logOutboundDrop("priority_eviction", discard->type);
+            outbound_commands_.erase(discard);
+        }
+        command.id = next_outbound_command_id_++;
+        if (command.type == OutboundType::Pli) {
+            // SRTCP recovery must not wait behind a backpressured SCTP command.
+            outbound_commands_.push_front(std::move(command));
+        } else if (high_priority) {
+            auto priority_position = std::find_if(
+                outbound_commands_.begin(),
+                outbound_commands_.end(),
+                [](const OutboundCommand& queued) {
+                    return queued.type == OutboundType::InputLatest ||
+                           queued.type == OutboundType::ReceiverFeedback ||
+                           queued.type == OutboundType::Nack;
+                });
+            outbound_commands_.insert(priority_position, std::move(command));
+        } else {
+            outbound_commands_.push_back(std::move(command));
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool PeerManager::enqueueNack(uint16_t pid, uint16_t blp) {
+    if (!connected_.load() || video_jitter_.waitingForKeyframe()) return false;
+    try {
+        std::lock_guard<std::mutex> lock(outbound_mutex_);
+        for (const auto& command : outbound_commands_) {
+            if (command.type == OutboundType::Nack &&
+                command.pid == pid && command.blp == blp) {
+                return true;
+            }
+        }
+        if (outbound_commands_.size() >= kMaxOutboundCommands) {
+            logOutboundDrop("queue_full", OutboundType::Nack);
+            return false;
+        }
+        OutboundCommand command;
+        command.type = OutboundType::Nack;
+        command.pid = pid;
+        command.blp = blp;
+        command.id = next_outbound_command_id_++;
+        outbound_commands_.push_back(std::move(command));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 bool PeerManager::sendInputData(const uint8_t* data, size_t len) {
-    if (!pc_ || !connected_) return false;
-    if (!data_channels_created_ && !createDataChannels()) return false;
-    const uint16_t sid = xstreamingDataChannelSid("input");
-    return peer_connection_datachannel_send_sid_binary(pc_,
-        reinterpret_cast<char*>(const_cast<uint8_t*>(data)),
-        len, sid) >= 0;
+    return enqueueData(OutboundType::InputReliable, data, len, false);
+}
+
+bool PeerManager::sendLatestInputData(const uint8_t* data, size_t len) {
+    return enqueueData(OutboundType::InputLatest, data, len, true);
 }
 
 bool PeerManager::sendControlData(const uint8_t* data, size_t len) {
-    if (!pc_ || !connected_) return false;
-    if (!data_channels_created_ && !createDataChannels()) return false;
-    const uint16_t sid = xstreamingDataChannelSid("control");
-    lunar::diagnosticLog("webrtc", "send control datachannel sid=%u len=%zu", sid, len);
-    const bool sent = peer_connection_datachannel_send_sid(pc_,
-        reinterpret_cast<char*>(const_cast<uint8_t*>(data)),
-        len, sid) >= 0;
-    lunar::diagnosticLog("webrtc", "send control datachannel result=%s",
-                         sent ? "true" : "false");
-    return sent;
+    return enqueueData(OutboundType::Control, data, len, false);
 }
 
 bool PeerManager::sendMessageData(const uint8_t* data, size_t len) {
-    if (!pc_ || !connected_) return false;
-    if (!data_channels_created_ && !createDataChannels()) return false;
-    const uint16_t sid = xstreamingDataChannelSid("message");
-    lunar::diagnosticLog("webrtc", "send message datachannel sid=%u len=%zu", sid, len);
-    const bool sent = peer_connection_datachannel_send_sid(pc_,
-        reinterpret_cast<char*>(const_cast<uint8_t*>(data)),
-        len, sid) >= 0;
-    lunar::diagnosticLog("webrtc", "send message datachannel result=%s",
-                         sent ? "true" : "false");
-    return sent;
+    return enqueueData(OutboundType::Message, data, len, false);
 }
 
 bool PeerManager::requestVideoKeyframe() {
-    if (!pc_ || !connected_) return false;
-    const int ret = peer_connection_send_rtcp_pil(pc_, 0);
-    lunar::diagnosticLog("webrtc", "send RTCP PLI result=%d", ret);
-    return ret >= 0;
+    if (!connected_.load()) return false;
+    OutboundCommand command;
+    command.type = OutboundType::Pli;
+    return enqueueSimple(std::move(command), true);
 }
 
 bool PeerManager::sendReceiverFeedback(uint32_t bitrate_bps) {
-    if (!pc_ || !connected_) return false;
+    if (!connected_.load() || bitrate_bps == 0) return false;
     const auto report = video_jitter_.receiverReport();
-    const int ret = peer_connection_send_receiver_feedback_stats(
-        pc_,
-        report.fraction_lost,
-        report.cumulative_lost,
-        report.highest_sequence,
-        0,
-        bitrate_bps);
-    lunar::diagnosticLog("webrtc", "send RTCP RR+REMB bitrate_bps=%u result=%d",
-                         bitrate_bps, ret);
-    return ret >= 0;
+    OutboundCommand command;
+    command.type = OutboundType::ReceiverFeedback;
+    command.fraction_lost = report.fraction_lost;
+    command.cumulative_lost = report.cumulative_lost;
+    command.highest_sequence = report.highest_sequence;
+    command.bitrate_bps = bitrate_bps;
+    return enqueueSimple(std::move(command), false);
+}
+
+bool PeerManager::isReliableCommand(OutboundType type) {
+    return type == OutboundType::InputReliable ||
+           type == OutboundType::Control ||
+           type == OutboundType::Message;
+}
+
+bool PeerManager::hasPendingReliableData() const {
+    std::lock_guard<std::mutex> lock(outbound_mutex_);
+    return std::any_of(outbound_commands_.begin(), outbound_commands_.end(),
+                       [](const OutboundCommand& command) {
+                           return isReliableCommand(command.type);
+                       });
+}
+
+bool PeerManager::consumeReliableSendFailure() {
+    return reliable_send_failed_.exchange(false);
+}
+
+void PeerManager::logOutboundDrop(const char* reason,
+                                  OutboundType type,
+                                  int result) noexcept {
+    const uint32_t count = outbound_drop_events_.fetch_add(1) + 1;
+    if (count <= 32 || count % 64 == 0) {
+        lunar::dropDiagnosticLog(
+            "webrtc-outbound",
+            "reason=%s type=%d result=%d event_count=%u",
+            reason ? reason : "unknown",
+            static_cast<int>(type),
+            result,
+            count);
+    }
+}
+
+int PeerManager::sendOutboundCommand(const OutboundCommand& command) {
+    if (!pc_ || !connected_.load()) return -1;
+    if ((command.type == OutboundType::InputReliable ||
+         command.type == OutboundType::InputLatest ||
+         command.type == OutboundType::Control ||
+         command.type == OutboundType::Message) &&
+        !data_channels_created_ && !createDataChannels()) {
+        return -1;
+    }
+    switch (command.type) {
+        case OutboundType::InputReliable:
+        case OutboundType::InputLatest:
+            return peer_connection_datachannel_send_sid_binary(
+                pc_,
+                reinterpret_cast<char*>(const_cast<uint8_t*>(command.payload.data())),
+                command.payload.size(),
+                xstreamingDataChannelSid("input"));
+        case OutboundType::Control:
+            return peer_connection_datachannel_send_sid(
+                pc_,
+                reinterpret_cast<char*>(const_cast<uint8_t*>(command.payload.data())),
+                command.payload.size(),
+                xstreamingDataChannelSid("control"));
+        case OutboundType::Message:
+            return peer_connection_datachannel_send_sid(
+                pc_,
+                reinterpret_cast<char*>(const_cast<uint8_t*>(command.payload.data())),
+                command.payload.size(),
+                xstreamingDataChannelSid("message"));
+        case OutboundType::Nack:
+            return peer_connection_send_nack(pc_, command.pid, command.blp);
+        case OutboundType::Pli:
+            return peer_connection_send_rtcp_pil(pc_, 0);
+        case OutboundType::ReceiverFeedback:
+            return peer_connection_send_receiver_feedback_stats(
+                pc_, command.fraction_lost, command.cumulative_lost,
+                command.highest_sequence, 0, command.bitrate_bps);
+    }
+    return -1;
+}
+
+void PeerManager::drainOutboundCommands(
+    std::chrono::steady_clock::time_point deadline) {
+    constexpr size_t kMaxCommandsPerPump = 8;
+    for (size_t sent = 0; sent < kMaxCommandsPerPump; ++sent) {
+        OutboundCommand command;
+        try {
+            std::lock_guard<std::mutex> lock(outbound_mutex_);
+            if (outbound_commands_.empty()) return;
+            command = outbound_commands_.front();
+        } catch (...) {
+            logOutboundDrop("snapshot_failed", OutboundType::InputReliable);
+            return;
+        }
+        const int result = sendOutboundCommand(command);
+        if (completeOutboundCommand(command, result)) return;
+        if (sent > 0 && std::chrono::steady_clock::now() >= deadline) return;
+    }
+}
+
+bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
+                                          int result) {
+    const bool transient =
+        result < 0 && peer_connection_is_transient_send_error(result);
+    const bool keep_for_retry =
+        (transient && isReliableCommand(command.type)) ||
+        (result < 0 && command.type == OutboundType::Nack &&
+         command.attempts == 0) ||
+        (result < 0 && command.type == OutboundType::Pli &&
+         command.attempts + 1 < kMaxPliSendAttempts);
+    {
+        std::lock_guard<std::mutex> lock(outbound_mutex_);
+        auto queued = std::find_if(
+            outbound_commands_.begin(), outbound_commands_.end(),
+            [&command](const OutboundCommand& candidate) {
+                return candidate.id == command.id;
+            });
+        if (queued != outbound_commands_.end() && !keep_for_retry) {
+            outbound_commands_.erase(queued);
+        } else if (queued != outbound_commands_.end() &&
+                   (command.type == OutboundType::Nack ||
+                    command.type == OutboundType::Pli)) {
+            queued->attempts++;
+        }
+    }
+    if (result >= 0) return false;
+    if (keep_for_retry) {
+        logOutboundDrop("send_retry", command.type, result);
+        return true;
+    }
+    logOutboundDrop(transient ? "transient_drop" : "send_failed",
+                    command.type, result);
+    if (!transient && isReliableCommand(command.type)) {
+        reliable_send_failed_ = true;
+    }
+    return false;
+}
+
+void PeerManager::clearOutboundCommands() {
+    std::lock_guard<std::mutex> lock(outbound_mutex_);
+    outbound_commands_.clear();
+    next_outbound_command_id_ = 1;
 }
 
 bool PeerManager::isConnected() const {
@@ -572,6 +813,8 @@ void PeerManager::processEvents() {
             lunar::diagnosticLog("webrtc", "datachannel connected, creating channels");
             createDataChannels();
         }
+        drainOutboundCommands(std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(1));
         PeerConnectionMediaStats network_stats = {};
         peer_connection_get_media_stats(pc_, &network_stats);
         if (network_stats.ice_rtt_ms > 0) {
@@ -591,6 +834,8 @@ void PeerManager::disconnect() {
     lunar::diagnosticLog("webrtc", "disconnect begin pc=%p initialized=%s",
                          static_cast<void*>(pc_),
                          initialized_ ? "true" : "false");
+    connected_ = false;
+    clearOutboundCommands();
     if (pc_) {
         lunar::diagnosticLog("webrtc", "disconnect close begin");
         peer_connection_close(pc_);
@@ -600,7 +845,6 @@ void PeerManager::disconnect() {
         lunar::diagnosticLog("webrtc", "disconnect destroy done");
         pc_ = nullptr;
     }
-    connected_ = false;
     data_channels_created_ = false;
     video_jitter_.reset();
     nack_logs_ = 0;

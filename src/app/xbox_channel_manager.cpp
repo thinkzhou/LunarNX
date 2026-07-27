@@ -12,6 +12,7 @@ namespace lunar::app {
 namespace {
 
 constexpr std::chrono::milliseconds kHandshakeTimeout{1500};
+constexpr std::chrono::milliseconds kReliableFlushTimeout{1500};
 constexpr std::chrono::milliseconds kGamepadAddDelay{500};
 constexpr std::chrono::milliseconds kPollInterval{16};
 
@@ -153,6 +154,13 @@ bool XboxChannelManager::startProtocol(const StreamProfile& profile,
         lunar::diagnosticLog("xbox-channel", "control authorization/remove failed");
         return false;
     }
+    // The sends above are queued so libpeer remains single-owner and no
+    // callback performs a synchronous DTLS write. Flush them before preserving
+    // XStreaming's required gamepad-add delay.
+    if (!flushReliableData(cancel)) {
+        lunar::diagnosticLog("xbox-channel", "authorization flush failed");
+        return false;
+    }
     std::fprintf(stderr, "[ctrl] Control channel authorization sent\n");
     lunar::diagnosticLog("xbox-channel", "control authorization sent");
     std::fflush(stderr);
@@ -195,14 +203,16 @@ bool XboxChannelManager::startProtocol(const StreamProfile& profile,
                              sent ? "true" : "false");
         std::fprintf(stderr, "[ctrl] Metadata send result=%s\n", sent ? "true" : "false");
         std::fflush(stderr);
-        return sent;
+        if (!sent) return false;
     }
-    lunar::diagnosticLog("xbox-channel", "startProtocol done without metadata");
-    return true;
+    const bool flushed = flushReliableData(cancel);
+    lunar::diagnosticLog("xbox-channel", "startup reliable flush result=%s",
+                         flushed ? "true" : "false");
+    return flushed;
 }
 
 bool XboxChannelManager::sendInputPacket(const uint8_t* data, size_t len) {
-    return transport_.sendInputData(data, len);
+    return transport_.sendLatestInputData(data, len);
 }
 
 bool XboxChannelManager::sendControlMessage(std::string_view json) {
@@ -233,8 +243,10 @@ bool XboxChannelManager::requestVideoKeyframe(bool ifr_requested) {
     const std::string message =
         std::string(R"({"message":"videoKeyframeRequested","ifrRequested":)") +
         (ifr_requested ? "true" : "false") + "}";
-    const bool control_sent = sendControlMessage(message);
     const bool pli_sent = transport_.requestVideoKeyframe();
+    // Queue PLI first so data-channel backpressure cannot delay the independent
+    // SRTCP recovery signal behind the advisory Xbox control message.
+    const bool control_sent = sendControlMessage(message);
     lunar::diagnosticLog("xbox-channel", "keyframe request control=%s pli=%s",
                          control_sent ? "true" : "false",
                          pli_sent ? "true" : "false");
@@ -249,6 +261,11 @@ bool XboxChannelManager::waitForHandshake(const CancelCallback& cancel) {
         }
 
         transport_.processEvents();
+        if (transport_.consumeReliableSendFailure()) {
+            lunar::dropDiagnosticLog("xbox-channel",
+                                     "message_handshake_send_failed=1");
+            return false;
+        }
 
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start);
@@ -259,6 +276,30 @@ bool XboxChannelManager::waitForHandshake(const CancelCallback& cancel) {
         std::this_thread::sleep_for(kPollInterval);
     }
     return true;
+}
+
+bool XboxChannelManager::flushReliableData(const CancelCallback& cancel) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          kReliableFlushTimeout;
+    while (transport_.hasPendingReliableData()) {
+        if (cancel && cancel()) return false;
+        transport_.processEvents();
+        if (transport_.consumeReliableSendFailure()) {
+            lunar::dropDiagnosticLog("xbox-channel",
+                                     "reliable_data_send_failed=1");
+            return false;
+        }
+        if (!transport_.hasPendingReliableData()) return true;
+        if (std::chrono::steady_clock::now() >= deadline) {
+            lunar::dropDiagnosticLog("xbox-channel",
+                                     "reliable_data_flush_timeout_ms=%lld",
+                                     static_cast<long long>(
+                                         kReliableFlushTimeout.count()));
+            return false;
+        }
+        std::this_thread::sleep_for(kPollInterval);
+    }
+    return !transport_.consumeReliableSendFailure();
 }
 
 } // namespace lunar::app

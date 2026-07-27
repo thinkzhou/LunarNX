@@ -46,7 +46,7 @@ class VideoRtpJitterBuffer {
 public:
     using EmitCallback =
         std::function<void(const uint8_t*, size_t, uint16_t, uint32_t)>;
-    using NackCallback = std::function<void(uint16_t, uint16_t)>;
+    using NackCallback = std::function<bool(uint16_t, uint16_t)>;
     using RecoveryCallback = std::function<void(bool)>;
 
     static constexpr uint64_t kDefaultHoldMs = 120;

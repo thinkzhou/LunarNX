@@ -10,8 +10,12 @@
 #include <chrono>
 #include <atomic>
 #include <cstdint>
+#include <deque>
+#include <mutex>
 
 namespace lunar::webrtc {
+
+struct PeerManagerQueueTestAccess;
 
 struct IceCandidate {
     std::string sdp;          // Full candidate line
@@ -78,10 +82,13 @@ public:
     // Locally initiated DTLS-client channels use XStreaming's even SID order.
     bool createDataChannels();
     bool sendInputData(const uint8_t* data, size_t len);
+    bool sendLatestInputData(const uint8_t* data, size_t len);
     bool sendControlData(const uint8_t* data, size_t len);
     bool sendMessageData(const uint8_t* data, size_t len);
     bool requestVideoKeyframe();
     bool sendReceiverFeedback(uint32_t bitrate_bps);
+    bool hasPendingReliableData() const;
+    bool consumeReliableSendFailure();
     bool isDataChannelReady() const;
     void setMediaEnabled(bool enabled);
     PeerMediaStats getMediaStats() const;
@@ -92,6 +99,33 @@ public:
     void disconnect();
 
 private:
+    friend struct PeerManagerQueueTestAccess;
+    enum class OutboundType {
+        InputReliable,
+        InputLatest,
+        Control,
+        Message,
+        Nack,
+        Pli,
+        ReceiverFeedback,
+    };
+
+    struct OutboundCommand {
+        OutboundType type = OutboundType::InputReliable;
+        std::vector<uint8_t> payload;
+        uint16_t pid = 0;
+        uint16_t blp = 0;
+        uint8_t fraction_lost = 0;
+        uint32_t cumulative_lost = 0;
+        uint32_t highest_sequence = 0;
+        uint32_t bitrate_bps = 0;
+        uint64_t id = 0;
+        uint8_t attempts = 0;
+    };
+
+    static constexpr size_t kMaxOutboundCommands = 64;
+    static constexpr size_t kMaxOutboundPayloadBytes = 1024;
+    static constexpr uint8_t kMaxPliSendAttempts = 3;
     PeerConnection* pc_ = nullptr;
     PeerCallbacks callbacks_;
     std::atomic<bool> connected_{false};
@@ -109,6 +143,26 @@ private:
     RtpClockMapper video_clock_{90000};
     RtpClockMapper audio_clock_{48000};
     VideoRtpJitterBuffer video_jitter_;
+    mutable std::mutex outbound_mutex_;
+    std::deque<OutboundCommand> outbound_commands_;
+    uint64_t next_outbound_command_id_ = 1;
+    std::atomic<bool> reliable_send_failed_{false};
+    std::atomic<uint32_t> outbound_drop_events_{0};
+
+    bool enqueueData(OutboundType type,
+                     const uint8_t* data,
+                     size_t len,
+                     bool replace_existing);
+    bool enqueueNack(uint16_t pid, uint16_t blp);
+    bool enqueueSimple(OutboundCommand command, bool high_priority);
+    void drainOutboundCommands(std::chrono::steady_clock::time_point deadline);
+    bool completeOutboundCommand(const OutboundCommand& command, int result);
+    int sendOutboundCommand(const OutboundCommand& command);
+    void clearOutboundCommands();
+    static bool isReliableCommand(OutboundType type);
+    void logOutboundDrop(const char* reason,
+                         OutboundType type,
+                         int result = 0) noexcept;
 
     static void onIceCandidate(char* sdp_text, void* userdata);
     static void onIceStateChange(PeerConnectionState state, void* userdata);

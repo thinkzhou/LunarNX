@@ -27,6 +27,16 @@ LunarNX can perform a bounded multi-pass drain without starving DTLS or SCTP;
 the socket and drain changes are safe to ignore when a target clamps the
 requested buffer size.
 
+The completed-state loop enforces that budget inside the datagram,
+pending-DTLS, and RTP decode loops as well. A deadline checked only around
+`peer_connection_loop()` cannot preempt a single long call. DTLS application
+writes also cap WANT_READ/WANT_WRITE retries and propagate backpressure without
+advancing custom SCTP TSN or stream-sequence state. LunarNX retains reliable
+startup commands and PLI for a later owner-thread pump, replaces stale input,
+and permits bounded NACK/feedback drops. Any mbedTLS records left pending after
+one budget are resumed at the start of the next pump even when no new DTLS
+datagram arrives.
+
 On Switch, libpeer obtains the local IPv4 host ICE candidate through
 `nifmGetCurrentIpAddress()`. The compatibility `getifaddrs()` implementation
 returns an empty list on this platform, which otherwise leaves only the public

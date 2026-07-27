@@ -121,6 +121,20 @@ RTP_CLOCK_TEST_OBJS = $(BUILD)/tests/rtp_clock_mapper_test.o
 VIDEO_JITTER_TEST_OBJS = $(BUILD)/tests/video_rtp_jitter_buffer_test.o \
 	                         $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o
 
+VIDEO_RECOVERY_POLICY_TEST_OBJS = $(BUILD)/tests/video_recovery_policy_test.o
+
+OUTBOUND_QUEUE_TEST_OBJS = $(BUILD)/tests/peer_manager_outbound_queue_test.o \
+	                          $(BUILD)/src/webrtc/peer_manager.o \
+	                          $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
+	                          $(BUILD)/src/webrtc/xbox_input_feedback.o \
+	                          $(C_OBJS)
+
+STREAM_RESILIENCE_TEST_OBJS = $(BUILD)/tests/stream_resilience_scenarios_test.o \
+	                             $(BUILD)/src/webrtc/peer_manager.o \
+	                             $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
+	                             $(BUILD)/src/webrtc/xbox_input_feedback.o \
+	                             $(C_OBJS)
+
 SRTCP_CAPACITY_TEST_OBJS = $(BUILD)/tests/srtcp_capacity_test.o \
 	                           $(C_OBJS)
 
@@ -159,7 +173,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 RHO_SRCS = src/rho/rho_main.cpp
 RHO_OBJS = $(RHO_SRCS:%.cpp=$(BUILD)/%.o)
 
-.PHONY: xcloud_session_support_test all clean run auth_test stream_tests h264_rtp_tests rtp_clock_tests video_jitter_tests srtcp_capacity_tests input_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
+.PHONY: xcloud_session_support_test all clean run auth_test stream_tests h264_rtp_tests rtp_clock_tests video_jitter_tests video_recovery_policy_tests outbound_queue_tests stream_resilience_tests srtcp_capacity_tests input_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
 
 all:  $(TARGET)
 	@echo "=== Desktop Build Complete ==="
@@ -227,6 +241,21 @@ video_jitter_tests: $(VIDEO_JITTER_TEST_OBJS)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/video_rtp_jitter_buffer_test $(VIDEO_JITTER_TEST_OBJS)
 	./$(BUILD)/video_rtp_jitter_buffer_test
+
+video_recovery_policy_tests: $(VIDEO_RECOVERY_POLICY_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/video_recovery_policy_test $(VIDEO_RECOVERY_POLICY_TEST_OBJS)
+	./$(BUILD)/video_recovery_policy_test
+
+outbound_queue_tests: $(OUTBOUND_QUEUE_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/peer_manager_outbound_queue_test $(OUTBOUND_QUEUE_TEST_OBJS) $(LDFLAGS)
+	./$(BUILD)/peer_manager_outbound_queue_test
+
+stream_resilience_tests: $(STREAM_RESILIENCE_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/stream_resilience_scenarios_test $(STREAM_RESILIENCE_TEST_OBJS) $(LDFLAGS)
+	./$(BUILD)/stream_resilience_scenarios_test
 
 srtcp_capacity_tests: $(SRTCP_CAPACITY_TEST_OBJS)
 	@mkdir -p $(BUILD)

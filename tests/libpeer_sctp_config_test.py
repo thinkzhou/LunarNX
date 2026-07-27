@@ -31,8 +31,14 @@ def main():
             "SCTP INIT_ACK parser should advance by padded parameter length")
     require("static uint16_t sqn" not in sctp,
             "SCTP stream sequence numbers must not be global across streams")
-    require("sctp_next_stream_sequence" in sctp and "outbound_stream_sequence" in sctp,
-            "SCTP ordered DATA chunks should use per-stream sequence numbers")
+    require("sctp_current_stream_sequence" in sctp and
+            "sctp_advance_stream_sequence" in sctp and
+            "outbound_stream_sequence" in sctp,
+            "SCTP ordered DATA chunks should advance per-stream sequence numbers only after sending")
+    require("return dtls_srtp_write" in sctp and
+            "if (write_ret < 0)" in sctp and
+            "sctp->tsn++;" in sctp,
+            "Custom SCTP must propagate DTLS failures before committing TSN state")
     require("sctp_send_sack" in sctp,
             "Custom SCTP should acknowledge inbound DATA chunks with an explicit SACK helper")
     require("sack_chunk->a_rwnd = htonl(0x100000);" in sctp,
@@ -70,8 +76,13 @@ def main():
         loop_source.index("case PEER_CONNECTION_COMPLETED"):
         loop_source.index("case PEER_CONNECTION_FAILED")
     ]
-    require(completed_loop.count("peer_connection_note_remote_activity(pc);") >= 3,
-            "Authenticated SRTCP and DTLS traffic should refresh WebRTC liveness")
+    pending_dtls = peer_connection[
+        peer_connection.index("static int peer_connection_drain_pending_dtls"):
+        peer_connection.index("static void peer_connection_outgoing_rtp_packet")
+    ]
+    require(completed_loop.count("peer_connection_note_remote_activity(pc);") >= 2 and
+            "peer_connection_note_remote_activity(pc);" in pending_dtls,
+            "Authenticated SRTCP and both immediate/pending DTLS traffic should refresh WebRTC liveness")
     require("CONFIG_KEEPALIVE_TIMEOUT 30000" in tracked_patch and
             "peer_connection_note_remote_activity" in tracked_patch,
             "Tracked legacy libpeer patch must reproduce the WebRTC liveness fix")
@@ -87,7 +98,7 @@ def main():
     require("PEER_CONNECTION_MAX_PACKETS_PER_LOOP" in peer_connection and
             "while (packets_processed < PEER_CONNECTION_MAX_PACKETS_PER_LOOP)" in peer_connection,
             "WebRTC completed-state loop should drain multiple UDP packets so RTP cannot starve DTLS/SCTP data")
-    require("loop_work = packets_processed + rtp_decoded_packets" in peer_connection and
+    require("loop_work = packets_processed + rtp_decoded_packets + pending_dtls_records" in peer_connection and
             "return loop_work;" in peer_connection,
             "WebRTC pump should report queued media work to the bounded outer drain")
     require("PEER_CONNECTION_MAX_RTP_DECODE_PER_LOOP" not in peer_connection and
@@ -153,8 +164,11 @@ def main():
             "sequence_gap && rtp_decoder->h264_frame_started" in rtp,
             "H.264 FU-A decoder should drop fragmented NALUs when a sequence gap is detected")
 
-    require("peer_connection_datachannel_send_sid(pc_" in peer_manager and ">= 0" in peer_manager,
-            "PeerManager datachannel send should treat non-negative libpeer returns as success")
+    require("sendOutboundCommand" in peer_manager and
+            "peer_connection_datachannel_send_sid(" in peer_manager and
+            "peer_connection_is_transient_send_error" in peer_manager and
+            "completeOutboundCommand" in peer_manager,
+            "PeerManager should retain reliable commands across transient DTLS failures")
     require("void PeerManager::setMediaEnabled" in peer_manager and
             "peer_connection_set_media_enabled(pc_" in peer_manager,
             "PeerManager should allow the app to defer RTP decode until control channels are ready")

@@ -28,6 +28,7 @@ public:
 
 private:
     bool waitForHandshake(const CancelCallback& cancel);
+    bool flushReliableData(const CancelCallback& cancel);
 
     WebRtcTransport& transport_;
     std::atomic<bool> handshake_ready_{false};

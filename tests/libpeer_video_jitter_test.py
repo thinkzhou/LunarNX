@@ -44,9 +44,9 @@ def main():
         "Jitter recovery must coalesce PLI through the session request path",
     )
     require(
-        "std::max<uint64_t>(\n                60" in peer_manager
+        "VideoRtpJitterBuffer::kDefaultHoldMs" in peer_manager
         and "std::min<uint64_t>(180" in peer_manager,
-        "Adaptive jitter hold must stay within the low-latency 60-180 ms window",
+        "Adaptive jitter hold must stay within the configured low-latency window",
     )
     require(
         "on_video_recovery" in peer_header

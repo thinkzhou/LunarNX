@@ -1,4 +1,5 @@
 #include "xbox_stream_session.h"
+#include "video_recovery_policy.h"
 #include "../diagnostics.h"
 
 #include <algorithm>
@@ -257,6 +258,7 @@ bool XboxStreamSession::start(const StreamProfile& profile,
     perf_.recordKeepAliveInterval(static_cast<uint32_t>(keep_alive_seconds));
 
     streaming_ = true;
+    lunar::startDropDiagnosticWriter();
     if (callbacks.on_streaming) {
         callbacks.on_streaming();
     }
@@ -508,6 +510,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
     bool control_started = false;
     bool first_loop_logged = false;
     bool first_input_logged = false;
+    VideoRecoveryTransportRetry recovery_transport_retry;
     auto next_input_tick = std::chrono::steady_clock::now();
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     auto last_webrtc_pump = std::chrono::steady_clock::time_point{};
@@ -671,12 +674,12 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                     keyframe_queue_drop_baseline = media_stats.rtp_queue_drops;
                     keyframe_srtp_baseline = media_stats.srtp_rtp_decrypt_failures;
                 } catch (const std::exception& e) {
-                    std::fprintf(stderr, "[xbox-stream] post-control media exception: %s\n", e.what());
-                    lunar::diagnosticLog("xbox-stream", "post-control media exception: %s", e.what());
+                    lunar::dropDiagnosticLog(
+                        "xbox-stream", "post-control media exception: %s", e.what());
                     // Keep control_started true; media enable failure should not kill session.
                 } catch (...) {
-                    std::fprintf(stderr, "[xbox-stream] post-control media unknown exception\n");
-                    lunar::diagnosticLog("xbox-stream", "post-control media unknown exception");
+                    lunar::dropDiagnosticLog(
+                        "xbox-stream", "post-control media unknown exception");
                 }
             }
             if (!control_started && isCancelled(callbacks)) {
@@ -685,6 +688,16 @@ void XboxStreamSession::runLoop(StreamProfile profile,
         }
 
         const auto now = std::chrono::steady_clock::now();
+        if (control_started && connected &&
+            recovery_transport_retry.shouldRetry(
+                media_stats.video_waiting_keyframe, now)) {
+            const bool retry_queued = transport_.requestVideoKeyframe();
+            perf_.recordRecoveryPli(retry_queued);
+            lunar::diagnosticLog(
+                "xbox-stream",
+                "transport-only keyframe retry result=%s",
+                retry_queued ? "true" : "false");
+        }
         if (control_started && connected) {
             const uint32_t missing_delta =
                 media_stats.video_rtp_missing_packets - keyframe_missing_baseline;
@@ -729,7 +742,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                 keyframe_corrupt_baseline = media_stats.video_h264_corrupt_frames;
                 keyframe_queue_drop_baseline = media_stats.rtp_queue_drops;
                 keyframe_srtp_baseline = media_stats.srtp_rtp_decrypt_failures;
-            } else if ((video_damage_increased || pipeline_recovery_pending) &&
+            } else if ((video_damage_increased || pipeline_recovery_pending ||
+                        media_stats.video_waiting_keyframe) &&
                        can_request_recovery_keyframe) {
                 const bool keyframe_requested =
                     channels_.requestVideoKeyframe(false);
@@ -1006,6 +1020,7 @@ void XboxStreamSession::cleanupResources(bool delete_session) {
     lunar::diagnosticLog("xbox-stream", "cleanup rumble stop begin");
     rumble_.stop();
     lunar::diagnosticLog("xbox-stream", "cleanup rumble stop done");
+    lunar::stopDropDiagnosticWriter();
     lunar::diagnosticLog("xbox-stream", "cleanup done");
 }
 

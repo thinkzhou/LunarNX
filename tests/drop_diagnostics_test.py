@@ -52,6 +52,9 @@ def main() -> None:
             (ROOT / "src/app/xbox_stream_session.cpp").read_text(),
             "loss snapshots need the latest keepalive duration without logging every keepalive")
     session = (ROOT / "src/app/xbox_stream_session.cpp").read_text()
+    require('dropDiagnosticLog(\n                        "xbox-stream", "post-control media exception: %s"' in session and
+            'dropDiagnosticLog(\n                        "xbox-stream", "post-control media unknown exception"' in session,
+            "swallowed post-control media exceptions must be gated by DROP_DIAG")
     require("recordKeepAliveException" in perf and
             "perf_.recordKeepAliveException" in session and
             "recordTokenRefreshException" in perf and

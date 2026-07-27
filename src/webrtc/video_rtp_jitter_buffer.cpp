@@ -1,6 +1,7 @@
 #include "video_rtp_jitter_buffer.h"
 
 #include <algorithm>
+#include <array>
 #include <bitset>
 #include <deque>
 #include <limits>
@@ -14,6 +15,9 @@ namespace {
 
 constexpr size_t kSequenceWindow = 4096;
 constexpr uint32_t kMaxNackGap = 255;
+constexpr uint64_t kNackWindowMs = 50;
+constexpr uint32_t kMaxNacksPerWindow = 8;
+constexpr size_t kMaxPendingNackRanges = 8;
 constexpr size_t kMaxRtpPayloadBytes = 2048;
 constexpr uint8_t kStartCode[] = {0x00, 0x00, 0x00, 0x01};
 
@@ -250,6 +254,16 @@ struct VideoRtpJitterBuffer::Impl {
     bool soft_recovery_active = false;
     uint64_t last_soft_loss_ms = 0;
     uint32_t soft_losses_in_window = 0;
+    bool have_nack_window = false;
+    uint64_t nack_window_started_ms = 0;
+    uint32_t nacks_in_window = 0;
+    struct MissingRange {
+        uint32_t cursor = 0;
+        uint32_t end = 0;
+    };
+    std::array<MissingRange, kMaxPendingNackRanges> pending_nack_ranges{};
+    size_t pending_nack_head = 0;
+    size_t pending_nack_count = 0;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     bool have_ssrc = false;
 #endif
@@ -282,6 +296,11 @@ struct VideoRtpJitterBuffer::Impl {
         soft_recovery_active = false;
         last_soft_loss_ms = 0;
         soft_losses_in_window = 0;
+        have_nack_window = false;
+        nack_window_started_ms = 0;
+        nacks_in_window = 0;
+        pending_nack_head = 0;
+        pending_nack_count = 0;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         have_ssrc = false;
 #endif
@@ -305,30 +324,90 @@ struct VideoRtpJitterBuffer::Impl {
         counters.highest_sequence = highest_sequence;
     }
 
-    void sendNacks(uint32_t first_missing,
-                   uint32_t end,
-                   const NackCallback& nack) {
-        if (!nack || end <= first_missing || end - first_missing > kMaxNackGap) {
-            return;
+    MissingRange& pendingNackFront() {
+        return pending_nack_ranges[pending_nack_head];
+    }
+
+    void popPendingNackRange() {
+        pending_nack_head = (pending_nack_head + 1) % kMaxPendingNackRanges;
+        pending_nack_count--;
+    }
+
+    void discardCompletedPendingNackRanges() {
+        while (pending_nack_count > 0 &&
+               pendingNackFront().cursor >= pendingNackFront().end) {
+            popPendingNackRange();
         }
-        uint32_t cursor = first_missing;
-        while (cursor < end) {
-            const uint16_t pid = static_cast<uint16_t>(cursor);
-            cursor++;
+    }
+
+    void clearPendingNacks() {
+        pending_nack_head = 0;
+        pending_nack_count = 0;
+    }
+
+    void drainPendingNacks(uint64_t now_ms, const NackCallback& nack) {
+        discardCompletedPendingNackRanges();
+        if (!nack || waiting_keyframe || pending_nack_count == 0) return;
+        if (!have_nack_window || now_ms < nack_window_started_ms ||
+            now_ms - nack_window_started_ms >= kNackWindowMs) {
+            have_nack_window = true;
+            nack_window_started_ms = now_ms;
+            nacks_in_window = 0;
+        }
+        while (pending_nack_count > 0 &&
+               nacks_in_window < kMaxNacksPerWindow) {
+            auto& range = pendingNackFront();
+            while (range.cursor < range.end && wasReceived(range.cursor)) {
+                range.cursor++;
+            }
+            if (range.cursor >= range.end) {
+                popPendingNackRange();
+                continue;
+            }
+
+            const uint32_t pid_extended = range.cursor;
+            const uint16_t pid = static_cast<uint16_t>(pid_extended);
             uint16_t blp = 0;
-            for (unsigned bit = 0; bit < 16 && cursor < end; ++bit, ++cursor) {
-                blp |= static_cast<uint16_t>(1u << bit);
+            const uint32_t next_cursor = pid_extended +
+                std::min<uint32_t>(17, range.end - pid_extended);
+            for (uint32_t sequence = pid_extended + 1;
+                 sequence < next_cursor;
+                 ++sequence) {
+                if (!wasReceived(sequence)) {
+                    blp |= static_cast<uint16_t>(1u << (sequence - pid_extended - 1));
+                }
             }
             try {
-                nack(pid, blp);
+                if (!nack(pid, blp)) return;
+                range.cursor = next_cursor;
                 counters.nacks++;
+                nacks_in_window++;
             } catch (...) {
                 return;
             }
         }
     }
 
-    SequenceUpdate noteSequence(uint16_t sequence, const NackCallback& nack) {
+    void sendNacks(uint32_t first_missing,
+                   uint32_t end,
+                   uint64_t now_ms,
+                   const NackCallback& nack) {
+        if (!nack || waiting_keyframe || end <= first_missing ||
+            end - first_missing > kMaxNackGap) {
+            return;
+        }
+        discardCompletedPendingNackRanges();
+        if (pending_nack_count >= kMaxPendingNackRanges) return;
+        const size_t tail =
+            (pending_nack_head + pending_nack_count) % kMaxPendingNackRanges;
+        pending_nack_ranges[tail] = {first_missing, end};
+        pending_nack_count++;
+        drainPendingNacks(now_ms, nack);
+    }
+
+    SequenceUpdate noteSequence(uint16_t sequence,
+                                uint64_t now_ms,
+                                const NackCallback& nack) {
         SequenceUpdate update;
         if (!have_sequence) {
             have_sequence = true;
@@ -371,7 +450,7 @@ struct VideoRtpJitterBuffer::Impl {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
                 counters.last_gap_packets = delta - 1;
 #endif
-                sendNacks(previous_highest + 1, extended, nack);
+                sendNacks(previous_highest + 1, extended, now_ms, nack);
             }
         } else {
             const uint32_t distance = highest_sequence - extended;
@@ -492,6 +571,7 @@ struct VideoRtpJitterBuffer::Impl {
                        const char*) {
         const bool was_waiting = waiting_keyframe;
         waiting_keyframe = true;
+        clearPendingNacks();
         soft_recovery_active = false;
         soft_losses_in_window = 0;
         if (!was_waiting) {
@@ -751,7 +831,9 @@ struct VideoRtpJitterBuffer::Impl {
 #endif
         counters.packets++;
 
-        const SequenceUpdate sequence = noteSequence(parsed.sequence, nack);
+        drainPendingNacks(now_ms, nack);
+
+        const SequenceUpdate sequence = noteSequence(parsed.sequence, now_ms, nack);
         if (sequence.duplicate) return;
 
         if (parsed.payload_size > kMaxRtpPayloadBytes) {

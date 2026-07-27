@@ -197,6 +197,10 @@ bool WebRtcTransport::sendInputData(const uint8_t* data, size_t len) {
     return peer_ && peer_->sendInputData(data, len);
 }
 
+bool WebRtcTransport::sendLatestInputData(const uint8_t* data, size_t len) {
+    return peer_ && peer_->sendLatestInputData(data, len);
+}
+
 bool WebRtcTransport::sendControlData(const uint8_t* data, size_t len) {
     lunar::diagnosticLog("webrtc-transport", "send control begin len=%zu", len);
     const bool sent = peer_ && peer_->sendControlData(data, len);
@@ -227,6 +231,14 @@ bool WebRtcTransport::sendReceiverFeedback(uint32_t bitrate_bps) {
                          bitrate_bps,
                          sent ? "true" : "false");
     return sent;
+}
+
+bool WebRtcTransport::hasPendingReliableData() const {
+    return peer_ && peer_->hasPendingReliableData();
+}
+
+bool WebRtcTransport::consumeReliableSendFailure() {
+    return peer_ && peer_->consumeReliableSendFailure();
 }
 
 bool WebRtcTransport::isDataChannelReady() const {

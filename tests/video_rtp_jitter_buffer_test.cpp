@@ -49,6 +49,7 @@ struct Harness {
             },
             [this](uint16_t pid, uint16_t blp) {
                 nacks.emplace_back(pid, blp);
+                return true;
             },
             [this](bool reset_decoder) {
                 recovery_requests++;
@@ -360,6 +361,45 @@ void test_large_frame_defers_assembly_and_reuses_payload_storage() {
     assert(h.frames.size() == 2);
 }
 
+void test_nacks_are_rate_limited_per_window() {
+    Harness h;
+    openWithIdr(h, 2000, 1000);
+
+    for (uint16_t sequence = 2002; sequence <= 2020; sequence += 2) {
+        h.push(rtp(sequence, 1000, false, {}, 8), 1);
+    }
+    assert(h.nacks.size() == 8);
+
+    h.push(rtp(2022, 1000, false, {}, 8), 60);
+    assert(h.nacks.size() == 11);
+}
+
+void test_log_sized_gap_is_fully_covered() {
+    Harness h;
+    openWithIdr(h, 2200, 1000);
+
+    // lunarnx_drop_2.log recorded a 153-packet jump. Generic NACK covers
+    // at most 17 sequence numbers, so complete coverage requires 9 reports.
+    h.push(rtp(2354, 1000, false, {}, 8), 1);
+    assert(h.nacks.size() == 8);
+    h.push(rtp(2355, 1000, false, {}, 8), 60);
+    assert(h.nacks.size() == 9);
+}
+
+void test_nacks_stop_while_waiting_for_keyframe() {
+    Harness h;
+    h.jitter.setHoldMs(50);
+    openWithIdr(h, 2100, 1000);
+
+    h.push(rtp(2101, 2000, false, {0x7c, 0x85, 0x11}), 1);
+    h.push(rtp(2102, 3000, true, {0x61, 0x22}), 60);
+    assert(h.jitter.waitingForKeyframe());
+
+    const size_t nacks_before = h.nacks.size();
+    h.push(rtp(2104, 4000, false, {}, 8), 61);
+    assert(h.nacks.size() == nacks_before);
+}
+
 } // namespace
 
 int main() {
@@ -379,6 +419,9 @@ int main() {
     test_access_unit_limit_is_enforced_without_unbounded_growth();
     test_buffer_caps_are_hard_limits();
     test_large_frame_defers_assembly_and_reuses_payload_storage();
+    test_nacks_are_rate_limited_per_window();
+    test_log_sized_gap_is_fully_covered();
+    test_nacks_stop_while_waiting_for_keyframe();
     std::cout << "Video RTP jitter buffer tests passed\n";
     return 0;
 }
