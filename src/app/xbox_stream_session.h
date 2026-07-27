@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -65,6 +66,9 @@ private:
                  std::string session_id,
                  int keep_alive_seconds,
                  RuntimeCallbacks callbacks);
+    void controlLoop(std::string session_id,
+                     int keep_alive_seconds,
+                     RuntimeCallbacks callbacks);
     void cleanupResources(bool delete_session);
     bool failStart(const std::string& reason, const RuntimeCallbacks& callbacks);
     bool cancelStart(const RuntimeCallbacks& callbacks);
@@ -81,7 +85,11 @@ private:
     std::atomic<bool> streaming_{false};
     std::atomic<bool> stop_requested_{false};
     mutable std::mutex state_mutex_;
+    std::mutex session_api_mutex_;
+    std::mutex control_mutex_;
+    std::condition_variable control_cv_;
     std::thread stream_thread_;
+    std::thread control_thread_;
     std::string session_id_;
 };
 

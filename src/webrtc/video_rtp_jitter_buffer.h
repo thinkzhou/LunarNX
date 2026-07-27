@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../diagnostics.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -30,6 +32,14 @@ struct VideoRtpJitterStats {
     size_t buffered_packets = 0;
     size_t buffered_frames = 0;
     uint32_t highest_sequence = 0;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    uint32_t last_gap_packets = 0;
+    uint32_t ssrc = 0;
+    uint32_t ssrc_changes = 0;
+    uint64_t last_arrival_ms = 0;
+    uint64_t last_arrival_gap_ms = 0;
+    uint64_t max_arrival_gap_ms = 0;
+#endif
 };
 
 class VideoRtpJitterBuffer {
@@ -40,6 +50,7 @@ public:
     using RecoveryCallback = std::function<void(bool)>;
 
     static constexpr uint64_t kDefaultHoldMs = 120;
+    static constexpr uint64_t kMaxFrameHoldMs = 250;
     static constexpr size_t kMaxBufferedFrames = 32;
     static constexpr size_t kMaxBufferedPackets = 2048;
     static constexpr size_t kMaxBufferedBytes = 3 * 1024 * 1024;

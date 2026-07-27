@@ -39,7 +39,7 @@ public:
     bool sendReceiverFeedback(uint32_t bitrate_bps);
     bool isDataChannelReady() const;
     void setMediaEnabled(bool enabled);
-    PeerConnectionMediaStats getMediaStats() const;
+    webrtc::PeerMediaStats getMediaStats() const;
     bool isConnected() const;
     void processEvents();
     void disconnect();

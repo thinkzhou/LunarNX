@@ -39,23 +39,26 @@ void AVSync::updateAudioPts(uint64_t pts_ns) {
     last_audio_time_ = std::chrono::steady_clock::now();
 }
 
-int64_t AVSync::getVideoDelayNs(uint64_t frame_pts) const {
+AVSyncTiming AVSync::getVideoTiming(uint64_t frame_pts) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!running_ || !have_video_base_) return 0;
+    AVSyncTiming timing;
+    timing.frame_pts_ns = frame_pts;
+    if (!running_ || !have_video_base_) return timing;
 
     // Use audio as the master clock when available, else wall clock.
     // Fall back to wall clock if audio hasn't updated in >500ms (stall).
     auto now = std::chrono::steady_clock::now();
     bool audio_stale = !have_audio_base_;
     if (have_audio_base_) {
-        auto audio_age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        timing.audio_age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             now - last_audio_time_).count();
-        audio_stale = audio_age_ms > 500;
+        audio_stale = timing.audio_age_ms > 500;
     }
 
     int64_t master_pts;
     if (!audio_stale) {
         master_pts = static_cast<int64_t>(audio_pts_);
+        timing.using_audio_master = true;
     } else {
         master_pts = static_cast<int64_t>(first_video_pts_) +
             static_cast<int64_t>(
@@ -63,13 +66,23 @@ int64_t AVSync::getVideoDelayNs(uint64_t frame_pts) const {
                     now - base_time_).count());
     }
 
+    timing.master_pts_ns = master_pts > 0
+        ? static_cast<uint64_t>(master_pts)
+        : 0;
+
     int64_t pts = static_cast<int64_t>(frame_pts);
     int64_t delay = pts - master_pts;
+    timing.raw_delay_ns = delay;
 
     if (delay < -200'000'000LL) delay = -200'000'000LL;
     if (delay > 200'000'000LL) delay = 200'000'000LL;
 
-    return delay;
+    timing.clamped_delay_ns = delay;
+    return timing;
+}
+
+int64_t AVSync::getVideoDelayNs(uint64_t frame_pts) const {
+    return getVideoTiming(frame_pts).clamped_delay_ns;
 }
 
 void AVSync::reset() {

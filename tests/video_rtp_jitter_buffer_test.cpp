@@ -14,7 +14,8 @@ std::vector<uint8_t> rtp(uint16_t sequence,
                          uint32_t timestamp,
                          bool marker,
                          const std::vector<uint8_t>& payload,
-                         size_t padding = 0) {
+                         size_t padding = 0,
+                         uint32_t ssrc = 1) {
     std::vector<uint8_t> packet(12 + payload.size() + padding, 0);
     packet[0] = static_cast<uint8_t>(0x80 | (padding ? 0x20 : 0));
     packet[1] = static_cast<uint8_t>(102 | (marker ? 0x80 : 0));
@@ -24,7 +25,10 @@ std::vector<uint8_t> rtp(uint16_t sequence,
     packet[5] = static_cast<uint8_t>(timestamp >> 16);
     packet[6] = static_cast<uint8_t>(timestamp >> 8);
     packet[7] = static_cast<uint8_t>(timestamp);
-    packet[11] = 1;
+    packet[8] = static_cast<uint8_t>(ssrc >> 24);
+    packet[9] = static_cast<uint8_t>(ssrc >> 16);
+    packet[10] = static_cast<uint8_t>(ssrc >> 8);
+    packet[11] = static_cast<uint8_t>(ssrc);
     std::memcpy(packet.data() + 12, payload.data(), payload.size());
     if (padding) packet.back() = static_cast<uint8_t>(padding);
     return packet;
@@ -78,7 +82,7 @@ void test_reorders_retransmitted_fu_a() {
     assert(h.jitter.stats().missing_packets == 0);
 }
 
-void test_timeout_gates_p_frames_until_real_idr() {
+void test_repeated_timeouts_gate_p_frames_until_real_idr() {
     Harness h;
     h.jitter.setHoldMs(50);
     openWithIdr(h, 100, 1000);
@@ -87,16 +91,86 @@ void test_timeout_gates_p_frames_until_real_idr() {
     h.push(rtp(103, 2000, true, {0x7c, 0x41, 0x33}), 2);
     h.push(rtp(104, 3000, true, {0x61, 0x44}), 60);
 
-    assert(h.frames.size() == 1);
-    assert(h.jitter.waitingForKeyframe());
-    assert(h.decoder_resets == 1);
-    assert(h.jitter.stats().corrupt_frames == 1);
-
-    h.push(rtp(105, 4000, true, {0x67, 0x42}), 61);
-    assert(h.frames.size() == 1);
-    h.push(rtp(106, 5000, true, {0x65, 0x55}), 62);
     assert(h.frames.size() == 2);
     assert(!h.jitter.waitingForKeyframe());
+    assert(h.decoder_resets == 0);
+
+    h.push(rtp(105, 4000, false, {0x7c, 0x81, 0x55}), 61);
+    h.push(rtp(107, 4000, true, {0x7c, 0x41, 0x77}), 62);
+    h.push(rtp(108, 5000, true, {0x61, 0x88}), 120);
+
+    assert(h.frames.size() == 2);
+    assert(h.jitter.waitingForKeyframe());
+    assert(h.decoder_resets == 1);
+    assert(h.jitter.stats().corrupt_frames == 2);
+
+    h.push(rtp(109, 6000, true, {0x67, 0x42}), 121);
+    assert(h.frames.size() == 2);
+    h.push(rtp(110, 7000, true, {0x65, 0x55}), 122);
+    assert(h.frames.size() == 3);
+    assert(!h.jitter.waitingForKeyframe());
+}
+
+void test_active_frame_progress_extends_idle_deadline() {
+    Harness h;
+    h.jitter.setHoldMs(50);
+    openWithIdr(h, 120, 1000);
+
+    h.push(rtp(121, 2000, false, {0x7c, 0x81, 0x11}), 1);
+    h.push(rtp(122, 2000, false, {0x7c, 0x01, 0x22}), 40);
+    h.push(rtp(123, 2000, false, {0x7c, 0x01, 0x33}), 80);
+    assert(h.jitter.stats().corrupt_frames == 0);
+    assert(h.frames.size() == 1);
+
+    h.push(rtp(124, 2000, true, {0x7c, 0x41, 0x44}), 120);
+    assert(h.jitter.stats().corrupt_frames == 0);
+    assert(h.frames.size() == 2);
+    assert(!h.jitter.waitingForKeyframe());
+}
+
+void test_active_frame_still_obeys_hard_deadline() {
+    Harness h;
+    h.jitter.setHoldMs(50);
+    openWithIdr(h, 140, 1000);
+
+    h.push(rtp(141, 2000, false, {0x7c, 0x81, 0x11}), 1);
+    for (uint16_t sequence = 142; sequence <= 148; ++sequence) {
+        h.push(rtp(sequence, 2000, false, {0x7c, 0x01, 0x22}),
+               40 * (sequence - 140));
+    }
+
+    assert(h.jitter.stats().corrupt_frames == 1);
+    assert(h.jitter.stats().buffered_frames == 0);
+}
+
+void test_isolated_p_frame_timeout_uses_soft_recovery() {
+    Harness h;
+    h.jitter.setHoldMs(50);
+    openWithIdr(h, 160, 1000);
+
+    h.push(rtp(161, 2000, false, {0x7c, 0x81, 0x11}), 1);
+    h.push(rtp(162, 3000, true, {0x61, 0x22}), 60);
+
+    assert(h.jitter.stats().corrupt_frames == 1);
+    assert(h.frames.size() == 2);
+    assert(!h.jitter.waitingForKeyframe());
+    assert(h.recovery_requests == 1);
+    assert(h.decoder_resets == 0);
+}
+
+void test_incomplete_idr_uses_hard_recovery() {
+    Harness h;
+    h.jitter.setHoldMs(50);
+    openWithIdr(h, 180, 1000);
+
+    h.push(rtp(181, 2000, false, {0x7c, 0x85, 0x11}), 1);
+    h.push(rtp(182, 3000, true, {0x61, 0x22}), 60);
+
+    assert(h.jitter.stats().corrupt_frames == 1);
+    assert(h.frames.size() == 1);
+    assert(h.jitter.waitingForKeyframe());
+    assert(h.recovery_requests == 1);
+    assert(h.decoder_resets == 1);
 }
 
 void test_padding_consumes_sequence_without_false_loss() {
@@ -123,18 +197,38 @@ void test_late_packet_repairs_receiver_report_loss() {
     assert(after.cumulative_lost == 0);
 }
 
+void test_tracks_arrival_gap_sequence_jump_and_ssrc_change() {
+    Harness h;
+    h.push(rtp(10, 1000, true, {0x65, 0x11}, 0, 0x11223344), 100);
+    h.push(rtp(12, 2000, true, {0x61, 0x22}, 0, 0x11223344), 150);
+
+    auto stats = h.jitter.stats();
+    assert(stats.last_gap_packets == 1);
+    assert(stats.last_arrival_gap_ms == 50);
+    assert(stats.max_arrival_gap_ms == 50);
+    assert(stats.ssrc == 0x11223344);
+    assert(stats.ssrc_changes == 0);
+
+    h.push(rtp(13, 3000, true, {0x65, 0x33}, 0, 0xaabbccdd), 180);
+    stats = h.jitter.stats();
+    assert(stats.last_arrival_gap_ms == 30);
+    assert(stats.max_arrival_gap_ms == 50);
+    assert(stats.ssrc == 0xaabbccdd);
+    assert(stats.ssrc_changes == 1);
+}
+
 void test_stale_retransmission_does_not_clear_recovery_state() {
     Harness h;
     h.jitter.setHoldMs(50);
     openWithIdr(h, 320, 1000);
 
-    h.push(rtp(321, 2000, false, {0x7c, 0x81, 0x11}), 1);
-    h.push(rtp(323, 2000, true, {0x7c, 0x41, 0x33}), 2);
+    h.push(rtp(321, 2000, false, {0x7c, 0x85, 0x11}), 1);
+    h.push(rtp(323, 2000, true, {0x7c, 0x45, 0x33}), 2);
     h.push(rtp(324, 3000, true, {0x61, 0x44}), 60);
     assert(h.jitter.waitingForKeyframe());
     const auto overflow_before = h.jitter.stats().overflow_frames;
 
-    h.push(rtp(322, 2000, false, {0x7c, 0x01, 0x22}), 61);
+    h.push(rtp(322, 2000, false, {0x7c, 0x05, 0x22}), 61);
     assert(h.jitter.stats().overflow_frames == overflow_before);
     assert(h.jitter.stats().missing_packets == 0);
 
@@ -148,7 +242,7 @@ void test_missing_marker_does_not_block_later_idr() {
     h.jitter.setHoldMs(50);
     openWithIdr(h, 340, 1000);
 
-    h.push(rtp(341, 2000, false, {0x61, 0x11}), 1);
+    h.push(rtp(341, 2000, false, {0x65, 0x11}), 1);
     h.push(rtp(343, 3000, true, {0x61, 0x22}), 60);
     assert(h.jitter.waitingForKeyframe());
     assert(h.frames.size() == 1);
@@ -270,9 +364,14 @@ void test_large_frame_defers_assembly_and_reuses_payload_storage() {
 
 int main() {
     test_reorders_retransmitted_fu_a();
-    test_timeout_gates_p_frames_until_real_idr();
+    test_repeated_timeouts_gate_p_frames_until_real_idr();
+    test_active_frame_progress_extends_idle_deadline();
+    test_active_frame_still_obeys_hard_deadline();
+    test_isolated_p_frame_timeout_uses_soft_recovery();
+    test_incomplete_idr_uses_hard_recovery();
     test_padding_consumes_sequence_without_false_loss();
     test_late_packet_repairs_receiver_report_loss();
+    test_tracks_arrival_gap_sequence_jump_and_ssrc_change();
     test_stale_retransmission_does_not_clear_recovery_state();
     test_missing_marker_does_not_block_later_idr();
     test_sequence_wrap_reorders_retransmission();

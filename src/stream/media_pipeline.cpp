@@ -255,7 +255,9 @@ void MediaPipeline::markVideoRecovery(const char* reason) {
     }
 }
 
-void MediaPipeline::requestVideoRecovery(const char* reason) {
+void MediaPipeline::requestVideoRecovery(const char* reason,
+                                         bool reset_decoder) {
+    if (reset_decoder) video_decoder_reset_pending_ = true;
     const bool was_pending = video_recovery_request_.exchange(true);
     if (!was_pending) {
         lunar::diagnosticLog("media", "video keyframe requested reason=%s",
@@ -271,6 +273,9 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
     QueuedVideoPacket packet;
     packet.timestamp = timestamp;
     packet.generation = generation_.load();
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    packet.enqueued_at = std::chrono::steady_clock::now();
+#endif
     try {
         packet.data.assign(data, data + len);
     } catch (...) {
@@ -285,22 +290,36 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
             (video_queue_.size() >= kMaxVideoQueuePackets ||
              queued_video_bytes_ + packet.data.size() > kMaxVideoQueueBytes)) {
             const size_t dropped_packets = video_queue_.size();
+            const size_t dropped_bytes = queued_video_bytes_;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+            recordVideoQueueLocked();
+#endif
             video_queue_.clear();
             queued_video_bytes_ = 0;
             markVideoRecovery("video queue overflow");
-            for (size_t i = 0; i < dropped_packets; ++i) {
-                if (perf_) perf_->recordVideoFrameDrop();
+            if (perf_) {
+                perf_->recordVideoQueueDrops(static_cast<uint32_t>(dropped_packets));
+                perf_->logVideoDropDiagnostic(
+                    "queue_overflow",
+                    "encoded_video_queue_limit",
+                    0,
+                    0,
+                    timestamp,
+                    len);
             }
             if (shouldLogMediaQueue()) {
                 lunar::diagnosticLog("media",
                                      "video queue reset dropped=%zu packets=%zu bytes=%zu",
                                      dropped_packets,
-                                     video_queue_.size(),
-                                     queued_video_bytes_);
+                                     dropped_packets,
+                                     dropped_bytes);
             }
         }
         video_queue_.push_back(std::move(packet));
         queued_video_bytes_ += video_queue_.back().data.size();
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+        recordVideoQueueLocked();
+#endif
         if (shouldLogMediaQueue()) {
             lunar::diagnosticLog("media",
                                  "video queue push len=%zu packets=%zu bytes=%zu",
@@ -312,6 +331,21 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
     video_queue_cv_.notify_one();
     return true;
 }
+
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+void MediaPipeline::recordVideoQueueLocked() {
+    if (!perf_) return;
+    uint32_t oldest_age_ms = 0;
+    if (!video_queue_.empty()) {
+        const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - video_queue_.front().enqueued_at).count();
+        if (age > 0) oldest_age_ms = static_cast<uint32_t>(age);
+    }
+    perf_->recordVideoQueue(static_cast<uint32_t>(video_queue_.size()),
+                            queued_video_bytes_,
+                            oldest_age_ms);
+}
+#endif
 
 bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,
                                        size_t len,
@@ -366,6 +400,9 @@ bool MediaPipeline::startWorkers(uint32_t generation) {
         video_worker_generation_ = generation;
         video_queue_.clear();
         queued_video_bytes_ = 0;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+        recordVideoQueueLocked();
+#endif
         video_recovery_request_ = false;
         video_decoder_reset_pending_ = false;
     }
@@ -422,6 +459,9 @@ void MediaPipeline::stopWorkers() {
         std::lock_guard<std::mutex> lock(video_queue_mutex_);
         video_queue_.clear();
         queued_video_bytes_ = 0;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+        recordVideoQueueLocked();
+#endif
         video_worker_generation_ = 0;
         video_worker_stop_ = false;
     }
@@ -449,6 +489,12 @@ void MediaPipeline::videoWorkerLoop() {
             packet = std::move(video_queue_.front());
             video_queue_.pop_front();
             queued_video_bytes_ -= packet.data.size();
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+            packet.queue_age_us = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - packet.enqueued_at).count());
+            recordVideoQueueLocked();
+#endif
         }
         if (video_decoder_reset_pending_.exchange(false) && video_decoder_) {
             if (!resetVideoDecoderForKeyframe()) {
@@ -514,11 +560,36 @@ void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet) {
         !isGenerationActive(packet.generation)) {
         return;
     }
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    if (perf_) {
+        perf_->recordVideoAccessUnit(packet.data.size(),
+                                     packet.timestamp,
+                                     packet.queue_age_us,
+                                     false);
+    }
+#endif
     if (video_decoder_) {
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+        const uint32_t diagnostic_events_before = perf_
+            ? perf_->dropDiagnosticEventCount()
+            : 0;
+#endif
         const bool decoded = video_decoder_->decode(packet.data.data(),
                                                     packet.data.size(),
                                                     packet.timestamp);
         if (!decoded) {
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+            if (perf_ &&
+                perf_->dropDiagnosticEventCount() == diagnostic_events_before) {
+                perf_->logVideoDropDiagnostic(
+                    "decode_recovery",
+                    "decoder_rejected_access_unit",
+                    0,
+                    0,
+                    packet.timestamp,
+                    packet.data.size());
+            }
+#endif
             markVideoRecovery("video decoder error");
             // Keep the reset on the video worker so FFmpeg/NVDEC is never
             // touched concurrently by the WebRTC pump or UI thread.
@@ -540,12 +611,34 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
         if (!isGenerationActive(generation) || !av_sync_ || !video_renderer_) return;
 
         av_sync_->updateVideoPts(frame.timestamp);
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+        const auto timing = av_sync_->getVideoTiming(frame.timestamp);
+        delay_ns = timing.clamped_delay_ns;
+        if (perf_) {
+            perf_->recordVideoTiming(timing.raw_delay_ns,
+                                     timing.clamped_delay_ns,
+                                     timing.audio_age_ms,
+                                     timing.master_pts_ns,
+                                     timing.using_audio_master);
+        }
+#else
         delay_ns = av_sync_->getVideoDelayNs(frame.timestamp);
+#endif
     }
 
     const auto action = videoSyncAction(delay_ns);
     if (action == VideoSyncAction::Drop) {
-        if (perf_) perf_->recordVideoFrameDrop();
+        if (perf_) {
+            perf_->recordVideoSyncDrop();
+            perf_->logVideoDropDiagnostic("av_sync",
+                                          "video_late_policy_drop",
+                                          0,
+                                          0,
+                                          frame.timestamp,
+                                          0,
+                                          frame.width,
+                                          frame.height);
+        }
         if (g_video_sync_logs.fetch_add(1) < kVideoSyncLogLimit) {
             lunar::diagnosticLog("media", "video sync drop lag_ns=%lld",
                                  static_cast<long long>(delay_ns));

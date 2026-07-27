@@ -239,8 +239,8 @@ void WebRtcTransport::setMediaEnabled(bool enabled) {
     }
 }
 
-PeerConnectionMediaStats WebRtcTransport::getMediaStats() const {
-    return peer_ ? peer_->getMediaStats() : PeerConnectionMediaStats{};
+webrtc::PeerMediaStats WebRtcTransport::getMediaStats() const {
+    return peer_ ? peer_->getMediaStats() : webrtc::PeerMediaStats{};
 }
 
 bool WebRtcTransport::isConnected() const {

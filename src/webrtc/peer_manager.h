@@ -21,6 +21,21 @@ struct IceCandidate {
     std::string mdns_name;    // optional mDNS hostname
 };
 
+struct PeerMediaStats : PeerConnectionMediaStats {
+    uint32_t video_rtp_nacks = 0;
+    uint32_t video_rtp_resyncs = 0;
+    uint32_t video_rtp_last_gap_packets = 0;
+    uint32_t video_rtp_ssrc = 0;
+    uint32_t video_rtp_ssrc_changes = 0;
+    uint32_t video_rtp_arrival_age_ms = 0;
+    uint32_t video_rtp_last_arrival_gap_ms = 0;
+    uint32_t video_rtp_max_arrival_gap_ms = 0;
+    uint32_t video_jitter_buffered_packets = 0;
+    uint32_t video_jitter_buffered_frames = 0;
+    uint32_t video_jitter_buffered_bytes = 0;
+    bool video_waiting_keyframe = true;
+};
+
 struct PeerCallbacks {
     using MediaFrameCallback =
         std::function<void(const uint8_t*, size_t, uint16_t, uint64_t)>;
@@ -69,7 +84,7 @@ public:
     bool sendReceiverFeedback(uint32_t bitrate_bps);
     bool isDataChannelReady() const;
     void setMediaEnabled(bool enabled);
-    PeerConnectionMediaStats getMediaStats() const;
+    PeerMediaStats getMediaStats() const;
 
     // Connection
     bool isConnected() const;

@@ -25,6 +25,9 @@ bool timestampNewer(uint32_t left, uint32_t right) {
 struct ParsedRtp {
     uint16_t sequence = 0;
     uint32_t timestamp = 0;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    uint32_t ssrc = 0;
+#endif
     bool marker = false;
     const uint8_t* payload = nullptr;
     size_t payload_size = 0;
@@ -61,6 +64,13 @@ bool parseRtp(const uint8_t* packet, size_t size, ParsedRtp& parsed) {
         (static_cast<uint32_t>(packet[5]) << 16) |
         (static_cast<uint32_t>(packet[6]) << 8) |
         packet[7];
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    parsed.ssrc =
+        (static_cast<uint32_t>(packet[8]) << 24) |
+        (static_cast<uint32_t>(packet[9]) << 16) |
+        (static_cast<uint32_t>(packet[10]) << 8) |
+        packet[11];
+#endif
     parsed.marker = (packet[1] & 0x80) != 0;
     parsed.payload = packet + offset;
     parsed.payload_size = payload_size;
@@ -196,6 +206,7 @@ struct VideoRtpJitterBuffer::Impl {
     struct Frame {
         uint32_t timestamp = 0;
         uint64_t first_seen_ms = 0;
+        uint64_t last_progress_ms = 0;
         bool marker_seen = false;
         std::vector<Packet> packets;
         std::vector<uint8_t> payload_storage;
@@ -203,6 +214,7 @@ struct VideoRtpJitterBuffer::Impl {
 
     enum class AssembleResult {
         Complete,
+        CompleteDiscontinuous,
         Incomplete,
         Invalid,
         Overflow,
@@ -235,6 +247,12 @@ struct VideoRtpJitterBuffer::Impl {
 
     bool recovery_notified = false;
     uint64_t last_recovery_notify_ms = 0;
+    bool soft_recovery_active = false;
+    uint64_t last_soft_loss_ms = 0;
+    uint32_t soft_losses_in_window = 0;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    bool have_ssrc = false;
+#endif
 
     VideoRtpJitterStats counters;
 
@@ -261,6 +279,12 @@ struct VideoRtpJitterBuffer::Impl {
         last_consumed_sequence = 0;
         recovery_notified = false;
         last_recovery_notify_ms = 0;
+        soft_recovery_active = false;
+        last_soft_loss_ms = 0;
+        soft_losses_in_window = 0;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+        have_ssrc = false;
+#endif
         counters = {};
     }
 
@@ -344,6 +368,9 @@ struct VideoRtpJitterBuffer::Impl {
             unique_received++;
             if (delta > 1) {
                 counters.sequence_gaps++;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+                counters.last_gap_packets = delta - 1;
+#endif
                 sendNacks(previous_highest + 1, extended, nack);
             }
         } else {
@@ -372,6 +399,7 @@ struct VideoRtpJitterBuffer::Impl {
         Frame frame;
         frame.timestamp = timestamp;
         frame.first_seen_ms = now_ms;
+        frame.last_progress_ms = now_ms;
         auto position = frames.begin();
         while (position != frames.end() &&
                timestampNewer(timestamp, position->timestamp)) {
@@ -392,6 +420,54 @@ struct VideoRtpJitterBuffer::Impl {
         return packet.payload_size > 0
             ? frame.payload_storage.data() + packet.payload_offset
             : nullptr;
+    }
+
+    static bool packetMayContainIdr(const uint8_t* payload, size_t size) {
+        if (!payload || size == 0) return false;
+        const uint8_t type = naluType(payload, size);
+        if (type == 5) return true;
+        if (type == 28) {
+            return size >= 2 && (payload[1] & 0x1f) == 5;
+        }
+        if (type != 24) return false;
+
+        size_t position = 1;
+        while (position + 2 <= size) {
+            const size_t nalu_size =
+                (static_cast<size_t>(payload[position]) << 8) |
+                payload[position + 1];
+            position += 2;
+            if (nalu_size == 0 || nalu_size > size - position) return false;
+            if (naluType(payload + position, nalu_size) == 5) return true;
+            position += nalu_size;
+        }
+        return false;
+    }
+
+    static bool frameMayContainIdr(const Frame& frame) {
+        for (const auto& packet : frame.packets) {
+            if (packetMayContainIdr(packetPayload(frame, packet),
+                                    packet.payload_size)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    static bool frameHasPartitionHead(const Frame& frame) {
+        for (const auto& packet : frame.packets) {
+            if (packet.payload_size > 0) {
+                return isPartitionHead(packetPayload(frame, packet),
+                                       packet.payload_size);
+            }
+        }
+        return false;
+    }
+#endif
+
+    static uint64_t elapsedMs(uint64_t now_ms, uint64_t then_ms) {
+        return now_ms >= then_ms ? now_ms - then_ms : 0;
     }
 
     void notifyRecovery(const RecoveryCallback& recovery,
@@ -416,11 +492,33 @@ struct VideoRtpJitterBuffer::Impl {
                        const char*) {
         const bool was_waiting = waiting_keyframe;
         waiting_keyframe = true;
+        soft_recovery_active = false;
+        soft_losses_in_window = 0;
         if (!was_waiting) {
             notifyRecovery(recovery, true, now_ms, true);
         } else {
             notifyRecovery(recovery, false, now_ms, false);
         }
+    }
+
+    void requestSoftRecovery(const RecoveryCallback& recovery,
+                             uint64_t now_ms) {
+        const bool first_request = !soft_recovery_active;
+        soft_recovery_active = true;
+        notifyRecovery(recovery, false, now_ms, first_request);
+    }
+
+    bool softLossRequiresHardRecovery(uint64_t now_ms) {
+        constexpr uint64_t kSoftLossWindowMs = 500;
+        constexpr uint32_t kSoftLossLimit = 2;
+        if (last_soft_loss_ms > 0 &&
+            elapsedMs(now_ms, last_soft_loss_ms) <= kSoftLossWindowMs) {
+            soft_losses_in_window++;
+        } else {
+            soft_losses_in_window = 1;
+        }
+        last_soft_loss_ms = now_ms;
+        return soft_losses_in_window >= kSoftLossLimit;
     }
 
     bool sequenceRangeReceived(uint32_t first, uint32_t last) const {
@@ -489,7 +587,7 @@ struct VideoRtpJitterBuffer::Impl {
             !sequenceRangeReceived(last_consumed_sequence + 1,
                                    first_media->extended_sequence - 1) &&
             !containsIdr(access_unit)) {
-            return AssembleResult::Incomplete;
+            return AssembleResult::CompleteDiscontinuous;
         }
         marker_sequence = marker->sequence;
         marker_extended_sequence = marker->extended_sequence;
@@ -509,22 +607,34 @@ struct VideoRtpJitterBuffer::Impl {
                 ? assemble(front, access_unit, marker_sequence,
                            marker_extended_sequence)
                 : AssembleResult::Incomplete;
-            if (result == AssembleResult::Complete) {
+            if (result == AssembleResult::Complete ||
+                result == AssembleResult::CompleteDiscontinuous) {
                 const uint32_t timestamp = front.timestamp;
+                const bool idr = containsIdr(access_unit);
                 last_timestamp = timestamp;
                 have_last_timestamp = true;
                 last_consumed_sequence = marker_extended_sequence;
                 have_last_consumed_sequence = true;
                 removeFrontFrame();
 
-                if (waiting_keyframe && !containsIdr(access_unit)) {
+                if (waiting_keyframe && !idr) {
                     counters.resyncs++;
                     notifyRecovery(recovery, false, now_ms, false);
                     continue;
                 }
 
                 waiting_keyframe = false;
-                recovery_notified = false;
+                if (idr) {
+                    soft_recovery_active = false;
+                    soft_losses_in_window = 0;
+                    recovery_notified = false;
+                } else if (result == AssembleResult::CompleteDiscontinuous) {
+                    requestSoftRecovery(recovery, now_ms);
+                } else if (soft_recovery_active) {
+                    notifyRecovery(recovery, false, now_ms, false);
+                } else {
+                    recovery_notified = false;
+                }
                 counters.frames++;
                 counters.max_frame_bytes = std::max(
                     counters.max_frame_bytes,
@@ -539,9 +649,19 @@ struct VideoRtpJitterBuffer::Impl {
                 continue;
             }
 
+            const uint64_t frame_age_ms = elapsedMs(now_ms, front.first_seen_ms);
+            const uint64_t idle_age_ms = elapsedMs(now_ms, front.last_progress_ms);
+            const bool idle_timeout = idle_age_ms >= hold_ms;
+            const bool hard_timeout = frame_age_ms >= kMaxFrameHoldMs;
             if (result == AssembleResult::Invalid ||
-                result == AssembleResult::Overflow ||
-                now_ms - front.first_seen_ms >= hold_ms) {
+                result == AssembleResult::Overflow || idle_timeout ||
+                hard_timeout) {
+                const bool contains_idr = frameMayContainIdr(front);
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+                const bool marker_seen = front.marker_seen;
+                const bool partition_head_seen = frameHasPartitionHead(front);
+                const size_t frame_packets = front.packets.size();
+#endif
                 uint32_t last_sequence = 0;
                 bool have_last_sequence = false;
                 for (const auto& packet : front.packets) {
@@ -560,7 +680,38 @@ struct VideoRtpJitterBuffer::Impl {
                 removeFrontFrame();
                 counters.corrupt_frames++;
                 if (result == AssembleResult::Overflow) counters.overflow_frames++;
-                enterRecovery(recovery, now_ms, "incomplete frame");
+                bool hard_recovery = result == AssembleResult::Invalid ||
+                    result == AssembleResult::Overflow || hard_timeout ||
+                    waiting_keyframe || contains_idr;
+                if (!hard_recovery && idle_timeout) {
+                    hard_recovery = softLossRequiresHardRecovery(now_ms);
+                }
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+                const char* reject_reason = result == AssembleResult::Invalid
+                    ? "invalid_h264"
+                    : result == AssembleResult::Overflow
+                        ? "access_unit_overflow"
+                        : hard_timeout ? "hard_timeout" : "idle_timeout";
+                lunar::dropDiagnosticLog(
+                    "rtp-jitter",
+                    "reject_reason=%s hard_recovery=%d frame_age_ms=%llu "
+                    "idle_age_ms=%llu hold_ms=%llu packets=%zu marker_seen=%d "
+                    "partition_head_seen=%d contains_idr=%d",
+                    reject_reason,
+                    hard_recovery ? 1 : 0,
+                    static_cast<unsigned long long>(frame_age_ms),
+                    static_cast<unsigned long long>(idle_age_ms),
+                    static_cast<unsigned long long>(hold_ms),
+                    frame_packets,
+                    marker_seen ? 1 : 0,
+                    partition_head_seen ? 1 : 0,
+                    contains_idr ? 1 : 0);
+#endif
+                if (hard_recovery) {
+                    enterRecovery(recovery, now_ms, "incomplete frame");
+                } else {
+                    requestSoftRecovery(recovery, now_ms);
+                }
                 continue;
             }
             break;
@@ -582,6 +733,22 @@ struct VideoRtpJitterBuffer::Impl {
                  const RecoveryCallback& recovery) {
         ParsedRtp parsed;
         if (!parseRtp(packet, size, parsed)) return;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+        if (counters.last_arrival_ms > 0 && now_ms >= counters.last_arrival_ms) {
+            counters.last_arrival_gap_ms = now_ms - counters.last_arrival_ms;
+            counters.max_arrival_gap_ms = std::max(
+                counters.max_arrival_gap_ms,
+                counters.last_arrival_gap_ms);
+        }
+        counters.last_arrival_ms = now_ms;
+        if (!have_ssrc) {
+            have_ssrc = true;
+            counters.ssrc = parsed.ssrc;
+        } else if (parsed.ssrc != counters.ssrc) {
+            counters.ssrc = parsed.ssrc;
+            counters.ssrc_changes++;
+        }
+#endif
         counters.packets++;
 
         const SequenceUpdate sequence = noteSequence(parsed.sequence, nack);
@@ -640,6 +807,7 @@ struct VideoRtpJitterBuffer::Impl {
         frame->packets.insert(position, buffered);
         frame->marker_seen = frame->marker_seen ||
                              (parsed.marker && parsed.payload_size > 0);
+        if (parsed.payload_size > 0) frame->last_progress_ms = now_ms;
         buffered_packets++;
         buffered_bytes += parsed.payload_size;
         drain(now_ms, emit, recovery);

@@ -496,10 +496,11 @@ void PeerManager::setMediaEnabled(bool enabled) {
     }
 }
 
-PeerConnectionMediaStats PeerManager::getMediaStats() const {
-    PeerConnectionMediaStats stats = {};
+PeerMediaStats PeerManager::getMediaStats() const {
+    PeerMediaStats stats = {};
     if (pc_) {
-        peer_connection_get_media_stats(pc_, &stats);
+        peer_connection_get_media_stats(
+            pc_, static_cast<PeerConnectionMediaStats*>(&stats));
     }
     const auto video = video_jitter_.stats();
     stats.video_rtp_packets = video.packets;
@@ -511,6 +512,30 @@ PeerConnectionMediaStats PeerManager::getMediaStats() const {
     stats.video_h264_overflow_frames = video.overflow_frames;
     stats.video_h264_max_frame_bytes = video.max_frame_bytes;
     stats.video_rtp_highest_seq_ext = video.highest_sequence;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    stats.video_rtp_nacks = video.nacks;
+    stats.video_rtp_resyncs = video.resyncs;
+    stats.video_rtp_last_gap_packets = video.last_gap_packets;
+    stats.video_rtp_ssrc = video.ssrc;
+    stats.video_rtp_ssrc_changes = video.ssrc_changes;
+    const uint64_t media_now_ms = elapsedNs(media_clock_start_) / 1000000u;
+    stats.video_rtp_arrival_age_ms = video.last_arrival_ms > 0 &&
+            media_now_ms >= video.last_arrival_ms
+        ? static_cast<uint32_t>(std::min<uint64_t>(
+              UINT32_MAX, media_now_ms - video.last_arrival_ms))
+        : 0;
+    stats.video_rtp_last_arrival_gap_ms = static_cast<uint32_t>(
+        std::min<uint64_t>(UINT32_MAX, video.last_arrival_gap_ms));
+    stats.video_rtp_max_arrival_gap_ms = static_cast<uint32_t>(
+        std::min<uint64_t>(UINT32_MAX, video.max_arrival_gap_ms));
+    stats.video_jitter_buffered_packets = static_cast<uint32_t>(
+        std::min<size_t>(UINT32_MAX, video.buffered_packets));
+    stats.video_jitter_buffered_frames = static_cast<uint32_t>(
+        std::min<size_t>(UINT32_MAX, video.buffered_frames));
+    stats.video_jitter_buffered_bytes = static_cast<uint32_t>(
+        std::min<size_t>(UINT32_MAX, video.buffered_bytes));
+    stats.video_waiting_keyframe = video_jitter_.waitingForKeyframe();
+#endif
     return stats;
 }
 
@@ -551,7 +576,7 @@ void PeerManager::processEvents() {
         peer_connection_get_media_stats(pc_, &network_stats);
         if (network_stats.ice_rtt_ms > 0) {
             const uint64_t hold_ms = std::max<uint64_t>(
-                60,
+                VideoRtpJitterBuffer::kDefaultHoldMs,
                 std::min<uint64_t>(180,
                                    static_cast<uint64_t>(network_stats.ice_rtt_ms) * 2 + 20));
             video_jitter_.setHoldMs(hold_ms);

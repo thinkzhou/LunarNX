@@ -69,7 +69,8 @@ def main() -> None:
             "bitrate and decode time must use interval deltas instead of lifetime averages")
     require("getStreamWidth()" in stream_view and "getStreamHeight()" in stream_view,
             "HUD resolution must include actual width and height")
-    require(media_pipeline.count("recordVideoFrameDrop()") >= 2 and
+    require("recordVideoQueueDrops(" in media_pipeline and
+            "recordVideoSyncDrop()" in media_pipeline and
             "VideoSyncAction::Drop" in media_pipeline,
             "frame-drop stats must include queue pressure and AV-sync drops")
 

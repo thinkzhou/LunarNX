@@ -6,6 +6,15 @@
 
 namespace lunar::stream {
 
+struct AVSyncTiming {
+    int64_t raw_delay_ns = 0;
+    int64_t clamped_delay_ns = 0;
+    uint64_t frame_pts_ns = 0;
+    uint64_t master_pts_ns = 0;
+    int64_t audio_age_ms = -1;
+    bool using_audio_master = false;
+};
+
 class AVSync {
 public:
     AVSync();
@@ -14,6 +23,7 @@ public:
     void start();
     void updateVideoPts(uint64_t pts_ns);
     void updateAudioPts(uint64_t pts_ns);
+    AVSyncTiming getVideoTiming(uint64_t frame_pts) const;
     int64_t getVideoDelayNs(uint64_t frame_pts) const;
     void reset();
 

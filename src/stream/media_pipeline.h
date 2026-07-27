@@ -1,9 +1,13 @@
 #pragma once
 
 #include "../common.h"
+#include "../diagnostics.h"
 #include "audio_packet_reorder.h"
 #include "stream_backend_provider.h"
 #include <atomic>
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+#include <chrono>
+#endif
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -94,10 +98,10 @@ public:
     // after a throttled control/PLI request succeeds.
     bool hasVideoRecoveryRequest() const { return video_recovery_request_.load(); }
     void clearVideoRecoveryRequest() { video_recovery_request_ = false; }
-    // Ask the transport for an IDR without destroying the active decoder.
-    // Packet-loss recovery already gates non-IDR access units in the jitter
-    // buffer; flushing here would blank the zero-copy surface on every loss.
-    void requestVideoRecovery(const char* reason);
+    // Ask the transport for an IDR. Isolated packet loss keeps the active
+    // decoder; hard jitter recovery resets it on the video worker before the
+    // replacement IDR is decoded.
+    void requestVideoRecovery(const char* reason, bool reset_decoder = false);
     void presentVideoFrame();
 
     bool isRunning() const { return running_.load(); }
@@ -106,6 +110,10 @@ private:
     struct QueuedVideoPacket {
         uint64_t timestamp = 0;
         uint32_t generation = 0;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+        std::chrono::steady_clock::time_point enqueued_at;
+        uint64_t queue_age_us = 0;
+#endif
         std::vector<uint8_t> data;
     };
 
@@ -121,6 +129,9 @@ private:
     void processVideoPacket(const QueuedVideoPacket& packet);
     bool resetVideoDecoderForKeyframe();
     void markVideoRecovery(const char* reason);
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    void recordVideoQueueLocked();
+#endif
 
     bool isGenerationActive(uint32_t generation) const;
     void handleVideoFrame(const VideoFrame& frame, uint32_t generation);

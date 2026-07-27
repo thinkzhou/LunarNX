@@ -95,6 +95,41 @@ struct H264AccessUnitInfo {
     std::string nal_types;
 };
 
+void logDecodeDrop(PerfStats* perf,
+                   const char* reason,
+                   int error_code,
+                   uint32_t error_flags,
+                   uint64_t timestamp,
+                   size_t access_unit_bytes,
+                   const H264AccessUnitInfo* au = nullptr,
+                   int width = 0,
+                   int height = 0) {
+    if (perf) {
+        perf->logVideoDropDiagnostic(
+            "decode_error",
+            reason,
+            error_code,
+            error_flags,
+            timestamp,
+            access_unit_bytes,
+            width,
+            height,
+            au && !au->nal_types.empty() ? au->nal_types.c_str() : nullptr,
+            au && au->has_idr);
+        return;
+    }
+    lunar::dropDiagnosticLog("video-drop",
+                             "source=decode_error reason=%s err=%d flags=0x%x "
+                             "pts_ns=%llu au_bytes=%zu frame=%dx%d",
+                             reason ? reason : "unknown",
+                             error_code,
+                             error_flags,
+                             static_cast<unsigned long long>(timestamp),
+                             access_unit_bytes,
+                             width,
+                             height);
+}
+
 bool findStartCode(const uint8_t* data,
                    size_t len,
                    size_t from,
@@ -326,6 +361,15 @@ bool VideoDecoder::deliverFrame(AVFrame* frame,
 
     if (frame->decode_error_flags != 0) {
         if (perf_) perf_->recordVideoDecodeError();
+        logDecodeDrop(perf_,
+                      "decoded_frame_corrupt_flags",
+                      0,
+                      frame->decode_error_flags,
+                      timestamp,
+                      0,
+                      nullptr,
+                      frame->width,
+                      frame->height);
         lunar::diagnosticLog("video",
                              "drop corrupt decoded frame index=%d flags=0x%x",
                              log_index,
@@ -342,6 +386,8 @@ bool VideoDecoder::deliverFrame(AVFrame* frame,
         AVFrame* sw_frame = av_frame_alloc();
         if (!sw_frame) {
             if (perf_) perf_->recordVideoDecodeError();
+            logDecodeDrop(perf_, "nvdec_transfer_frame_alloc", 0, 0,
+                          timestamp, 0, nullptr, frame->width, frame->height);
             lunar::diagnosticLog("video", "NVDEC transfer alloc failed index=%d", log_index);
             av_frame_free(&frame);
             return false;
@@ -352,6 +398,8 @@ bool VideoDecoder::deliverFrame(AVFrame* frame,
         const auto transfer_end = std::chrono::high_resolution_clock::now();
         if (transfer_ret < 0) {
             if (perf_) perf_->recordVideoDecodeError();
+            logDecodeDrop(perf_, "nvdec_transfer_failed", transfer_ret, 0,
+                          timestamp, 0, nullptr, frame->width, frame->height);
             logVideoDecodeError("NVDEC av_hwframe_transfer_data failed",
                                 transfer_ret,
                                 h264_error_log_count_);
@@ -421,6 +469,13 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
     const int log_index = g_video_decode_logs.fetch_add(1);
     const bool log = shouldLogVideoDecode(log_index);
     const auto au = inspectH264AccessUnit(data, len);
+    if (perf_) {
+        perf_->recordVideoAccessUnit(
+            len,
+            timestamp,
+            perf_->lastVideoAccessUnitQueueAgeUs(),
+            au.has_idr);
+    }
     if (log) {
         lunar::diagnosticLog("video",
                              "video decode begin index=%d len=%zu ts=%llu nal=%s sps=%d pps=%d idr=%d ready=%d",
@@ -462,12 +517,16 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
         AVPacket* pkt = av_packet_alloc();
         if (!pkt) {
             if (perf_) perf_->recordVideoDecodeError();
+            logDecodeDrop(perf_, "hardware_packet_alloc", 0, 0,
+                          timestamp, len, &au, ctx->width, ctx->height);
             lunar::diagnosticLog("video", "hardware packet alloc failed index=%d", log_index);
             return false;
         }
         int packet_ret = av_new_packet(pkt, static_cast<int>(len));
         if (packet_ret < 0) {
             if (perf_) perf_->recordVideoDecodeError();
+            logDecodeDrop(perf_, "hardware_packet_buffer_alloc", packet_ret, 0,
+                          timestamp, len, &au, ctx->width, ctx->height);
             logVideoDecodeError("hardware av_new_packet failed",
                                 packet_ret,
                                 h264_error_log_count_);
@@ -493,6 +552,8 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                 AVFrame* frame = av_frame_alloc();
                 if (!frame) {
                     decode_ok = false;
+                    logDecodeDrop(perf_, "hardware_receive_frame_alloc", 0, 0,
+                                  timestamp, len, &au, ctx->width, ctx->height);
                     break;
                 }
                 auto t0 = std::chrono::high_resolution_clock::now();
@@ -522,6 +583,9 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                                             h264_error_log_count_);
                     }
                     if (receive_ret != AVERROR(EAGAIN) && receive_ret != AVERROR_EOF) {
+                        logDecodeDrop(perf_, "hardware_receive_frame_failed",
+                                      receive_ret, 0, timestamp, len, &au,
+                                      ctx->width, ctx->height);
                         decode_ok = false;
                     }
                     av_frame_free(&frame);
@@ -556,6 +620,8 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
         receive_available();
         if (ret < 0 && decoded_frames == 0) {
             if (perf_) perf_->recordVideoDecodeError();
+            logDecodeDrop(perf_, "hardware_send_packet_rejected", ret, 0,
+                          timestamp, len, &au, ctx->width, ctx->height);
             if (h264_error_log_count_ < kVideoErrorLogLimit) {
                 lunar::diagnosticLog("video",
                                      "hardware avcodec_send_packet rejected index=%d len=%zu ts=%llu nal=%s sps=%d pps=%d idr=%d",
@@ -602,6 +668,8 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                                        p_data, p_size, 0, 0, 0);
         if (parsed < 0) {
             if (perf_) perf_->recordVideoDecodeError();
+            logDecodeDrop(perf_, "software_parser_failed", parsed, 0,
+                          timestamp, len, &au, ctx->width, ctx->height);
             logVideoDecodeError("av_parser_parse2 failed", parsed, h264_error_log_count_);
             return false;
         }
@@ -631,6 +699,8 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
             if (ret < 0) {
                 decode_ok = false;
                 if (perf_) perf_->recordVideoDecodeError();
+                logDecodeDrop(perf_, "software_send_packet_rejected", ret, 0,
+                              timestamp, len, &au, ctx->width, ctx->height);
                 if (h264_error_log_count_ < kVideoErrorLogLimit) {
                     lunar::diagnosticLog("video",
                                          "avcodec_send_packet rejected index=%d len=%zu ts=%llu nal=%s sps=%d pps=%d idr=%d",
@@ -672,8 +742,13 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                         decode_ok = false;
                     }
                 } else {
+                    if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
+                        if (log && perf_) perf_->recordVideoDecodeError();
+                        logDecodeDrop(perf_, "software_receive_frame_failed", ret, 0,
+                                      timestamp, len, &au,
+                                      ctx->width, ctx->height);
+                    }
                     if (log && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
-                        if (perf_) perf_->recordVideoDecodeError();
                         logVideoDecodeError("avcodec_receive_frame failed", ret, h264_error_log_count_);
                     }
                     if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {

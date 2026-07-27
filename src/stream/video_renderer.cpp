@@ -1471,7 +1471,14 @@ void VideoRenderer::present(){
   hardwareProbeLog(frame_id, "command-ring-begin-before",
                    "slice=%zu queue_error=%d", s->next_submitted_frame,
                    s->q && s->q.isInErrorState() ? 1 : 0);
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+  const auto present_wait_start=RenderClock::now();
+#endif
   s->present_ring->begin(s->present_cb);
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+  if(perf_)perf_->recordPresentWait(
+      toMicroseconds(RenderClock::now()-present_wait_start));
+#endif
   hardwareProbeLog(frame_id, "command-ring-begin-after",
                    "slice=%zu queue_error=%d", s->next_submitted_frame,
                    s->q && s->q.isInErrorState() ? 1 : 0);
