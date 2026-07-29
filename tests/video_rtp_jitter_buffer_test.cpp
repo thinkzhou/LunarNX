@@ -222,6 +222,49 @@ void test_late_packet_repairs_receiver_report_loss() {
     assert(after.cumulative_lost == 0);
 }
 
+void test_missing_detection_totals_do_not_roll_back_after_recovery() {
+    Harness h;
+    openWithIdr(h, 340, 1000);
+
+    h.push(rtp(342, 2000, true, {0x61, 0x22}), 1);
+    auto missing = h.jitter.stats();
+    assert(missing.missing_packets == 1);
+    assert(missing.missing_packets_detected == 1);
+    assert(missing.missing_packets_recovered == 0);
+
+    h.push(rtp(341, 2000, false, {0x61, 0x11}), 2);
+    auto recovered = h.jitter.stats();
+    assert(recovered.missing_packets == 0);
+    assert(recovered.missing_packets_detected == 1);
+    assert(recovered.missing_packets_recovered == 1);
+
+    h.push(rtp(344, 3000, true, {0x61, 0x44}), 3);
+    auto second_gap = h.jitter.stats();
+    assert(second_gap.missing_packets == 1);
+    assert(second_gap.missing_packets_detected == 2);
+    assert(second_gap.missing_packets_recovered == 1);
+}
+
+void test_packet_before_initial_sequence_is_not_reported_as_recovered() {
+    Harness h;
+    openWithIdr(h, 400, 1000);
+
+    h.push(rtp(399, 1000, false, {0x67, 0x42}), 1);
+
+    const auto stats = h.jitter.stats();
+    assert(stats.missing_packets == 0);
+    assert(stats.missing_packets_detected == 0);
+    assert(stats.missing_packets_recovered == 0);
+    assert(h.jitter.receiverReport().cumulative_lost == 0);
+
+    h.push(rtp(402, 2000, true, {0x61, 0x22}), 2);
+    const auto after_gap = h.jitter.stats();
+    assert(after_gap.missing_packets == 1);
+    assert(after_gap.missing_packets_detected == 1);
+    assert(after_gap.missing_packets_recovered == 0);
+    assert(h.jitter.receiverReport().cumulative_lost == 1);
+}
+
 void test_tracks_arrival_gap_sequence_jump_and_ssrc_change() {
     Harness h;
     h.push(rtp(10, 1000, true, {0x65, 0x11}, 0, 0x11223344), 100);
@@ -398,7 +441,47 @@ void test_nacks_are_rate_limited_per_window() {
     assert(h.nacks.size() == 8);
 
     h.push(rtp(2022, 1000, false, {}, 8), 60);
-    assert(h.nacks.size() == 11);
+    assert(h.nacks.size() == 16);
+    assert(h.nacks[8].first == 2017);
+    assert(h.nacks[9].first == 2019);
+    assert(h.nacks[10].first == 2021);
+}
+
+void test_nack_retries_while_retransmission_can_meet_deadline() {
+    Harness h;
+    h.jitter.setHoldMs(80);
+    h.jitter.setNetworkRttMs(10);
+    openWithIdr(h, 2050, 1000);
+
+    h.push(rtp(2051, 2000, false, {0x7c, 0x81, 0x11}), 1);
+    h.push(rtp(2053, 2000, true, {0x7c, 0x41, 0x33}), 2);
+    assert(h.nacks.size() == 1);
+
+    h.push(rtp(2054, 3000, false, {}, 8), 25);
+    assert(h.nacks.size() == 2);
+    assert(h.nacks.back().first == 2052);
+
+    h.push(rtp(2055, 3000, false, {}, 8), 50);
+    assert(h.nacks.size() == 3);
+    assert(h.jitter.stats().nack_retries == 2);
+
+    h.push(rtp(2056, 3000, false, {}, 8), 75);
+    assert(h.nacks.size() == 3);
+}
+
+void test_nack_does_not_retry_past_high_rtt_frame_deadline() {
+    Harness h;
+    h.jitter.setHoldMs(180);
+    h.jitter.setNetworkRttMs(130);
+    openWithIdr(h, 2070, 1000);
+
+    h.push(rtp(2071, 2000, false, {0x7c, 0x81, 0x11}), 1);
+    h.push(rtp(2073, 2000, true, {0x7c, 0x41, 0x33}), 2);
+    assert(h.nacks.size() == 1);
+
+    h.push(rtp(2074, 3000, false, {}, 8), 70);
+    assert(h.nacks.size() == 1);
+    assert(h.jitter.stats().nack_retries == 0);
 }
 
 void test_log_sized_gap_is_fully_covered() {
@@ -522,6 +605,28 @@ void test_recovery_hold_does_not_increase_normal_frame_latency() {
     assert(recovery.jitter.waitingForKeyframe());
 }
 
+void test_frame_backlog_bounds_head_of_line_wait() {
+    Harness h;
+    h.jitter.setHoldMs(180);
+    h.jitter.setNetworkRttMs(60);
+    openWithIdr(h, 3500, 1000);
+
+    h.push(rtp(3501, 2000, false, {0x7c, 0x81, 0x11}), 1);
+    h.push(rtp(3503, 2000, true, {0x7c, 0x41, 0x33}), 2);
+    for (uint16_t index = 0; index < 9; ++index) {
+        h.push(rtp(static_cast<uint16_t>(3504 + index),
+                   3000 + static_cast<uint32_t>(index) * 1000,
+                   true,
+                   {0x61, static_cast<uint8_t>(index)}),
+               20 + static_cast<uint64_t>(index) * 10);
+    }
+
+    assert(h.jitter.stats().corrupt_frames == 1);
+    assert(h.jitter.stats().buffered_frames == 0);
+    assert(h.frames.size() == 10);
+    assert(!h.jitter.waitingForKeyframe());
+}
+
 } // namespace
 
 int main() {
@@ -534,6 +639,8 @@ int main() {
     test_incomplete_idr_waits_for_recovery_without_decoder_reset();
     test_padding_consumes_sequence_without_false_loss();
     test_late_packet_repairs_receiver_report_loss();
+    test_missing_detection_totals_do_not_roll_back_after_recovery();
+    test_packet_before_initial_sequence_is_not_reported_as_recovered();
     test_tracks_arrival_gap_sequence_jump_and_ssrc_change();
     test_stale_retransmission_does_not_clear_recovery_state();
     test_missing_marker_does_not_block_later_idr();
@@ -543,12 +650,15 @@ int main() {
     test_buffer_caps_are_hard_limits();
     test_large_frame_defers_assembly_and_reuses_payload_storage();
     test_nacks_are_rate_limited_per_window();
+    test_nack_retries_while_retransmission_can_meet_deadline();
+    test_nack_does_not_retry_past_high_rtt_frame_deadline();
     test_log_sized_gap_is_fully_covered();
     test_recovery_nacks_only_current_keyframe();
     test_recovery_keyframe_nacks_remain_rate_limited();
     test_recovery_discards_pending_nacks_from_old_stream();
     test_recovery_nacks_sps_pps_gap_after_idr_is_identified();
     test_recovery_hold_does_not_increase_normal_frame_latency();
+    test_frame_backlog_bounds_head_of_line_wait();
     std::cout << "Video RTP jitter buffer tests passed\n";
     return 0;
 }

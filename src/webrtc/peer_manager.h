@@ -26,7 +26,10 @@ struct IceCandidate {
 };
 
 struct PeerMediaStats : PeerConnectionMediaStats {
+    uint32_t video_rtp_missing_packets_detected = 0;
+    uint32_t video_rtp_missing_packets_recovered = 0;
     uint32_t video_rtp_nacks = 0;
+    uint32_t video_rtp_nack_retries = 0;
     uint32_t video_rtp_resyncs = 0;
     uint32_t video_rtp_last_gap_packets = 0;
     uint32_t video_rtp_ssrc = 0;
@@ -138,6 +141,14 @@ private:
     std::atomic<int> process_event_logs_{0};
     std::atomic<int> rumble_parse_logs_{0};
     std::atomic<int> nack_logs_{0};
+    uint64_t last_pump_socket_receive_us_total_ = 0;
+    uint64_t last_pump_receive_loop_us_total_ = 0;
+    uint64_t last_pump_rtp_drain_us_total_ = 0;
+    uint64_t last_pump_socket_packets_total_ = 0;
+    uint64_t last_pump_rtp_packets_decoded_total_ = 0;
+    uint64_t max_pump_phase_total_us_ = 0;
+    uint64_t slow_pump_count_ = 0;
+    std::chrono::steady_clock::time_point last_pump_phase_log_{};
 
     // ICE candidate collection
     std::vector<IceCandidate> local_candidates_;

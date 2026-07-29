@@ -32,7 +32,7 @@ def main() -> None:
             "drop sources must share one complete snapshot format")
     require('"rtp_loss"' in perf and
             '"video_missing_increased"' in perf and
-            "video_missing > previous_video_missing" in perf,
+            "video_missing_detected > previous_video_missing_detected" in perf,
             "video RTP loss increases must emit sparse drop diagnostics")
     require("kRtpLossEpisodeGapMs" in perf and
             "last_video_loss_observed_ms.exchange" in perf,

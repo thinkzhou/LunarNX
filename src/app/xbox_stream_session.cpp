@@ -21,6 +21,16 @@ constexpr std::chrono::seconds kReceiverFeedbackInterval{1};
 constexpr uint32_t kRecoveryMissingPacketsThreshold = 12;
 constexpr uint32_t kRecoveryCorruptFramesThreshold = 4;
 
+const char* iceCandidateTypeName(uint8_t type) {
+    switch (type) {
+        case 0: return "host";
+        case 1: return "srflx";
+        case 2: return "prflx";
+        case 3: return "relay";
+        default: return "unknown";
+    }
+}
+
 void notify(const std::function<void(const std::string&)>& callback,
             const std::string& message) {
     if (callback) {
@@ -621,6 +631,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                           media_stats.video_rtp_sequence_gaps,
                           media_stats.audio_rtp_sequence_gaps,
                           media_stats.video_rtp_missing_packets,
+                          media_stats.video_rtp_missing_packets_detected,
                           media_stats.audio_rtp_missing_packets,
                           media_stats.video_h264_frames,
                           media_stats.video_h264_corrupt_frames,
@@ -692,7 +703,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                     lunar::diagnosticLog("xbox-stream", "initial keyframe request result=%s",
                                          keyframe_requested ? "true" : "false");
                     last_keyframe_request = std::chrono::steady_clock::now();
-                    keyframe_missing_baseline = media_stats.video_rtp_missing_packets;
+                    keyframe_missing_baseline =
+                        media_stats.video_rtp_missing_packets_detected;
                     keyframe_corrupt_baseline = media_stats.video_h264_corrupt_frames;
                     keyframe_queue_drop_baseline = media_stats.rtp_queue_drops;
                     keyframe_srtp_baseline = media_stats.srtp_rtp_decrypt_failures;
@@ -713,7 +725,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
         const auto now = std::chrono::steady_clock::now();
         if (control_started && connected) {
             const uint32_t missing_delta =
-                media_stats.video_rtp_missing_packets - keyframe_missing_baseline;
+                media_stats.video_rtp_missing_packets_detected -
+                keyframe_missing_baseline;
             const uint32_t corrupt_delta =
                 media_stats.video_h264_corrupt_frames - keyframe_corrupt_baseline;
             const uint32_t queue_drop_delta =
@@ -751,7 +764,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                     media_.clearVideoRecoveryRequest();
                 }
                 last_keyframe_request = now;
-                keyframe_missing_baseline = media_stats.video_rtp_missing_packets;
+                keyframe_missing_baseline =
+                    media_stats.video_rtp_missing_packets_detected;
                 keyframe_corrupt_baseline = media_stats.video_h264_corrupt_frames;
                 keyframe_queue_drop_baseline = media_stats.rtp_queue_drops;
                 keyframe_srtp_baseline = media_stats.srtp_rtp_decrypt_failures;
@@ -776,7 +790,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                 if (keyframe_requested) {
                     media_.clearVideoRecoveryRequest();
                     last_keyframe_request = now;
-                    keyframe_missing_baseline = media_stats.video_rtp_missing_packets;
+                    keyframe_missing_baseline =
+                        media_stats.video_rtp_missing_packets_detected;
                     keyframe_corrupt_baseline = media_stats.video_h264_corrupt_frames;
                     keyframe_queue_drop_baseline = media_stats.rtp_queue_drops;
                     keyframe_srtp_baseline = media_stats.srtp_rtp_decrypt_failures;
@@ -815,11 +830,15 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                     : 0.0f;
             lunar::diagnosticLog("perf",
                                  "stream fps=%.1f rendered=%u video_aus=%u audio_aus=%u "
-                                 "rtp_video=%u rtp_audio=%u video_seq_gaps=%u missing=%u(%.3f%%) "
+                                 "rtp_video=%u rtp_audio=%u video_seq_gaps=%u "
+                                 "missing=%u(%.3f%%) detected=%u recovered=%u "
                                  "audio_seq_gaps=%u missing=%u "
                                  "h264_ok=%u h264_corrupt=%u h264_unsupported=%u h264_overflow=%u "
-                                 "rtp_queue_drop=%u rtp_queue_high=%u "
-                                 "srtp_fail=%u/%u decode_errors=%u "
+                                 "rtp_queue_drop=%u rtp_queue_high=%u rtp_queue_depth=%u "
+                                 "rtp_queue_oldest_ms=%u udp_rcvbuf=%u "
+                                 "srtp_fail=%u/%u srtp_detail=%u/%u/%u/%u "
+                                 "ice_pair=%s:%u(%s)->%s:%u(%s) ice_rtt=%u "
+                                 "nacks=%u retries=%u decode_errors=%u "
                                  "avg_decode_ms=%.2f avg_render_ms=%.2f",
                                  perf_window_fps,
                                  rendered,
@@ -830,6 +849,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                                  video_gaps,
                                  video_missing,
                                  video_gap_pct,
+                                 media_stats.video_rtp_missing_packets_detected,
+                                 media_stats.video_rtp_missing_packets_recovered,
                                  audio_gaps,
                                  audio_missing,
                                  h264_ok,
@@ -838,8 +859,34 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                                  h264_overflow,
                                  queue_drops,
                                  queue_high,
+                                 media_stats.rtp_queue_depth,
+                                 media_stats.rtp_queue_oldest_age_ms,
+                                 media_stats.udp_receive_buffer_bytes,
                                  srtp_rtp_fail,
                                  srtp_rtcp_fail,
+                                 media_stats.srtp_rtp_auth_failures,
+                                 media_stats.srtp_rtp_replay_failures,
+                                 media_stats.srtp_rtp_replay_old_failures,
+                                 media_stats.srtp_rtp_other_failures,
+                                 media_stats.ice_pair_selected
+                                     ? media_stats.ice_local_address : "none",
+                                 static_cast<unsigned>(
+                                     media_stats.ice_local_port),
+                                 media_stats.ice_pair_selected
+                                     ? iceCandidateTypeName(
+                                           media_stats.ice_local_candidate_type)
+                                     : "none",
+                                 media_stats.ice_pair_selected
+                                     ? media_stats.ice_remote_address : "none",
+                                 static_cast<unsigned>(
+                                     media_stats.ice_remote_port),
+                                 media_stats.ice_pair_selected
+                                     ? iceCandidateTypeName(
+                                           media_stats.ice_remote_candidate_type)
+                                     : "none",
+                                 media_stats.ice_rtt_ms,
+                                 media_stats.video_rtp_nacks,
+                                 media_stats.video_rtp_nack_retries,
                                  decode_errors,
                                  perf_.avg_decode_ms(),
                                  perf_.avg_render_submit_ms());

@@ -343,6 +343,14 @@ bool PeerManager::initialize() {
     process_event_logs_ = 0;
     rumble_parse_logs_ = 0;
     nack_logs_ = 0;
+    last_pump_socket_receive_us_total_ = 0;
+    last_pump_receive_loop_us_total_ = 0;
+    last_pump_rtp_drain_us_total_ = 0;
+    last_pump_socket_packets_total_ = 0;
+    last_pump_rtp_packets_decoded_total_ = 0;
+    max_pump_phase_total_us_ = 0;
+    slow_pump_count_ = 0;
+    last_pump_phase_log_ = {};
     reliable_send_failed_ = false;
     outbound_drop_events_ = 0;
     media_clock_start_ = std::chrono::steady_clock::now();
@@ -841,6 +849,8 @@ PeerMediaStats PeerManager::getMediaStats() const {
     stats.video_rtp_packets = video.packets;
     stats.video_rtp_sequence_gaps = video.sequence_gaps;
     stats.video_rtp_missing_packets = video.missing_packets;
+    stats.video_rtp_missing_packets_detected = video.missing_packets_detected;
+    stats.video_rtp_missing_packets_recovered = video.missing_packets_recovered;
     stats.video_h264_frames = video.frames;
     stats.video_h264_corrupt_frames = video.corrupt_frames;
     stats.video_h264_unsupported_nalus = video.unsupported_nalus;
@@ -849,6 +859,7 @@ PeerMediaStats PeerManager::getMediaStats() const {
     stats.video_rtp_highest_seq_ext = video.highest_sequence;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     stats.video_rtp_nacks = video.nacks;
+    stats.video_rtp_nack_retries = video.nack_retries;
     stats.video_rtp_resyncs = video.resyncs;
     stats.video_rtp_last_gap_packets = video.last_gap_packets;
     stats.video_rtp_ssrc = video.ssrc;
@@ -876,6 +887,7 @@ PeerMediaStats PeerManager::getMediaStats() const {
 
 void PeerManager::processEvents() {
     if (pc_) {
+        const auto pump_started = std::chrono::steady_clock::now();
         int log_index = process_event_logs_.fetch_add(1);
         if (log_index < 16) {
             lunar::diagnosticLog("webrtc", "processEvents begin index=%d", log_index);
@@ -885,6 +897,7 @@ void PeerManager::processEvents() {
         const auto drain_start = std::chrono::steady_clock::now();
         int drain_passes = 0;
         int drain_work = 0;
+        const auto peer_loop_started = std::chrono::steady_clock::now();
         while (drain_passes < kMaxDrainPasses) {
             const int work = peer_connection_loop(pc_);
             drain_work += work;
@@ -894,6 +907,7 @@ void PeerManager::processEvents() {
                 break;
             }
         }
+        const auto peer_loop_finished = std::chrono::steady_clock::now();
         if (log_index < 16) {
             lunar::diagnosticLog("webrtc", "processEvents after peer loop index=%d passes=%d work=%d connected=%s data_created=%s data_ready=%s",
                                  log_index,
@@ -907,22 +921,103 @@ void PeerManager::processEvents() {
             lunar::diagnosticLog("webrtc", "datachannel connected, creating channels");
             createDataChannels();
         }
-        drainOutboundCommands(std::chrono::steady_clock::now() +
-                              std::chrono::milliseconds(1));
+        const auto outbound_started = std::chrono::steady_clock::now();
+        drainOutboundCommands(outbound_started + std::chrono::milliseconds(1));
+        const auto outbound_finished = std::chrono::steady_clock::now();
         PeerConnectionMediaStats network_stats = {};
         peer_connection_get_media_stats(pc_, &network_stats);
         if (network_stats.ice_rtt_ms > 0) {
             const uint64_t rtt_ms = network_stats.ice_rtt_ms;
             const uint64_t hold_ms = std::max<uint64_t>(
-                VideoRtpJitterBuffer::kDefaultHoldMs,
+                VideoRtpJitterBuffer::kMinHoldMs,
                 std::min<uint64_t>(180,
                                    rtt_ms * 2 + 20));
             video_jitter_.setHoldMs(hold_ms);
+            video_jitter_.setNetworkRttMs(rtt_ms);
             const uint64_t recovery_hold_ms = std::max<uint64_t>(
                 VideoRtpJitterBuffer::kDefaultRecoveryHoldMs,
                 std::min<uint64_t>(VideoRtpJitterBuffer::kMaxRecoveryHoldMs,
                                    rtt_ms + 150));
             video_jitter_.setRecoveryHoldMs(recovery_hold_ms);
+        }
+
+        const auto pump_finished = std::chrono::steady_clock::now();
+        const auto elapsed_us = [](auto start, auto finish) -> uint64_t {
+            return static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    finish - start).count());
+        };
+        const auto delta = [](uint64_t current, uint64_t previous) -> uint64_t {
+            return current >= previous ? current - previous : current;
+        };
+        const uint64_t socket_us = delta(
+            network_stats.pump_socket_receive_us_total,
+            last_pump_socket_receive_us_total_);
+        const uint64_t receive_loop_us = delta(
+            network_stats.pump_receive_loop_us_total,
+            last_pump_receive_loop_us_total_);
+        const uint64_t rtp_drain_us = delta(
+            network_stats.pump_rtp_drain_us_total,
+            last_pump_rtp_drain_us_total_);
+        const uint64_t socket_packets = delta(
+            network_stats.pump_socket_packets_total,
+            last_pump_socket_packets_total_);
+        const uint64_t rtp_decoded = delta(
+            network_stats.pump_rtp_packets_decoded_total,
+            last_pump_rtp_packets_decoded_total_);
+        last_pump_socket_receive_us_total_ =
+            network_stats.pump_socket_receive_us_total;
+        last_pump_receive_loop_us_total_ =
+            network_stats.pump_receive_loop_us_total;
+        last_pump_rtp_drain_us_total_ =
+            network_stats.pump_rtp_drain_us_total;
+        last_pump_socket_packets_total_ =
+            network_stats.pump_socket_packets_total;
+        last_pump_rtp_packets_decoded_total_ =
+            network_stats.pump_rtp_packets_decoded_total;
+
+        const uint64_t total_us = elapsed_us(pump_started, pump_finished);
+        const uint64_t peer_loop_us = elapsed_us(peer_loop_started,
+                                                 peer_loop_finished);
+        const uint64_t outbound_us = elapsed_us(outbound_started,
+                                                outbound_finished);
+        const uint64_t accounted_us = receive_loop_us + rtp_drain_us + outbound_us;
+        const uint64_t other_us = total_us > accounted_us
+            ? total_us - accounted_us
+            : 0;
+        constexpr uint64_t kSlowPumpThresholdUs = 10000;
+        if (total_us >= kSlowPumpThresholdUs) {
+            slow_pump_count_++;
+            const bool new_max = total_us > max_pump_phase_total_us_;
+            max_pump_phase_total_us_ = std::max(max_pump_phase_total_us_, total_us);
+            const bool interval_elapsed =
+                last_pump_phase_log_.time_since_epoch().count() == 0 ||
+                pump_finished - last_pump_phase_log_ >= std::chrono::seconds(1);
+            if (new_max || interval_elapsed) {
+                lunar::dropDiagnosticLog(
+                    "webrtc-pump",
+                    "DEBUG-pump-phase total_us=%llu peer_loop_us=%llu "
+                    "socket_us=%llu receive_loop_us=%llu rtp_drain_us=%llu "
+                    "outbound_us=%llu other_us=%llu passes=%d work=%d "
+                    "socket_packets=%llu rtp_decoded=%llu queue_depth=%u "
+                    "queue_oldest_ms=%u slow_count=%llu max_total_us=%llu",
+                    static_cast<unsigned long long>(total_us),
+                    static_cast<unsigned long long>(peer_loop_us),
+                    static_cast<unsigned long long>(socket_us),
+                    static_cast<unsigned long long>(receive_loop_us),
+                    static_cast<unsigned long long>(rtp_drain_us),
+                    static_cast<unsigned long long>(outbound_us),
+                    static_cast<unsigned long long>(other_us),
+                    drain_passes,
+                    drain_work,
+                    static_cast<unsigned long long>(socket_packets),
+                    static_cast<unsigned long long>(rtp_decoded),
+                    network_stats.rtp_queue_depth,
+                    network_stats.rtp_queue_oldest_age_ms,
+                    static_cast<unsigned long long>(slow_pump_count_),
+                    static_cast<unsigned long long>(max_pump_phase_total_us_));
+                last_pump_phase_log_ = pump_finished;
+            }
         }
         if (log_index < 16) {
             lunar::diagnosticLog("webrtc", "processEvents done index=%d", log_index);

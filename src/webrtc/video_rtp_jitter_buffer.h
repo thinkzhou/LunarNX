@@ -19,12 +19,15 @@ struct VideoRtpJitterStats {
     uint32_t packets = 0;
     uint32_t sequence_gaps = 0;
     uint32_t missing_packets = 0;
+    uint32_t missing_packets_detected = 0;
+    uint32_t missing_packets_recovered = 0;
     uint32_t frames = 0;
     uint32_t corrupt_frames = 0;
     uint32_t unsupported_nalus = 0;
     uint32_t overflow_frames = 0;
     uint32_t max_frame_bytes = 0;
     uint32_t nacks = 0;
+    uint32_t nack_retries = 0;
     uint32_t resyncs = 0;
     uint32_t assembly_attempts = 0;
     uint32_t payload_storage_reallocations = 0;
@@ -49,6 +52,7 @@ public:
     using NackCallback = std::function<bool(uint16_t, uint16_t)>;
     using RecoveryCallback = std::function<void(bool)>;
 
+    static constexpr uint64_t kMinHoldMs = 60;
     static constexpr uint64_t kDefaultHoldMs = 120;
     // A progressing access unit may legitimately span the ordinary idle
     // deadline when the receiver thread is briefly descheduled. This is only
@@ -68,6 +72,7 @@ public:
 
     void reset();
     void setHoldMs(uint64_t hold_ms);
+    void setNetworkRttMs(uint64_t rtt_ms);
     // This longer window applies only to a candidate IDR while recovering.
     // Ordinary P-frames keep the low-latency hold above.
     void setRecoveryHoldMs(uint64_t hold_ms);

@@ -41,6 +41,9 @@ def main():
     require("VideoRecoveryTransportRetry" not in source and
             "transport-only keyframe retry" not in source,
             "Recovery must not add an independent 200 ms transport-only PLI")
+    require("video_rtp_missing_packets_detected" in source and
+            "video_rtp_missing_packets - keyframe_missing_baseline" not in source,
+            "Recovery must use a monotonic loss counter instead of subtracting a recoverable unsigned gauge")
     require("video callback begin" in Path("src/webrtc/peer_manager.cpp").read_text(),
             "PeerManager should keep bounded media callback diagnostics")
     require(answer_pos < candidates_pos,

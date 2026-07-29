@@ -22,19 +22,30 @@ timestamp. LunarNX uses those values for Opus reordering, packet-loss
 concealment, and RTP-clock-based A/V synchronization.
 
 The UDP socket requests a 4 MiB `SO_RCVBUF` as a best-effort burst cushion for
-1080p/HQ IDR frames. `peer_connection_loop()` reports receive/decode work so
-LunarNX can perform a bounded multi-pass drain without starving DTLS or SCTP;
-the socket and drain changes are safe to ignore when a target clamps the
+1080p/HQ IDR frames and reports the effective value after target-side clamping.
+Once DTLS is established, `peer_connection_loop()` uses nonblocking
+`recvfrom(MSG_DONTWAIT)` calls instead of running a timed `select()` before
+every datagram. The completed-state receive loop stops at `EAGAIN`, 128 raw UDP
+datagrams, or one millisecond, whichever comes first. It reports receive/decode
+work so LunarNX can perform a bounded multi-pass drain without starving DTLS or
+SCTP; the socket and drain changes are safe to ignore when a target clamps the
 requested buffer size.
 
-The completed-state loop intentionally retains main's packet-count limits
-without adding an inner wall-clock deadline. The outer LunarNX pump remains
-bounded, while one libpeer call can drain a burst already waiting in the UDP
-socket instead of stopping after 2-3 ms. DTLS application writes still cap
-WANT_READ/WANT_WRITE retries and propagate backpressure without advancing
+The packet and time budgets count every raw STUN, DTLS, RTCP, and RTP datagram,
+not only packets returned to the PeerConnection classifier. Timed receive stays
+in place during ICE and the DTLS handshake, where a temporary no-data result is
+still reported to mbedTLS as `WANT_READ`. DTLS application writes continue to
+cap WANT_READ/WANT_WRITE retries and propagate backpressure without advancing
 custom SCTP TSN or stream-sequence state. LunarNX retains reliable startup
 commands and PLI for a later owner-thread pump, replaces stale input, and
 permits bounded NACK/feedback drops.
+
+Media stats expose cumulative monotonic timing for socket receive, the full
+receive/classification loop, and RTP queue drain, together with packet counts.
+LunarNX combines their per-pump deltas with outbound-command timing and emits a
+rate-limited `DEBUG-pump-phase` record for calls slower than 10 ms. This keeps
+per-packet logging off the realtime path while showing whether a slow pump was
+spent waiting on sockets, decoding queued RTP, sending feedback, or elsewhere.
 
 On Switch, libpeer obtains the local IPv4 host ICE candidate through
 `nifmGetCurrentIpAddress()`. The compatibility `getifaddrs()` implementation
@@ -78,7 +89,9 @@ open for 45 seconds so it does not tear down the Xbox session while this ICE
 window is still active.
 
 The nominated ICE pair retains the measured Binding-response round-trip time
-and exposes it through `PeerConnectionMediaStats::ice_rtt_ms`. Once streaming
+and exposes it through `PeerConnectionMediaStats::ice_rtt_ms`. Media stats also
+report the selected local/remote address, port, and candidate type so a Home
+session which unexpectedly uses a public or relayed path is visible. Once streaming
 is established, a one-second ICE consent check refreshes the same RTT sample
 without reopening nomination. LunarNX therefore shows a live network RTT
 instead of an HTTP request time, a fabricated latency value, or the frozen
@@ -123,11 +136,23 @@ rolling, contiguous tail by evicting the oldest packet before appending the
 newest one. Once media is enabled, LunarNX drains queued RTP before accepting
 another full socket burst. This prevents client-side startup overflow from
 appearing as thousands of network-lost packets in the performance HUD.
+Media stats expose current queue depth and oldest-packet age; the existing high
+watermark remains a session-wide maximum rather than current occupancy.
+
+The inbound SRTP replay window is 1024 packets. This still rejects duplicates,
+while allowing an original-sequence Xbox retransmission to arrive after more
+than libsrtp's default 128 newer packets at high bitrate. Aggregate decrypt
+failures are split into authentication, replay, replay-old, and other buckets.
 
 For video, legacy libpeer now exposes decrypted raw RTP packets instead of
 depacketizing H.264 immediately. LunarNX applies a bounded, timestamp-ordered
 jitter buffer that waits 60-180 ms based on the measured ICE RTT, reorders
-late packets, and sends RFC 4585 Generic NACK feedback for short sequence gaps.
+late packets, and sends up to three RTT-aware RFC 4585 Generic NACK rounds for
+short sequence gaps when retransmission can still meet the frame deadline.
+First-round coverage is prioritized over retries, and a blocked head frame is
+released once its frame backlog and RTT-derived deadline show that more waiting
+only adds latency. Detected and recovered loss totals are monotonic and separate
+from the current unresolved-loss gauge used in Receiver Reports.
 Incomplete or malformed access units are never passed to FFmpeg: after the
 bounded wait expires, LunarNX requests a PLI and drops P-frames until a real
 IDR arrives without blocking on a GPU-wide decoder drain. Receiver Reports use
@@ -186,4 +211,5 @@ Binding and Allocate responses must also match the request transaction ID and
 contain a non-zero mapped or relayed address before a candidate is accepted.
 Synchronous STUN gathering uses twenty 50 ms polls instead of one thousand
 1 ms polls. The total one-second timeout is unchanged, while Ryubing avoids
-thousands of BSD HLE calls. Normal ICE/media event polling remains at 1 ms.
+thousands of BSD HLE calls. ICE and DTLS handshake polling remains at 1 ms;
+established media receive is nonblocking and does not poll before each packet.

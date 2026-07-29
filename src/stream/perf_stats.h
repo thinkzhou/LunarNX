@@ -78,6 +78,7 @@ struct PerfStats {
     std::atomic<uint32_t> rtp_queue_drop_delta_diag{0};
     std::atomic<uint32_t> video_rtp_highest_sequence_diag{0};
     std::atomic<uint32_t> video_rtp_nacks_diag{0};
+    std::atomic<uint32_t> video_rtp_missing_detected_diag{0};
     std::atomic<uint32_t> video_rtp_resyncs_diag{0};
     std::atomic<uint32_t> video_rtp_last_gap_packets_diag{0};
     std::atomic<uint32_t> video_rtp_ssrc_diag{0};
@@ -172,6 +173,7 @@ struct PerfStats {
         rtp_queue_drop_delta_diag = 0;
         video_rtp_highest_sequence_diag = 0;
         video_rtp_nacks_diag = 0; video_rtp_resyncs_diag = 0;
+        video_rtp_missing_detected_diag = 0;
         video_rtp_last_gap_packets_diag = 0;
         video_rtp_ssrc_diag = 0; video_rtp_ssrc_changes_diag = 0;
         video_rtp_arrival_age_ms_diag = 0;
@@ -448,6 +450,7 @@ struct PerfStats {
                      uint32_t video_gaps,
                      uint32_t audio_gaps,
                      uint32_t video_missing,
+                     uint32_t video_missing_detected,
                      uint32_t audio_missing,
                      uint32_t h264_ok,
                      uint32_t h264_corrupt,
@@ -475,7 +478,8 @@ struct PerfStats {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         constexpr uint64_t kRtpLossEpisodeGapMs = 1000;
         const uint32_t previous_video_gaps = rtp_video_sequence_gaps.load();
-        const uint32_t previous_video_missing = rtp_video_missing_packets.load();
+        const uint32_t previous_video_missing_detected =
+            video_rtp_missing_detected_diag.load();
         const uint32_t previous_audio_missing = rtp_audio_missing_packets.load();
         const uint32_t previous_h264_corrupt = h264_corrupt_frames.load();
         const uint32_t previous_queue_drops = rtp_queue_drops.load();
@@ -503,6 +507,7 @@ struct PerfStats {
             : 0;
         video_rtp_highest_sequence_diag = highest_sequence;
         video_rtp_nacks_diag = nacks;
+        video_rtp_missing_detected_diag = video_missing_detected;
         video_rtp_resyncs_diag = resyncs;
         video_rtp_last_gap_packets_diag = last_gap_packets;
         video_rtp_ssrc_diag = ssrc;
@@ -514,8 +519,9 @@ struct PerfStats {
         video_jitter_buffered_frames_diag = jitter_buffered_frames;
         video_jitter_buffered_bytes_diag = jitter_buffered_bytes;
         video_waiting_keyframe_diag = waiting_keyframe;
-        if (video_missing > previous_video_missing) {
-            last_video_missing_delta = video_missing - previous_video_missing;
+        if (video_missing_detected > previous_video_missing_detected) {
+            last_video_missing_delta =
+                video_missing_detected - previous_video_missing_detected;
             last_video_gap_delta = video_gaps >= previous_video_gaps
                 ? video_gaps - previous_video_gaps
                 : 0;
@@ -553,6 +559,7 @@ struct PerfStats {
         (void)max_arrival_gap_ms; (void)jitter_buffered_packets;
         (void)jitter_buffered_frames; (void)jitter_buffered_bytes;
         (void)waiting_keyframe;
+        (void)video_missing_detected;
 #endif
     }
 
