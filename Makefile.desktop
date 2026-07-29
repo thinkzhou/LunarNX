@@ -39,6 +39,7 @@ LDFLAGS  = -L/opt/homebrew/lib -Llib/libpeer/build/dist/lib \
 
 BUILD    = build/pc
 TARGET   = $(BUILD)/LunarNX_Desktop
+DEPFLAGS = -MMD -MP -MF $@.d
 
 C_SRCS   = lib/cJSON.c \
            lib/libpeer/src/address.c lib/libpeer/src/agent.c lib/libpeer/src/base64.c \
@@ -186,11 +187,11 @@ $(TARGET): $(CXX_OBJS) $(C_OBJS)
 
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 clean:
 	rm -rf $(BUILD)
@@ -336,3 +337,6 @@ $(BUILD)/xcloud_stream: $(XCLOUD_STREAM_OBJS)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -DLUNARNX_CURL_TIMEOUT_MS=120000 -o $@ $(XCLOUD_STREAM_OBJS) $(LDFLAGS)
 	@echo "=== xcloud_stream ready: $@ ==="
+
+DEP_FILES := $(shell find $(BUILD) -type f -name '*.d' 2>/dev/null)
+-include $(DEP_FILES)

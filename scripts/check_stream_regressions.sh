@@ -357,9 +357,9 @@ if ! rg -n 'Connection lost\. Reconnect attempts failed' src/app/xbox_stream_ses
   fail "Stream session must leave Streaming state after reconnect exhaustion"
 fi
 
-if ! rg -n 'getStr\("lunarnx/stream/details_stop"\)' src/ui/stream_overlay.cpp >/dev/null ||
-   ! rg -n '"details_stop": "R3 Details   - \+ Stop"' romfs/i18n/en-US/lunarnx.json >/dev/null; then
-  fail "Stream overlay must show the actual Minus+Plus stop combo"
+if ! rg -n 'getStr\("lunarnx/stream/menu_hint"\)' src/ui/stream_view.cpp >/dev/null ||
+   ! rg -n '"menu_hint": "Swipe left from the right edge to open\. Swipe right or press B to close\."' romfs/i18n/en-US/lunarnx.json >/dev/null; then
+  fail "Stream quick menu must explain how to open and close it"
 fi
 
 if ! rg -n 'getStr\("lunarnx/main/sign_out_again"\)' src/ui/main_activity.cpp >/dev/null ||
