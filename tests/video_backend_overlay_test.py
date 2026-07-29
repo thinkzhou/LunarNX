@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source contracts for keeping the video backend in R3 diagnostics only."""
+"""Source contracts for keeping the video backend in detailed diagnostics only."""
 
 from pathlib import Path
 
@@ -32,10 +32,10 @@ def main() -> None:
     require("const std::string& video_backend" in perf_header and
             '"lunarnx/perf/detail_backend"' in perf_overlay and
             'video_backend' in perf_overlay,
-            "R3 diagnostics should retain the active video backend")
+            "Detailed diagnostics should retain the active video backend")
     require("videoBackendOverlayName(" in view and
             "perf_overlay_->update(fps, res, video_backend)" in view,
-            "Stream view should pass the selected mode only to R3 diagnostics")
+            "Stream view should pass the selected mode only to detailed diagnostics")
 
     print("Video backend overlay tests passed")
 

@@ -16,19 +16,11 @@ def main() -> None:
     assert "MBEDTLS_ERR_SSL_WANT_READ" in peer_connection
     assert "return MBEDTLS_ERR_SSL_WANT_READ;" in peer_connection
     assert "dtls_srtp_has_pending(&pc->dtls_srtp)" in peer_connection
-    assert "PEER_CONNECTION_MAX_DTLS_PENDING_READS" in peer_connection
-    pending_start = peer_connection.index(
-        "static int peer_connection_drain_pending_dtls")
-    pending_end = peer_connection.index(
-        "static void peer_connection_outgoing_rtp_packet", pending_start)
-    pending_impl = peer_connection[pending_start:pending_end]
-    assert "while (processed < budget" in pending_impl
-    assert "dtls_srtp_has_pending(&pc->dtls_srtp)" in pending_impl
     completed_start = peer_connection.index("case PEER_CONNECTION_COMPLETED")
     completed = peer_connection[completed_start:]
-    first_pending = completed.index("peer_connection_drain_pending_dtls")
-    first_receive = completed.index("agent_recv(&pc->agent")
-    assert first_pending < first_receive
+    assert "while (dtls_srtp_has_pending(&pc->dtls_srtp))" in completed
+    assert "PEER_CONNECTION_MAX_DTLS_PENDING_READS" not in peer_connection
+    assert "peer_connection_drain_pending_dtls" not in peer_connection
     assert "return ret > 0 ? ret : MBEDTLS_ERR_SSL_WANT_READ;" in peer_connection
     assert "DTLS handshake failed ret=" in peer_connection
     assert "[DEBUG-mbedtls]" in dtls_srtp

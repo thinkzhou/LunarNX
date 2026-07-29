@@ -16,6 +16,7 @@ def main() -> None:
     pipeline = (ROOT / "src/stream/media_pipeline.cpp").read_text()
     decoder = (ROOT / "src/stream/video_decoder.cpp").read_text()
     renderer = (ROOT / "src/stream/video_renderer.cpp").read_text()
+    peer = (ROOT / "src/webrtc/peer_manager.cpp").read_text()
     av_sync = (ROOT / "src/stream/av_sync.cpp").read_text()
     jitter = (ROOT / "src/webrtc/video_rtp_jitter_buffer.cpp").read_text()
     switch_makefile = (ROOT / "Makefile.switch").read_text()
@@ -97,6 +98,25 @@ def main() -> None:
             "decoder errors must emit a drop snapshot")
     require("recordPresentWait" in renderer,
             "drop snapshots need the latest GPU command-ring wait")
+    require("DEBUG-c1080" in session and
+            "setCloud1080CrashProbeEnabled" in session and
+            "SessionType::Cloud" in session and
+            "profile.height >= 1080" in session,
+            "the crash probe must be restricted to cloud 1080p sessions")
+    require("cloud1080CrashProbeLog" in diagnostics and
+            "enqueueFormattedDropDiagnostic(true" in diagnostics and
+            "urgent" in diagnostics,
+            "crash breadcrumbs must urgently wake the async DROP_DIAG writer")
+    for phase in (
+        "rtp-received", "access-unit-complete", "decode-begin",
+        "decoded-frame-callback-begin", "renderer-handoff", "render-queued",
+        "phase=present",
+    ):
+        require(phase in peer + decoder + pipeline + renderer,
+                f"cloud 1080p crash diagnostics must include phase: {phase}")
+    require("shouldSampleCloud1080CrashProbe" in diagnostics and
+            "one_based_index == 240" in diagnostics,
+            "the temporary crash probe must have a finite sampling horizon")
     require("raw_delay_ns" in av_sync and "clamped_delay_ns" in av_sync,
             "A/V diagnostics must preserve delay before policy clamping")
 

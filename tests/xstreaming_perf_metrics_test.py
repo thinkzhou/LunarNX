@@ -59,10 +59,10 @@ def main() -> None:
         "detail_packet_loss",
     ):
         require(f'"lunarnx/perf/{key}"' in detail_overlay,
-                f"R3 diagnostics must localize {key}")
+                f"detailed diagnostics must localize {key}")
     require("rtp_video_missing_packets.load()" in detail_overlay and
             "packets_lost.load()" not in detail_overlay,
-            "compact and R3 overlays must use the same video RTP loss source")
+            "compact and detailed overlays must use the same video RTP loss source")
 
     require("last_encoded_bytes_" in overlay_header and
             "last_decode_total_us_" in overlay_header,

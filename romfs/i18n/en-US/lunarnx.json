@@ -220,10 +220,9 @@
   },
   "stream": {
     "live": "●  LIVE",
-    "details_stop": "Swipe from right: Menu   R3 Details   - + Stop",
+    "details_stop": "Swipe from right: Menu   - + Stop",
     "stop_action_plus": "Stop Stream Combo Plus",
     "stop_action_minus": "Stop Stream Combo Minus",
-    "toggle_stats": "Toggle Stats",
     "stop_title": "STOP STREAMING",
     "stop_confirm": "Press - + again to stop streaming",
     "stop_cancel_hint": "(wait 3s to cancel)",

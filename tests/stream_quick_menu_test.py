@@ -25,6 +25,8 @@ def main():
             "open menu must be visible and suppress game input")
     require("giveFocus(content_root_)" in view,
             "closing the menu must restore focus to the stream view")
+    require("BUTTON_RSB" not in view and "toggle_stats" not in view,
+            "R3 must remain exclusively available to the streamed game")
     require("menu_hide_performance" in view and
             "overlay_->setVisibility" in view and
             "perf_overlay_->setVisible(false)" in view,

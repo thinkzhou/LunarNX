@@ -30,7 +30,7 @@ public:
     void setDitheringEnabled(bool enabled, float strength = 3.0f);
     bool render(const VideoFrame& frame);
     void present();
-    void prepareDecoderReset();
+    bool prepareDecoderReset();
     bool pollEvents();
     void shutdown();
 

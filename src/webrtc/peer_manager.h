@@ -121,6 +121,7 @@ private:
         uint32_t bitrate_bps = 0;
         uint64_t id = 0;
         uint8_t attempts = 0;
+        std::chrono::steady_clock::time_point expires_at{};
     };
 
     static constexpr size_t kMaxOutboundCommands = 64;
@@ -132,6 +133,7 @@ private:
     bool initialized_ = false;
     bool data_channels_created_ = false;
     std::atomic<int> video_callback_logs_{0};
+    std::atomic<uint32_t> crash_probe_access_units_{0};
     std::atomic<int> audio_callback_logs_{0};
     std::atomic<int> process_event_logs_{0};
     std::atomic<int> rumble_parse_logs_{0};
@@ -160,6 +162,10 @@ private:
     int sendOutboundCommand(const OutboundCommand& command);
     void clearOutboundCommands();
     static bool isReliableCommand(OutboundType type);
+    static bool isSctpCommand(OutboundType type);
+    static int outboundPriority(OutboundType type);
+    bool selectOutboundCommand(OutboundCommand& command,
+                               bool allow_sctp) const;
     void logOutboundDrop(const char* reason,
                          OutboundType type,
                          int result = 0) noexcept;

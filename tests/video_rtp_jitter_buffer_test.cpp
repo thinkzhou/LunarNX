@@ -102,7 +102,7 @@ void test_repeated_timeouts_gate_p_frames_until_real_idr() {
 
     assert(h.frames.size() == 2);
     assert(h.jitter.waitingForKeyframe());
-    assert(h.decoder_resets == 1);
+    assert(h.decoder_resets == 0);
     assert(h.jitter.stats().corrupt_frames == 2);
 
     h.push(rtp(109, 6000, true, {0x67, 0x42}), 121);
@@ -129,7 +129,7 @@ void test_active_frame_progress_extends_idle_deadline() {
     assert(!h.jitter.waitingForKeyframe());
 }
 
-void test_active_frame_still_obeys_hard_deadline() {
+void test_active_frame_progress_survives_old_hard_deadline() {
     Harness h;
     h.jitter.setHoldMs(50);
     openWithIdr(h, 140, 1000);
@@ -140,8 +140,32 @@ void test_active_frame_still_obeys_hard_deadline() {
                40 * (sequence - 140));
     }
 
+    assert(h.jitter.stats().corrupt_frames == 0);
+    assert(h.jitter.stats().buffered_frames == 1);
+    assert(h.decoder_resets == 0);
+
+    h.push(rtp(149, 2000, true, {0x7c, 0x41, 0x33}), 330);
+    assert(h.frames.size() == 2);
+    assert(h.jitter.stats().corrupt_frames == 0);
+    assert(!h.jitter.waitingForKeyframe());
+}
+
+void test_pathological_active_frame_obeys_safety_cap_without_decoder_reset() {
+    Harness h;
+    h.jitter.setHoldMs(50);
+    openWithIdr(h, 150, 1000);
+
+    h.push(rtp(151, 2000, false, {0x7c, 0x81, 0x11}), 1);
+    for (uint16_t sequence = 152; sequence <= 162; ++sequence) {
+        h.push(rtp(sequence, 2000, false, {0x7c, 0x01, 0x22}),
+               100 * (sequence - 151));
+    }
+
     assert(h.jitter.stats().corrupt_frames == 1);
     assert(h.jitter.stats().buffered_frames == 0);
+    assert(h.jitter.waitingForKeyframe());
+    assert(h.recovery_requests == 1);
+    assert(h.decoder_resets == 0);
 }
 
 void test_isolated_p_frame_timeout_uses_soft_recovery() {
@@ -159,7 +183,7 @@ void test_isolated_p_frame_timeout_uses_soft_recovery() {
     assert(h.decoder_resets == 0);
 }
 
-void test_incomplete_idr_uses_hard_recovery() {
+void test_incomplete_idr_waits_for_recovery_without_decoder_reset() {
     Harness h;
     h.jitter.setHoldMs(50);
     openWithIdr(h, 180, 1000);
@@ -171,7 +195,7 @@ void test_incomplete_idr_uses_hard_recovery() {
     assert(h.frames.size() == 1);
     assert(h.jitter.waitingForKeyframe());
     assert(h.recovery_requests == 1);
-    assert(h.decoder_resets == 1);
+    assert(h.decoder_resets == 0);
 }
 
 void test_padding_consumes_sequence_without_false_loss() {
@@ -278,6 +302,7 @@ void test_malformed_payload_is_not_reported_as_overflow() {
     assert(stap_stats.corrupt_frames == 1);
     assert(stap_stats.overflow_frames == 0);
     assert(h.jitter.waitingForKeyframe());
+    assert(h.decoder_resets == 1);
 
     h.push(rtp(362, 3000, true, {0x65, 0x22}), 2);
     assert(!h.jitter.waitingForKeyframe());
@@ -285,6 +310,7 @@ void test_malformed_payload_is_not_reported_as_overflow() {
     const auto fu_stats = h.jitter.stats();
     assert(fu_stats.corrupt_frames == 2);
     assert(fu_stats.overflow_frames == 0);
+    assert(h.decoder_resets == 2);
 }
 
 void test_access_unit_limit_is_enforced_without_unbounded_growth() {
@@ -308,6 +334,7 @@ void test_access_unit_limit_is_enforced_without_unbounded_growth() {
     assert(stats.buffered_packets == 0);
     assert(stats.buffered_frames == 0);
     assert(h.jitter.waitingForKeyframe());
+    assert(h.decoder_resets == 1);
 }
 
 void test_buffer_caps_are_hard_limits() {
@@ -386,7 +413,7 @@ void test_log_sized_gap_is_fully_covered() {
     assert(h.nacks.size() == 9);
 }
 
-void test_nacks_stop_while_waiting_for_keyframe() {
+void test_recovery_nacks_only_current_keyframe() {
     Harness h;
     h.jitter.setHoldMs(50);
     openWithIdr(h, 2100, 1000);
@@ -396,8 +423,103 @@ void test_nacks_stop_while_waiting_for_keyframe() {
     assert(h.jitter.waitingForKeyframe());
 
     const size_t nacks_before = h.nacks.size();
-    h.push(rtp(2104, 4000, false, {}, 8), 61);
+    h.push(rtp(2104, 4000, true, {0x61, 0x44}), 61);
     assert(h.nacks.size() == nacks_before);
+
+    h.push(rtp(2105, 5000, false, {0x7c, 0x85, 0x55}), 62);
+    h.push(rtp(2107, 5000, true, {0x7c, 0x45, 0x77}), 63);
+    assert(h.nacks.size() == nacks_before + 1);
+    assert(h.nacks.back().first == 2106);
+    assert(h.jitter.waitingForKeyframe());
+
+    h.push(rtp(2106, 5000, false, {0x7c, 0x05, 0x66}), 64);
+    assert(h.frames.size() == 2);
+    assert(!h.jitter.waitingForKeyframe());
+}
+
+void test_recovery_keyframe_nacks_remain_rate_limited() {
+    Harness h;
+    h.jitter.setHoldMs(50);
+    openWithIdr(h, 2400, 1000);
+
+    h.push(rtp(2401, 2000, false, {0x7c, 0x85, 0x11}), 1);
+    h.push(rtp(2402, 3000, true, {0x61, 0x22}), 60);
+    assert(h.jitter.waitingForKeyframe());
+
+    h.push(rtp(2403, 4000, false, {0x7c, 0x85, 0x33}), 61);
+    h.push(rtp(2557, 4000, false, {0x7c, 0x05, 0x44}), 62);
+    assert(h.nacks.size() == 8);
+
+    h.push(rtp(2558, 4000, false, {0x7c, 0x05, 0x55}), 120);
+    assert(h.nacks.size() == 9);
+}
+
+void test_recovery_discards_pending_nacks_from_old_stream() {
+    Harness h;
+    openWithIdr(h, 2600, 1000);
+
+    h.push(rtp(2754, 1000, false, {}, 8), 1);
+    assert(h.nacks.size() == 8);
+
+    h.push(rtp(2755, 2000, true, {0x7c, 0x85, 0x11}), 2);
+    assert(h.jitter.waitingForKeyframe());
+
+    h.push(rtp(2757, 3000, true, {0x61, 0x22}), 60);
+    assert(h.nacks.size() == 8);
+}
+
+void test_recovery_nacks_sps_pps_gap_after_idr_is_identified() {
+    Harness h;
+    h.jitter.setHoldMs(50);
+    openWithIdr(h, 3000, 1000);
+
+    h.push(rtp(3001, 2000, false, {0x7c, 0x85, 0x11}), 1);
+    h.push(rtp(3002, 3000, true, {0x61, 0x22}), 60);
+    assert(h.jitter.waitingForKeyframe());
+
+    const size_t nacks_before = h.nacks.size();
+    h.push(rtp(3003, 4000, false, {0x67, 0x42}), 61);
+    h.push(rtp(3005, 4000, false, {0x68, 0x11}), 62);
+    assert(h.nacks.size() == nacks_before);
+
+    h.push(rtp(3006, 4000, true, {0x65, 0x33}), 63);
+    assert(h.nacks.size() == nacks_before + 1);
+    assert(h.nacks.back().first == 3004);
+    assert(h.jitter.waitingForKeyframe());
+
+    h.push(rtp(3004, 4000, false, {0x68, 0x22}), 64);
+    assert(h.frames.size() == 2);
+    assert(!h.jitter.waitingForKeyframe());
+}
+
+void test_recovery_hold_does_not_increase_normal_frame_latency() {
+    Harness normal;
+    normal.jitter.setHoldMs(50);
+    normal.jitter.setRecoveryHoldMs(300);
+    openWithIdr(normal, 3200, 1000);
+    normal.push(rtp(3201, 2000, false, {0x7c, 0x81, 0x11}), 1);
+    normal.push(rtp(3202, 3000, true, {0x61, 0x22}), 60);
+    assert(normal.jitter.stats().corrupt_frames == 1);
+    assert(normal.frames.size() == 2);
+    assert(!normal.jitter.waitingForKeyframe());
+
+    Harness recovery;
+    recovery.jitter.setHoldMs(50);
+    recovery.jitter.setRecoveryHoldMs(300);
+    openWithIdr(recovery, 3300, 1000);
+    recovery.push(rtp(3301, 2000, true, {0x78, 0x00, 0x05, 0x67}), 1);
+    assert(recovery.jitter.waitingForKeyframe());
+    const auto corrupt_before = recovery.jitter.stats().corrupt_frames;
+
+    recovery.push(rtp(3302, 3000, false, {0x67, 0x42}), 2);
+    recovery.push(rtp(3303, 4000, false, {}, 8), 150);
+    assert(recovery.jitter.stats().corrupt_frames == corrupt_before);
+    assert(recovery.jitter.stats().buffered_frames == 1);
+
+    recovery.push(rtp(3304, 4000, false, {}, 8), 303);
+    assert(recovery.jitter.stats().corrupt_frames == corrupt_before + 1);
+    assert(recovery.jitter.stats().buffered_frames == 0);
+    assert(recovery.jitter.waitingForKeyframe());
 }
 
 } // namespace
@@ -406,9 +528,10 @@ int main() {
     test_reorders_retransmitted_fu_a();
     test_repeated_timeouts_gate_p_frames_until_real_idr();
     test_active_frame_progress_extends_idle_deadline();
-    test_active_frame_still_obeys_hard_deadline();
+    test_active_frame_progress_survives_old_hard_deadline();
+    test_pathological_active_frame_obeys_safety_cap_without_decoder_reset();
     test_isolated_p_frame_timeout_uses_soft_recovery();
-    test_incomplete_idr_uses_hard_recovery();
+    test_incomplete_idr_waits_for_recovery_without_decoder_reset();
     test_padding_consumes_sequence_without_false_loss();
     test_late_packet_repairs_receiver_report_loss();
     test_tracks_arrival_gap_sequence_jump_and_ssrc_change();
@@ -421,7 +544,11 @@ int main() {
     test_large_frame_defers_assembly_and_reuses_payload_storage();
     test_nacks_are_rate_limited_per_window();
     test_log_sized_gap_is_fully_covered();
-    test_nacks_stop_while_waiting_for_keyframe();
+    test_recovery_nacks_only_current_keyframe();
+    test_recovery_keyframe_nacks_remain_rate_limited();
+    test_recovery_discards_pending_nacks_from_old_stream();
+    test_recovery_nacks_sps_pps_gap_after_idr_is_identified();
+    test_recovery_hold_does_not_increase_normal_frame_latency();
     std::cout << "Video RTP jitter buffer tests passed\n";
     return 0;
 }

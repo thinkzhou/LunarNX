@@ -87,7 +87,7 @@ LunarNX/
 │       ├── auth_activity.cpp/h        # 认证页面 (显示设备码)
 │       ├── main_activity.cpp/h        # 主机列表 + 分辨率选择
 │       ├── stream_view.cpp/h          # 串流画面 + 状态/性能覆盖层
-│       └── perf_overlay.cpp/h         # 半透明性能统计叠加层 (R3 开关)
+│       └── perf_overlay.cpp/h         # 半透明性能统计叠加层
 │
 ├── lib/
 │   ├── libpeer/                       # sepfy/libpeer (WebRTC C 实现)

@@ -1,5 +1,4 @@
 #include "xbox_stream_session.h"
-#include "video_recovery_policy.h"
 #include "../diagnostics.h"
 
 #include <algorithm>
@@ -13,6 +12,7 @@ namespace {
 
 constexpr std::chrono::milliseconds kIceStableWindow{800};
 constexpr std::chrono::milliseconds kIceGatherTimeout{5000};
+constexpr std::chrono::milliseconds kNetworkPumpInterval{2};
 constexpr std::chrono::milliseconds kInputPollInterval{16};
 constexpr std::chrono::seconds kDataChannelTimeout{45};
 constexpr std::chrono::seconds kStartupKeyframeRetryInterval{1};
@@ -259,6 +259,18 @@ bool XboxStreamSession::start(const StreamProfile& profile,
 
     streaming_ = true;
     lunar::startDropDiagnosticWriter();
+    lunar::setCloud1080CrashProbeEnabled(
+        profile.type == SessionType::Cloud &&
+        profile.width >= 1920 && profile.height >= 1080);
+    lunar::cloud1080CrashProbeLog(
+        "crash-probe",
+        "DEBUG-c1080 phase=session-start type=cloud width=%d height=%d "
+        "fps=%d bitrate_kbps=%d backend=%s",
+        profile.width,
+        profile.height,
+        profile.fps,
+        streamProfileBitrateKbps(profile),
+        stream::videoBackendName(media_options.video_backend));
     if (callbacks.on_streaming) {
         callbacks.on_streaming();
     }
@@ -510,8 +522,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
     bool control_started = false;
     bool first_loop_logged = false;
     bool first_input_logged = false;
-    VideoRecoveryTransportRetry recovery_transport_retry;
     auto next_input_tick = std::chrono::steady_clock::now();
+    auto next_network_tick = next_input_tick;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     auto last_webrtc_pump = std::chrono::steady_clock::time_point{};
 #endif
@@ -525,41 +537,60 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                                  transport_.isDataChannelReady() ? "true" : "false");
             first_loop_logged = true;
         }
-        const bool input_connected = transport_.isConnected();
-        input::GamepadState gamepad_state{};
-        try {
-            gamepad_state = gamepad_.read();
-        } catch (...) {
-            // Keep zeroed state.
-        }
-        const bool guide_requested = control_started && input_connected &&
-                                     callbacks.consume_guide_button &&
-                                     callbacks.consume_guide_button();
-        if (guide_requested) {
-            // Send an unambiguous one-frame Nexus pulse. This also prevents
-            // the menu activation button from leaking into the game.
-            gamepad_state = {};
-            gamepad_state.guide = true;
-        } else if (callbacks.input_suppressed && callbacks.input_suppressed()) {
-            gamepad_state.view = false;
-            gamepad_state.menu = false;
-        }
-        const auto input_packet = xinput_.encode(gamepad_state);
-        if (control_started && !first_input_logged) {
-            lunar::diagnosticLog("xbox-stream", "first input path connected=%s packet_len=%zu",
-                                 input_connected ? "true" : "false", input_packet.size());
-            std::fprintf(stderr, "[xbox-stream] first input path connected=%s packet_len=%zu\n",
-                         input_connected ? "true" : "false", input_packet.size());
-            first_input_logged = true;
-        }
-        if (control_started && input_connected) {
-            if (channels_.sendInputPacket(input_packet.data(), input_packet.size())) {
-                perf_.recordInputPacket();
-            } else if (input_send_failure_logs < 8) {
+        const auto loop_started = std::chrono::steady_clock::now();
+        const bool input_due = loop_started >= next_input_tick;
+        if (input_due) {
+            const bool input_connected = transport_.isConnected();
+            input::GamepadState gamepad_state{};
+            try {
+                gamepad_state = gamepad_.read();
+            } catch (...) {
+                // Keep zeroed state.
+            }
+            const bool guide_requested = control_started && input_connected &&
+                                         callbacks.consume_guide_button &&
+                                         callbacks.consume_guide_button();
+            if (guide_requested) {
+                // Send an unambiguous one-frame Nexus pulse. This also prevents
+                // the menu activation button from leaking into the game.
+                gamepad_state = {};
+                gamepad_state.guide = true;
+            } else if (callbacks.input_suppressed && callbacks.input_suppressed()) {
+                gamepad_state.view = false;
+                gamepad_state.menu = false;
+            }
+            const auto input_packet = xinput_.encode(gamepad_state);
+            if (control_started && !first_input_logged) {
+                lunar::diagnosticLog(
+                    "xbox-stream",
+                    "first input path connected=%s packet_len=%zu",
+                    input_connected ? "true" : "false",
+                    input_packet.size());
+                std::fprintf(
+                    stderr,
+                    "[xbox-stream] first input path connected=%s packet_len=%zu\n",
+                    input_connected ? "true" : "false",
+                    input_packet.size());
+                first_input_logged = true;
+            }
+            if (control_started && input_connected) {
+                if (channels_.sendInputPacket(input_packet.data(), input_packet.size())) {
+                    perf_.recordInputPacket();
+                } else if (input_send_failure_logs < 8) {
+                    lunar::diagnosticLog("xbox-stream",
+                                         "input send failed sequence_attempt=%d",
+                                         input_send_failure_logs + 1);
+                    input_send_failure_logs++;
+                }
+            }
+            try {
+                rumble_.update();
+            } catch (const std::exception& e) {
                 lunar::diagnosticLog("xbox-stream",
-                                     "input send failed sequence_attempt=%d",
-                                     input_send_failure_logs + 1);
-                input_send_failure_logs++;
+                                     "rumble update exception: %s", e.what());
+            } catch (...) {
+                lunar::diagnosticLog("xbox-stream",
+                                     "rumble update unknown exception");
             }
         }
 
@@ -624,14 +655,6 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             transport_.sendReceiverFeedback(bitrate_bps);
             last_receiver_feedback = std::chrono::steady_clock::now();
         }
-        try {
-            rumble_.update();
-        } catch (const std::exception& e) {
-            lunar::diagnosticLog("xbox-stream", "rumble update exception: %s", e.what());
-        } catch (...) {
-            lunar::diagnosticLog("xbox-stream", "rumble update unknown exception");
-        }
-
         if (!control_started && transport_.isDataChannelReady()) {
             // Match XStreaming Control.start() sequence which already completed inside
             // startProtocol (auth -> gamepadRemoved -> delay -> gamepadAdded -> metadata).
@@ -688,16 +711,6 @@ void XboxStreamSession::runLoop(StreamProfile profile,
         }
 
         const auto now = std::chrono::steady_clock::now();
-        if (control_started && connected &&
-            recovery_transport_retry.shouldRetry(
-                media_stats.video_waiting_keyframe, now)) {
-            const bool retry_queued = transport_.requestVideoKeyframe();
-            perf_.recordRecoveryPli(retry_queued);
-            lunar::diagnosticLog(
-                "xbox-stream",
-                "transport-only keyframe retry result=%s",
-                retry_queued ? "true" : "false");
-        }
         if (control_started && connected) {
             const uint32_t missing_delta =
                 media_stats.video_rtp_missing_packets - keyframe_missing_baseline;
@@ -872,12 +885,20 @@ void XboxStreamSession::runLoop(StreamProfile profile,
 
         if (reconnect_count > 0 && !connected) {
             next_input_tick = std::chrono::steady_clock::now();
+            next_network_tick = next_input_tick;
             if (!sleepUnlessCancelled(std::chrono::milliseconds(100), callbacks)) break;
         } else {
-            next_input_tick += kInputPollInterval;
             const auto loop_done = std::chrono::steady_clock::now();
-            if (next_input_tick < loop_done) next_input_tick = loop_done;
-            if (!sleepUntilCancelled(next_input_tick, callbacks)) break;
+            if (input_due) {
+                next_input_tick += kInputPollInterval;
+                if (next_input_tick <= loop_done) {
+                    next_input_tick = loop_done + kInputPollInterval;
+                }
+            }
+            next_network_tick += kNetworkPumpInterval;
+            if (next_network_tick < loop_done) next_network_tick = loop_done;
+            const auto next_wakeup = std::min(next_network_tick, next_input_tick);
+            if (!sleepUntilCancelled(next_wakeup, callbacks)) break;
         }
     }
     } catch (const std::exception& e) {
@@ -1020,6 +1041,9 @@ void XboxStreamSession::cleanupResources(bool delete_session) {
     lunar::diagnosticLog("xbox-stream", "cleanup rumble stop begin");
     rumble_.stop();
     lunar::diagnosticLog("xbox-stream", "cleanup rumble stop done");
+    lunar::cloud1080CrashProbeLog(
+        "crash-probe", "DEBUG-c1080 phase=session-cleanup normal=1");
+    lunar::setCloud1080CrashProbeEnabled(false);
     lunar::stopDropDiagnosticWriter();
     lunar::diagnosticLog("xbox-stream", "cleanup done");
 }

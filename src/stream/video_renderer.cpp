@@ -2,10 +2,12 @@
 #include "../diagnostics.h"
 #include "perf_stats.h"
 #include "software_video_frame.h"
+#include "video_resolution_transition.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -46,6 +48,19 @@ namespace {
   bool shouldLogHardwareProbe(uint64_t frame_id) {
     return frame_id > 0 &&
            (frame_id <= HardwareProbeFrameLimit || frame_id % 120 == 0);
+  }
+
+  bool shouldLogCloud1080HardwareProbe(uint64_t frame_id,
+                                       const char* stage) {
+    if (!lunar::cloud1080CrashProbeEnabled() || frame_id == 0 || !stage) {
+      return false;
+    }
+    if (frame_id == 1) return true;
+    const bool coarse_stage = std::strcmp(stage, "present-entry") == 0 ||
+        std::strcmp(stage, "mapping-ready") == 0 ||
+        std::strcmp(stage, "mapping-rejected") == 0 ||
+        std::strcmp(stage, "queue-submit-after") == 0;
+    return coarse_stage && lunar::shouldSampleCloud1080CrashProbe(frame_id);
   }
 
   struct Vertex { float position[3]; float uv[2]; };
@@ -471,6 +486,13 @@ struct Deko3DRenderContext {
   float dithering_strength=kDefaultDitheringStrength;
   bool static_state_dirty=true;
   std::mutex render_mutex;
+  std::condition_variable decoder_reset_cv;
+  bool decoder_reset_requested=false;
+  bool decoder_reset_ready=false;
+  size_t decoder_reset_drain_steps=0;
+  VideoResolutionTransition resolution_transition;
+  AVFrame* resolution_transition_frame=nullptr;
+  size_t resolution_transition_drain_steps=0;
   AVFrame* pending_frame=nullptr;
   AVFrame* current_frame=nullptr;
   std::array<AVFrame*, brls::FRAMEBUFFERS_COUNT> submitted_frames{};
@@ -485,7 +507,8 @@ namespace {
 
 void hardwareProbeLog(uint64_t frame_id, const char* stage,
                       const char* format = nullptr, ...) {
-  if (!shouldLogHardwareProbe(frame_id)) return;
+  const bool crash_probe = shouldLogCloud1080HardwareProbe(frame_id, stage);
+  if (!crash_probe && !shouldLogHardwareProbe(frame_id)) return;
 
   char details[384] = {};
   if (format) {
@@ -494,22 +517,39 @@ void hardwareProbeLog(uint64_t frame_id, const char* stage,
     std::vsnprintf(details, sizeof(details), format, args);
     va_end(args);
   }
-  lunar::diagnosticLog(
-      "render-hwdiag",
-      "frame=%llu stage=%s%s%s",
-      static_cast<unsigned long long>(frame_id),
-      stage ? stage : "?",
-      format ? " " : "",
-      format ? details : "");
+  if (crash_probe) {
+    lunar::cloud1080CrashProbeLog(
+        "crash-probe",
+        "DEBUG-c1080 phase=present frame=%llu stage=%s%s%s",
+        static_cast<unsigned long long>(frame_id),
+        stage ? stage : "?",
+        format ? " " : "",
+        format ? details : "");
+  } else {
+    lunar::diagnosticLog(
+        "render-hwdiag",
+        "frame=%llu stage=%s%s%s",
+        static_cast<unsigned long long>(frame_id),
+        stage ? stage : "?",
+        format ? " " : "",
+        format ? details : "");
+  }
 }
 
 void releaseRetainedFrames(Deko3DRenderContext& s) {
+  if(s.resolution_transition_frame)av_frame_free(&s.resolution_transition_frame);
   if(s.pending_frame)av_frame_free(&s.pending_frame);
   if(s.current_frame)av_frame_free(&s.current_frame);
   for(auto*& frame:s.submitted_frames){
     if(frame)av_frame_free(&frame);
   }
   s.next_submitted_frame=0;
+}
+
+uint64_t renderNowMs() {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          RenderClock::now().time_since_epoch()).count());
 }
 
 void resetRenderTarget(RenderTarget& target) {
@@ -1302,6 +1342,7 @@ bool VideoRenderer::initialize(const char*,int w,int h){
     fprintf(stderr,"[render] image slot alloc fail\n");return false;
   }
   s->frame_w=w;s->frame_h=h;
+  s->resolution_transition.configure(w,h);
   s->target_w = brls::Application::windowWidth > 0
       ? static_cast<int>(brls::Application::windowWidth)
       : static_cast<int>(brls::Application::ORIGINAL_WINDOW_WIDTH);
@@ -1420,6 +1461,51 @@ bool VideoRenderer::render(const VideoFrame&frame){
     if(shouldLogRender())lunar::diagnosticLog("render","render reject frame ref failed");
     return false;
   }
+  const bool had_startup_candidate=
+      s->resolution_transition.hasStartupCandidate();
+  const int previous_candidate_width=
+      s->resolution_transition.candidateWidth();
+  const int previous_candidate_height=
+      s->resolution_transition.candidateHeight();
+  const auto decision=s->resolution_transition.observeFrame(
+      f->width,f->height,renderNowMs());
+  if(decision==ResolutionFrameDecision::HoldStartup){
+    if(s->resolution_transition_frame)
+      av_frame_free(&s->resolution_transition_frame);
+    s->resolution_transition_frame=keep;
+    if(!had_startup_candidate||f->width!=previous_candidate_width||
+       f->height!=previous_candidate_height){
+      lunar::dropDiagnosticLog(
+          "resolution-transition",
+          "phase=startup-hold candidate=%dx%d target=%dx%d wait_ms=%llu",
+          f->width,f->height,s->resolution_transition.targetWidth(),
+          s->resolution_transition.targetHeight(),
+          static_cast<unsigned long long>(
+              VideoResolutionTransition::StartupHoldMs));
+    }
+    return true;
+  }
+  if(decision==ResolutionFrameDecision::BeginTransition||
+     decision==ResolutionFrameDecision::HoldTransition){
+    if(s->resolution_transition_frame)
+      av_frame_free(&s->resolution_transition_frame);
+    s->resolution_transition_frame=keep;
+    if(decision==ResolutionFrameDecision::BeginTransition){
+      s->resolution_transition_drain_steps=0;
+      lunar::dropDiagnosticLog(
+          "resolution-transition",
+          "phase=start old=%dx%d new=%dx%d",
+          s->resolution_transition.activeWidth(),
+          s->resolution_transition.activeHeight(),f->width,f->height);
+    }
+    return true;
+  }
+  if(decision==ResolutionFrameDecision::KeepCurrent){
+    av_frame_free(&keep);
+    return true;
+  }
+  if(s->resolution_transition_frame)
+    av_frame_free(&s->resolution_transition_frame);
   if(s->pending_frame)av_frame_free(&s->pending_frame);
   s->pending_frame=keep;
   if(shouldLogRender())lunar::diagnosticLog("render","render queued width=%d height=%d",f->width,f->height);
@@ -1434,6 +1520,104 @@ void VideoRenderer::present(){
     return;
   }
   std::lock_guard<std::mutex> lock(s->render_mutex);
+  if(s->decoder_reset_requested){
+    if(!s->q||!s->present_ring){
+      s->decoder_reset_ready=false;
+      s->decoder_reset_requested=false;
+      s->decoder_reset_drain_steps=0;
+      s->decoder_reset_cv.notify_all();
+      return;
+    }
+
+    const size_t submitted_index=s->next_submitted_frame;
+    s->present_ring->begin(s->present_cb);
+    retireCompletedTargets(*s,submitted_index);
+    auto*& completed_frame=s->submitted_frames[submitted_index];
+    if(completed_frame)av_frame_free(&completed_frame);
+    const DkCmdList reset_list=s->present_ring->end(s->present_cb);
+    s->q.submitCommands(reset_list);
+    s->next_submitted_frame=
+        (submitted_index+1)%s->submitted_frames.size();
+    s->present_slice_active=false;
+    s->decoder_reset_drain_steps++;
+
+    // One pass retires every video command-ring slice. Beginning the first
+    // slice once more waits for the first no-op fence, which also proves that
+    // descriptor updates submitted before reset have completed. This avoids
+    // waiting the entire Borealis queue from inside draw().
+    if(s->decoder_reset_drain_steps>s->submitted_frames.size()){
+      s->fms.clear();
+      s->fi=-1;
+      s->mapped_luma_w=0;
+      s->mapped_luma_h=0;
+      s->static_state_dirty=true;
+      if(s->pending_frame)av_frame_free(&s->pending_frame);
+      if(s->current_frame)av_frame_free(&s->current_frame);
+      if(s->resolution_transition_frame)
+        av_frame_free(&s->resolution_transition_frame);
+      s->resolution_transition.reset();
+      s->resolution_transition_drain_steps=0;
+      s->decoder_reset_ready=true;
+      s->decoder_reset_requested=false;
+      s->decoder_reset_drain_steps=0;
+      s->decoder_reset_cv.notify_all();
+      lunar::dropDiagnosticLog(
+          "video-reset", "phase=gpu-fences-retired action=decoder-flush-ready");
+    }
+    return;
+  }
+  if(s->resolution_transition.startupCandidateReady(renderNowMs())){
+    if(s->pending_frame)av_frame_free(&s->pending_frame);
+    s->pending_frame=s->resolution_transition_frame;
+    s->resolution_transition_frame=nullptr;
+    s->resolution_transition.promoteStartupCandidate();
+    lunar::dropDiagnosticLog(
+        "resolution-transition",
+        "phase=startup-promote candidate=%dx%d",
+        s->resolution_transition.activeWidth(),
+        s->resolution_transition.activeHeight());
+  }
+  if(s->resolution_transition.isTransitioning()){
+    if(!s->q||!s->present_ring)return;
+
+    const size_t submitted_index=s->next_submitted_frame;
+    s->present_ring->begin(s->present_cb);
+    retireCompletedTargets(*s,submitted_index);
+    auto*& completed_frame=s->submitted_frames[submitted_index];
+    if(completed_frame)av_frame_free(&completed_frame);
+    const DkCmdList transition_list=s->present_ring->end(s->present_cb);
+    s->q.submitCommands(transition_list);
+    s->next_submitted_frame=
+        (submitted_index+1)%s->submitted_frames.size();
+    s->present_slice_active=false;
+    s->resolution_transition_drain_steps++;
+
+    if(s->resolution_transition_drain_steps>s->submitted_frames.size()){
+      const int old_width=s->resolution_transition.activeWidth();
+      const int old_height=s->resolution_transition.activeHeight();
+      const int new_width=s->resolution_transition.candidateWidth();
+      const int new_height=s->resolution_transition.candidateHeight();
+
+      // Every old command slice is fenced at this point. Destroy external
+      // Deko3D wrappers before releasing the NVDEC frames that own them.
+      s->fms.clear();
+      s->fi=-1;
+      s->mapped_luma_w=0;
+      s->mapped_luma_h=0;
+      s->static_state_dirty=true;
+      if(s->pending_frame)av_frame_free(&s->pending_frame);
+      if(s->current_frame)av_frame_free(&s->current_frame);
+      s->pending_frame=s->resolution_transition_frame;
+      s->resolution_transition_frame=nullptr;
+      s->resolution_transition.completeTransition();
+      s->resolution_transition_drain_steps=0;
+      lunar::dropDiagnosticLog(
+          "resolution-transition",
+          "phase=fences-retired old=%dx%d new=%dx%d",
+          old_width,old_height,new_width,new_height);
+    }
+    return;
+  }
   if(!s->pending_frame&&!s->current_frame){
     return;
   }
@@ -1526,16 +1710,26 @@ void VideoRenderer::present(){
   if(shouldLogRender())lunar::diagnosticLog("render","present submit width=%d height=%d",s->frame_w,s->frame_h);
 }
 
-void VideoRenderer::prepareDecoderReset(){
-  if(video_backend_==VideoBackend::Software)return;
+bool VideoRenderer::prepareDecoderReset(){
+  if(video_backend_==VideoBackend::Software)return true;
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);
-  if(!s)return;
-  std::lock_guard<std::mutex> lock(s->render_mutex);
-  // pending_frame has not reached a GPU command list and can be released
-  // immediately. Keep current/submitted frames and NvMap mappings alive until
-  // their normal command-ring fences retire, avoiding a recovery-time waitIdle.
-  if(s->pending_frame)av_frame_free(&s->pending_frame);
-  lunar::diagnosticLog("render", "decoder reset prepared without GPU idle wait");
+  if(!s)return false;
+  std::unique_lock<std::mutex> lock(s->render_mutex);
+  if(!s->ok||!s->q)return false;
+  s->decoder_reset_ready=false;
+  s->decoder_reset_drain_steps=0;
+  s->resolution_transition_drain_steps=0;
+  s->decoder_reset_requested=true;
+  constexpr auto kResetHandoffTimeout=std::chrono::milliseconds(250);
+  const bool completed=s->decoder_reset_cv.wait_for(
+      lock,kResetHandoffTimeout,[s](){return !s->decoder_reset_requested;});
+  if(!completed){
+    s->decoder_reset_requested=false;
+    s->decoder_reset_drain_steps=0;
+    lunar::dropDiagnosticLog("video-reset", "phase=gpu-quiesce-timeout");
+    return false;
+  }
+  return s->decoder_reset_ready;
 }
 
 bool VideoRenderer::pollEvents(){return true;}
@@ -1553,11 +1747,17 @@ void VideoRenderer::shutdown(){
   SoftwareVideoFrameSink::instance().clear();
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);if(!s)return;
   std::lock_guard<std::mutex> render_lock(s->render_mutex);
+  s->decoder_reset_requested=false;
+  s->decoder_reset_ready=false;
+  s->decoder_reset_drain_steps=0;
+  s->resolution_transition_drain_steps=0;
+  s->decoder_reset_cv.notify_all();
   if(!s->ok && !s->vctx && !s->pc && !s->pd && !s->pi)return;
   if(s->q)s->q.waitIdle();
   s->present_slice_active=false;
-  releaseRetainedFrames(*s);
   s->fms.clear();
+  releaseRetainedFrames(*s);
+  s->resolution_transition.reset();
   destroyPostProcessTargets(*s);
   s->vertex_buf.destroy();
   s->easu_uniform.destroy();
@@ -1616,7 +1816,7 @@ bool VideoRenderer::render(const VideoFrame& f){
   SDL_RenderClear(r);SDL_RenderCopy(r,t,nullptr,nullptr);SDL_RenderPresent(r);return true;
 }
 void VideoRenderer::present(){}
-void VideoRenderer::prepareDecoderReset(){}
+bool VideoRenderer::prepareDecoderReset(){return true;}
 bool VideoRenderer::pollEvents(){SDL_Event e;while(SDL_PollEvent(&e))if(e.type==SDL_QUIT||(e.type==SDL_KEYDOWN&&e.key.keysym.sym==SDLK_ESCAPE))return false;return true;}
 void VideoRenderer::shutdown(){
   std::lock_guard<std::mutex> lock(sdl_mutex_);

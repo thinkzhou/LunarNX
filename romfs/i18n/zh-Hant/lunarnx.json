@@ -220,10 +220,9 @@
   },
   "stream": {
     "live": "●  串流中",
-    "details_stop": "右緣左滑 選單   R3 詳細資料   - + 停止",
+    "details_stop": "右緣左滑 選單   - + 停止",
     "stop_action_plus": "停止串流組合鍵 Plus",
     "stop_action_minus": "停止串流組合鍵 Minus",
-    "toggle_stats": "切換統計詳細資料",
     "stop_title": "停止串流",
     "stop_confirm": "再次按 - + 停止串流",
     "stop_cancel_hint": "（等待 3 秒可取消確認）",

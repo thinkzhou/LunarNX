@@ -10,7 +10,7 @@ def require(condition, message):
 def main():
     renderer = Path("src/stream/video_renderer.cpp").read_text()
     present_start = renderer.index("void VideoRenderer::present()")
-    present_end = renderer.index("void VideoRenderer::prepareDecoderReset()", present_start)
+    present_end = renderer.index("bool VideoRenderer::prepareDecoderReset()", present_start)
     present = renderer[present_start:present_end]
 
     require("s->present_ring->begin(s->present_cb)" in present,
@@ -31,6 +31,24 @@ def main():
     require("pending_slice_mask" in renderer and
             "deferResetRenderTarget" in renderer,
             "GPU-used render targets must not be destroyed immediately")
+    require("resolution_transition.isTransitioning()" in present and
+            "resolution_transition_frame" in present and
+            "resolution_transition_drain_steps" in present,
+            "resolution changes must drain old GPU work before mapping a new geometry")
+    transition_start = present.index(
+        "if(s->resolution_transition.isTransitioning())")
+    transition_end = present.index(
+        "if(!s->pending_frame&&!s->current_frame)", transition_start)
+    transition = present[transition_start:transition_end]
+    transition_clear = transition.index("s->fms.clear()")
+    transition_release = transition.index("av_frame_free(&s->current_frame)")
+    require(transition_clear < transition_release,
+            "old Deko3D mappings must be destroyed before their NVDEC frames")
+    require("resolution_transition_drain_steps>s->submitted_frames.size()" in
+            transition and "s->q.waitIdle()" not in transition,
+            "resolution transition must retire every command slice without queue idle")
+    require("startupCandidateReady" in present,
+            "a non-target startup frame must eventually be displayed")
     require("MaxRetiredTargets" in renderer and
             "retired_targets.size() >= MaxRetiredTargets" in renderer,
             "deferred target storage must remain bounded on repeated resize/toggle events")
@@ -45,15 +63,15 @@ def main():
             "pushConstants(s.dithering_uniform.getGpuAddr()" in renderer,
             "dynamic post-process uniforms must be ordered on the GPU timeline")
 
-    reset_start = renderer.index("void VideoRenderer::prepareDecoderReset()")
+    reset_start = renderer.index("bool VideoRenderer::prepareDecoderReset()")
     reset_end = renderer.index("bool VideoRenderer::pollEvents()", reset_start)
     reset = renderer[reset_start:reset_end]
     require("s->q.waitIdle()" not in reset and
             "releaseRetainedFrames(*s)" not in reset and
             "s->fms.clear()" not in reset,
-            "decoder recovery must not block on unrelated GPU work or invalidate fenced mappings")
-    require("av_frame_free(&s->pending_frame)" in reset,
-            "decoder recovery may release only the frame that has not reached the GPU")
+            "the decoder thread must not operate on UI-owned GPU resources")
+    require("decoder_reset_cv.wait_for" in reset,
+            "decoder recovery must wait for the UI command-ring handoff")
 
     print("video renderer hardware safety test passed")
 

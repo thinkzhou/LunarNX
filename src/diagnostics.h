@@ -59,6 +59,7 @@ namespace detail {
 struct DropDiagnosticEntry {
     std::array<char, kDropDiagnosticLineBytes> text{};
     size_t length = 0;
+    bool urgent = false;
 };
 
 class DropDiagnosticWriter {
@@ -109,7 +110,7 @@ public:
         }
     }
 
-    bool enqueue(const char* text, size_t length) noexcept {
+    bool enqueue(const char* text, size_t length, bool urgent) noexcept {
         if (!text || length == 0) return false;
         try {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -122,6 +123,7 @@ public:
             entry.length = std::min(length, entry.text.size() - 1);
             std::memcpy(entry.text.data(), text, entry.length);
             entry.text[entry.length] = '\0';
+            entry.urgent = urgent;
             count_++;
             cv_.notify_one();
             return true;
@@ -136,6 +138,14 @@ public:
     }
 
 private:
+    bool hasUrgentLocked() const noexcept {
+        for (size_t offset = 0; offset < count_; ++offset) {
+            const size_t index = (head_ + offset) % entries_.size();
+            if (entries_[index].urgent) return true;
+        }
+        return false;
+    }
+
     void run() noexcept {
         std::vector<DropDiagnosticEntry> batch;
         try {
@@ -150,9 +160,11 @@ private:
             {
                 std::unique_lock<std::mutex> lock(mutex_);
                 cv_.wait(lock, [this]() { return stopping_ || count_ > 0; });
-                if (!stopping_) {
+                if (!stopping_ && !hasUrgentLocked()) {
                     cv_.wait_for(lock, std::chrono::milliseconds(20),
-                                 [this]() { return stopping_; });
+                                 [this]() {
+                                     return stopping_ || hasUrgentLocked();
+                                 });
                 }
                 while (count_ > 0) {
                     batch.push_back(entries_[head_]);
@@ -215,8 +227,10 @@ inline void stopDropDiagnosticWriter() noexcept {
     detail::dropDiagnosticWriter().stop();
 }
 
-inline bool enqueueDropDiagnostic(const char* text, size_t length) noexcept {
-    return detail::dropDiagnosticWriter().enqueue(text, length);
+inline bool enqueueDropDiagnostic(const char* text,
+                                  size_t length,
+                                  bool urgent = false) noexcept {
+    return detail::dropDiagnosticWriter().enqueue(text, length, urgent);
 }
 
 inline uint64_t dropDiagnosticQueueDrops() noexcept {
@@ -227,6 +241,35 @@ inline void startDropDiagnosticWriter() noexcept {}
 inline void stopDropDiagnosticWriter() noexcept {}
 inline uint64_t dropDiagnosticQueueDrops() noexcept { return 0; }
 #endif
+
+inline std::atomic<bool>& cloud1080CrashProbeFlag() {
+    static std::atomic<bool> enabled{false};
+    return enabled;
+}
+
+inline void setCloud1080CrashProbeEnabled(bool enabled) noexcept {
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    cloud1080CrashProbeFlag().store(enabled, std::memory_order_release);
+#else
+    (void)enabled;
+#endif
+}
+
+inline bool cloud1080CrashProbeEnabled() noexcept {
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    return cloud1080CrashProbeFlag().load(std::memory_order_acquire);
+#else
+    return false;
+#endif
+}
+
+inline bool shouldSampleCloud1080CrashProbe(uint64_t one_based_index) noexcept {
+    return cloud1080CrashProbeEnabled() &&
+           (one_based_index <= 4 || one_based_index == 8 ||
+            one_based_index == 12 || one_based_index == 24 ||
+            one_based_index == 60 || one_based_index == 120 ||
+            one_based_index == 240);
+}
 
 // Never throw: stream threads call this heavily. A failed mutex/file op must not
 // tear down the stream loop.
@@ -261,9 +304,10 @@ inline void diagnosticLog(const char* component, const char* format, ...) noexce
 // Sparse, always-available diagnostics for events that already caused a
 // visible stream defect. Unlike diagnosticLog(), this stays enabled when the
 // release build uses APP_DIAG=0; callers must never invoke it per frame.
-inline void dropDiagnosticLog(const char* component,
-                              const char* format,
-                              ...) noexcept {
+inline void enqueueFormattedDropDiagnostic(bool urgent,
+                                           const char* component,
+                                           const char* format,
+                                           va_list args) noexcept {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     try {
         std::array<char, kDropDiagnosticLineBytes> line{};
@@ -276,14 +320,14 @@ inline void dropDiagnosticLog(const char* component,
         if (written < 0) return;
         size_t used = std::min(static_cast<size_t>(written), line.size() - 1);
 
-        va_list args;
-        va_start(args, format);
+        va_list args_copy;
+        va_copy(args_copy, args);
         const int body_written = std::vsnprintf(
             line.data() + used,
             line.size() - used,
             format,
-            args);
-        va_end(args);
+            args_copy);
+        va_end(args_copy);
         if (body_written > 0) {
             used += std::min(static_cast<size_t>(body_written),
                              line.size() - used - 1);
@@ -292,13 +336,47 @@ inline void dropDiagnosticLog(const char* component,
             line[used++] = '\n';
             line[used] = '\0';
         }
-        enqueueDropDiagnostic(line.data(), used);
+        enqueueDropDiagnostic(line.data(), used, urgent);
     } catch (...) {
         // A diagnostic must never take down a media worker.
     }
 #else
+    (void)urgent;
     (void) component;
     (void) format;
+    (void) args;
+#endif
+}
+
+inline void dropDiagnosticLog(const char* component,
+                              const char* format,
+                              ...) noexcept {
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    va_list args;
+    va_start(args, format);
+    enqueueFormattedDropDiagnostic(false, component, format, args);
+    va_end(args);
+#else
+    (void)component;
+    (void)format;
+#endif
+}
+
+// Temporary, bounded crash breadcrumbs for the cloud 1080p hardware failure.
+// They still use the async writer, but wake it immediately so a service crash
+// is less likely to erase the final completed stage.
+inline void cloud1080CrashProbeLog(const char* component,
+                                   const char* format,
+                                   ...) noexcept {
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    if (!cloud1080CrashProbeEnabled()) return;
+    va_list args;
+    va_start(args, format);
+    enqueueFormattedDropDiagnostic(true, component, format, args);
+    va_end(args);
+#else
+    (void)component;
+    (void)format;
 #endif
 }
 

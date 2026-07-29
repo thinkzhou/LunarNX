@@ -41,7 +41,7 @@ def main() -> None:
             "recordPresentPipeline(*s,fb,db,perf_)" in renderer,
             "Every Borealis draw must use the command ring and current framebuffer")
     present_start = renderer.index("void VideoRenderer::present()")
-    present_end = renderer.index("void VideoRenderer::prepareDecoderReset()", present_start)
+    present_end = renderer.index("bool VideoRenderer::prepareDecoderReset()", present_start)
     require("s->q.waitIdle()" not in renderer[present_start:present_end],
             "Borealis draw must not wait for queue idle before endFrame/presentImage")
     require("updateFrameMapping(*s,s->current_frame)" in renderer,

@@ -58,6 +58,10 @@ def main():
     require("video_recovery_request_" in header and
             "video_decoder_reset_pending_" in header,
             "Video queue recovery must coordinate a decoder reset and keyframe request")
+    require("recovery_epoch" in header and
+            "video_waiting_for_keyframe_" in header and
+            "contains_idr" in header,
+            "Hard recovery must tag queued access units and gate decode on an IDR")
     require("hasVideoRecoveryRequest" in header and
             "clearVideoRecoveryRequest" in header,
             "MediaPipeline should expose throttled keyframe recovery state")
@@ -91,10 +95,26 @@ def main():
     require("audio_queue_cv_.notify_one()" in impl,
             "MediaPipeline should wake the audio worker after enqueue")
     require("video queue overflow" in impl and
-            "markVideoRecovery" in impl,
+            "beginHardVideoRecoveryLocked" in impl,
             "Video queue overflow should trigger reference-chain recovery")
     require("resetForKeyframe" in impl,
             "Video worker should reset the decoder after media discontinuity")
+    hard_recovery = method_body(
+        impl,
+        "bool MediaPipeline::beginHardVideoRecoveryLocked(bool force_new_epoch,")
+    require("video_queue_.clear()" in hard_recovery and
+            "video_recovery_epoch_.fetch_add(1)" in hard_recovery and
+            "video_waiting_for_keyframe_ = true" in hard_recovery,
+            "Hard recovery must discard stale queued video before advancing the epoch")
+    worker = method_body(impl, "void MediaPipeline::videoWorkerLoop()")
+    require("resetVideoDecoderForKeyframe()" in worker and
+            "packet.contains_idr" in worker,
+            "Only the video worker may reset the decoder before a recovery IDR")
+    process_video = method_body(
+        impl, "void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet)")
+    require("packet.recovery_epoch != video_recovery_epoch_.load()" in process_video and
+            "video_waiting_for_keyframe_.load() && !packet.contains_idr" in process_video,
+            "Stale epochs and non-IDR recovery packets must not reach the decoder")
     require("std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns))" not in impl,
             "The video decode worker should not sleep for A/V lead time")
 

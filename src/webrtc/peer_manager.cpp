@@ -164,6 +164,18 @@ void PeerManager::onVideoTrack(uint8_t* data,
     auto* self = static_cast<PeerManager*>(userdata);
     const uint64_t arrival_ns = elapsedNs(self->media_clock_start_);
     int log_index = self->video_callback_logs_.fetch_add(1);
+    const uint64_t packet_index = static_cast<uint64_t>(log_index) + 1;
+    if (packet_index <= 4 && lunar::cloud1080CrashProbeEnabled()) {
+        lunar::cloud1080CrashProbeLog(
+            "crash-probe",
+            "DEBUG-c1080 phase=rtp-received packet=%llu bytes=%zu seq=%u "
+            "rtp_ts=%u arrival_ns=%llu",
+            static_cast<unsigned long long>(packet_index),
+            size,
+            sequence,
+            timestamp,
+            static_cast<unsigned long long>(arrival_ns));
+    }
     if (log_index < 8) {
         lunar::diagnosticLog("webrtc", "video callback begin len=%zu has_cb=%s",
                              size,
@@ -184,6 +196,19 @@ void PeerManager::onVideoTrack(uint8_t* data,
                                size_t access_unit_size,
                                uint16_t frame_sequence,
                                uint32_t frame_timestamp) {
+                const uint64_t access_unit_index =
+                    self->crash_probe_access_units_.fetch_add(1) + 1;
+                if (lunar::shouldSampleCloud1080CrashProbe(access_unit_index)) {
+                    lunar::cloud1080CrashProbeLog(
+                        "crash-probe",
+                        "DEBUG-c1080 phase=access-unit-complete au=%llu bytes=%zu "
+                        "seq=%u rtp_ts=%u arrival_ns=%llu",
+                        static_cast<unsigned long long>(access_unit_index),
+                        access_unit_size,
+                        frame_sequence,
+                        frame_timestamp,
+                        static_cast<unsigned long long>(arrival_ns));
+                }
                 const uint64_t mapped_timestamp =
                     self->video_clock_.map(frame_timestamp, arrival_ns);
                 if (self->callbacks_.on_video_frame) {
@@ -220,6 +245,10 @@ void PeerManager::onVideoTrack(uint8_t* data,
 }
 
 void PeerManager::handleVideoJitterRecovery(bool reset_decoder) noexcept {
+    lunar::cloud1080CrashProbeLog(
+        "crash-probe",
+        "DEBUG-c1080 phase=jitter-recovery reset_decoder=%d",
+        reset_decoder ? 1 : 0);
     if (callbacks_.on_video_recovery) {
         try {
             callbacks_.on_video_recovery(reset_decoder);
@@ -309,6 +338,7 @@ bool PeerManager::initialize() {
     connected_ = false;
     data_channels_created_ = false;
     video_callback_logs_ = 0;
+    crash_probe_access_units_ = 0;
     audio_callback_logs_ = 0;
     process_event_logs_ = 0;
     rumble_parse_logs_ = 0;
@@ -362,6 +392,7 @@ bool PeerManager::initialize() {
 
 void PeerManager::setCallbacks(const PeerCallbacks& callbacks) {
     video_callback_logs_ = 0;
+    crash_probe_access_units_ = 0;
     audio_callback_logs_ = 0;
     process_event_logs_ = 0;
     rumble_parse_logs_ = 0;
@@ -525,7 +556,7 @@ bool PeerManager::enqueueSimple(OutboundCommand command, bool high_priority) {
 }
 
 bool PeerManager::enqueueNack(uint16_t pid, uint16_t blp) {
-    if (!connected_.load() || video_jitter_.waitingForKeyframe()) return false;
+    if (!connected_.load()) return false;
     try {
         std::lock_guard<std::mutex> lock(outbound_mutex_);
         for (const auto& command : outbound_commands_) {
@@ -535,15 +566,33 @@ bool PeerManager::enqueueNack(uint16_t pid, uint16_t blp) {
             }
         }
         if (outbound_commands_.size() >= kMaxOutboundCommands) {
-            logOutboundDrop("queue_full", OutboundType::Nack);
-            return false;
+            auto discard = std::find_if(
+                outbound_commands_.begin(), outbound_commands_.end(),
+                [](const OutboundCommand& queued) {
+                    return queued.type == OutboundType::InputLatest ||
+                           queued.type == OutboundType::ReceiverFeedback;
+                });
+            if (discard == outbound_commands_.end()) {
+                logOutboundDrop("queue_full", OutboundType::Nack);
+                return false;
+            }
+            logOutboundDrop("nack_priority_eviction", discard->type);
+            outbound_commands_.erase(discard);
         }
         OutboundCommand command;
         command.type = OutboundType::Nack;
         command.pid = pid;
         command.blp = blp;
         command.id = next_outbound_command_id_++;
-        outbound_commands_.push_back(std::move(command));
+        command.expires_at = std::chrono::steady_clock::now() +
+                             std::chrono::milliseconds(250);
+        const auto position = std::find_if(
+            outbound_commands_.begin(), outbound_commands_.end(),
+            [](const OutboundCommand& queued) {
+                return queued.type != OutboundType::Pli &&
+                       queued.type != OutboundType::Nack;
+            });
+        outbound_commands_.insert(position, std::move(command));
         return true;
     } catch (...) {
         return false;
@@ -589,6 +638,42 @@ bool PeerManager::isReliableCommand(OutboundType type) {
     return type == OutboundType::InputReliable ||
            type == OutboundType::Control ||
            type == OutboundType::Message;
+}
+
+bool PeerManager::isSctpCommand(OutboundType type) {
+    return isReliableCommand(type) || type == OutboundType::InputLatest;
+}
+
+int PeerManager::outboundPriority(OutboundType type) {
+    switch (type) {
+        case OutboundType::Pli: return 0;
+        case OutboundType::Nack: return 1;
+        case OutboundType::ReceiverFeedback: return 2;
+        case OutboundType::InputReliable:
+        case OutboundType::Control:
+        case OutboundType::Message: return 3;
+        case OutboundType::InputLatest: return 4;
+    }
+    return 5;
+}
+
+bool PeerManager::selectOutboundCommand(OutboundCommand& command,
+                                        bool allow_sctp) const {
+    std::lock_guard<std::mutex> lock(outbound_mutex_);
+    auto selected = outbound_commands_.end();
+    int selected_priority = 6;
+    for (auto it = outbound_commands_.begin();
+         it != outbound_commands_.end(); ++it) {
+        if (!allow_sctp && isSctpCommand(it->type)) continue;
+        const int priority = outboundPriority(it->type);
+        if (priority < selected_priority) {
+            selected = it;
+            selected_priority = priority;
+        }
+    }
+    if (selected == outbound_commands_.end()) return false;
+    command = *selected;
+    return true;
 }
 
 bool PeerManager::hasPendingReliableData() const {
@@ -662,18 +747,27 @@ int PeerManager::sendOutboundCommand(const OutboundCommand& command) {
 void PeerManager::drainOutboundCommands(
     std::chrono::steady_clock::time_point deadline) {
     constexpr size_t kMaxCommandsPerPump = 8;
+    bool allow_sctp = true;
     for (size_t sent = 0; sent < kMaxCommandsPerPump; ++sent) {
         OutboundCommand command;
         try {
-            std::lock_guard<std::mutex> lock(outbound_mutex_);
-            if (outbound_commands_.empty()) return;
-            command = outbound_commands_.front();
+            if (!selectOutboundCommand(command, allow_sctp)) return;
         } catch (...) {
             logOutboundDrop("snapshot_failed", OutboundType::InputReliable);
             return;
         }
+        if (command.expires_at.time_since_epoch().count() != 0 &&
+            std::chrono::steady_clock::now() >= command.expires_at) {
+            completeOutboundCommand(command, 0);
+            logOutboundDrop("expired", command.type);
+            continue;
+        }
         const int result = sendOutboundCommand(command);
-        if (completeOutboundCommand(command, result)) return;
+        if (completeOutboundCommand(command, result)) {
+            if (!isSctpCommand(command.type)) return;
+            allow_sctp = false;
+            continue;
+        }
         if (sent > 0 && std::chrono::steady_clock::now() >= deadline) return;
     }
 }
@@ -818,11 +912,17 @@ void PeerManager::processEvents() {
         PeerConnectionMediaStats network_stats = {};
         peer_connection_get_media_stats(pc_, &network_stats);
         if (network_stats.ice_rtt_ms > 0) {
+            const uint64_t rtt_ms = network_stats.ice_rtt_ms;
             const uint64_t hold_ms = std::max<uint64_t>(
                 VideoRtpJitterBuffer::kDefaultHoldMs,
                 std::min<uint64_t>(180,
-                                   static_cast<uint64_t>(network_stats.ice_rtt_ms) * 2 + 20));
+                                   rtt_ms * 2 + 20));
             video_jitter_.setHoldMs(hold_ms);
+            const uint64_t recovery_hold_ms = std::max<uint64_t>(
+                VideoRtpJitterBuffer::kDefaultRecoveryHoldMs,
+                std::min<uint64_t>(VideoRtpJitterBuffer::kMaxRecoveryHoldMs,
+                                   rtt_ms + 150));
+            video_jitter_.setRecoveryHoldMs(recovery_hold_ms);
         }
         if (log_index < 16) {
             lunar::diagnosticLog("webrtc", "processEvents done index=%d", log_index);

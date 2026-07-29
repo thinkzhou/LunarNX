@@ -76,9 +76,9 @@ def main():
         loop_source.index("case PEER_CONNECTION_COMPLETED"):
         loop_source.index("case PEER_CONNECTION_FAILED")
     ]
-    pending_dtls = peer_connection[
-        peer_connection.index("static int peer_connection_drain_pending_dtls"):
-        peer_connection.index("static void peer_connection_outgoing_rtp_packet")
+    pending_dtls = completed_loop[
+        completed_loop.index("while (dtls_srtp_has_pending(&pc->dtls_srtp))"):
+        completed_loop.index("} else if (rtp_packet_validate")
     ]
     require(completed_loop.count("peer_connection_note_remote_activity(pc);") >= 2 and
             "peer_connection_note_remote_activity(pc);" in pending_dtls,
@@ -98,7 +98,7 @@ def main():
     require("PEER_CONNECTION_MAX_PACKETS_PER_LOOP" in peer_connection and
             "while (packets_processed < PEER_CONNECTION_MAX_PACKETS_PER_LOOP)" in peer_connection,
             "WebRTC completed-state loop should drain multiple UDP packets so RTP cannot starve DTLS/SCTP data")
-    require("loop_work = packets_processed + rtp_decoded_packets + pending_dtls_records" in peer_connection and
+    require("loop_work = packets_processed + rtp_decoded_packets" in peer_connection and
             "return loop_work;" in peer_connection,
             "WebRTC pump should report queued media work to the bounded outer drain")
     require("PEER_CONNECTION_MAX_RTP_DECODE_PER_LOOP" not in peer_connection and

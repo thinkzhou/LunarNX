@@ -97,10 +97,10 @@ public:
     // the decoder reset independently; the session acknowledges this flag
     // after a throttled control/PLI request succeeds.
     bool hasVideoRecoveryRequest() const { return video_recovery_request_.load(); }
-    void clearVideoRecoveryRequest() { video_recovery_request_ = false; }
-    // Ask the transport for an IDR. Isolated packet loss keeps the active
-    // decoder; hard jitter recovery resets it on the video worker before the
-    // replacement IDR is decoded.
+    void clearVideoRecoveryRequest();
+    // Ask the transport for an IDR. Packet-loss recovery keeps the active
+    // decoder; only invalid H.264 or a bounded-buffer failure requests a
+    // decoder reset on the video worker.
     void requestVideoRecovery(const char* reason, bool reset_decoder = false);
     void presentVideoFrame();
 
@@ -110,6 +110,8 @@ private:
     struct QueuedVideoPacket {
         uint64_t timestamp = 0;
         uint32_t generation = 0;
+        uint32_t recovery_epoch = 0;
+        bool contains_idr = false;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         std::chrono::steady_clock::time_point enqueued_at;
         uint64_t queue_age_us = 0;
@@ -128,7 +130,11 @@ private:
     void audioWorkerLoop();
     void processVideoPacket(const QueuedVideoPacket& packet);
     bool resetVideoDecoderForKeyframe();
-    void markVideoRecovery(const char* reason);
+    void beginHardVideoRecovery(const char* reason,
+                                bool force_new_epoch = false);
+    bool beginHardVideoRecoveryLocked(bool force_new_epoch,
+                                      size_t& dropped_packets,
+                                      size_t& dropped_bytes);
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     void recordVideoQueueLocked();
 #endif
@@ -159,6 +165,9 @@ private:
     uint32_t video_worker_generation_ = 0;
     std::atomic<bool> video_recovery_request_{false};
     std::atomic<bool> video_decoder_reset_pending_{false};
+    std::atomic<bool> video_waiting_for_keyframe_{false};
+    std::atomic<uint32_t> video_recovery_epoch_{0};
+    bool video_decoder_reset_wakeup_ = false;
 
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;

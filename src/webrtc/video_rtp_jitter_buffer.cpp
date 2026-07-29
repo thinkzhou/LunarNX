@@ -232,6 +232,7 @@ struct VideoRtpJitterBuffer::Impl {
     std::deque<Frame> frames;
     std::bitset<kSequenceWindow> received_window;
     uint64_t hold_ms = kDefaultHoldMs;
+    uint64_t recovery_hold_ms = kDefaultRecoveryHoldMs;
     size_t buffered_bytes = 0;
     size_t buffered_packets = 0;
 
@@ -250,6 +251,7 @@ struct VideoRtpJitterBuffer::Impl {
     uint32_t last_consumed_sequence = 0;
 
     bool recovery_notified = false;
+    bool decoder_reset_notified = false;
     uint64_t last_recovery_notify_ms = 0;
     bool soft_recovery_active = false;
     uint64_t last_soft_loss_ms = 0;
@@ -260,6 +262,9 @@ struct VideoRtpJitterBuffer::Impl {
     struct MissingRange {
         uint32_t cursor = 0;
         uint32_t end = 0;
+        uint32_t timestamp = 0;
+        bool recovery_candidate = false;
+        bool recovery_authorized = false;
     };
     std::array<MissingRange, kMaxPendingNackRanges> pending_nack_ranges{};
     size_t pending_nack_head = 0;
@@ -292,6 +297,7 @@ struct VideoRtpJitterBuffer::Impl {
         have_last_consumed_sequence = false;
         last_consumed_sequence = 0;
         recovery_notified = false;
+        decoder_reset_notified = false;
         last_recovery_notify_ms = 0;
         soft_recovery_active = false;
         last_soft_loss_ms = 0;
@@ -345,9 +351,25 @@ struct VideoRtpJitterBuffer::Impl {
         pending_nack_count = 0;
     }
 
+    template <typename Keep>
+    void filterPendingNacks(Keep keep) {
+        std::array<MissingRange, kMaxPendingNackRanges> filtered{};
+        size_t count = 0;
+        for (size_t index = 0; index < pending_nack_count; ++index) {
+            auto range = pending_nack_ranges[
+                (pending_nack_head + index) % kMaxPendingNackRanges];
+            if (range.cursor < range.end && keep(range)) {
+                filtered[count++] = range;
+            }
+        }
+        pending_nack_ranges = filtered;
+        pending_nack_head = 0;
+        pending_nack_count = count;
+    }
+
     void drainPendingNacks(uint64_t now_ms, const NackCallback& nack) {
         discardCompletedPendingNackRanges();
-        if (!nack || waiting_keyframe || pending_nack_count == 0) return;
+        if (!nack || pending_nack_count == 0) return;
         if (!have_nack_window || now_ms < nack_window_started_ms ||
             now_ms - nack_window_started_ms >= kNackWindowMs) {
             have_nack_window = true;
@@ -357,6 +379,9 @@ struct VideoRtpJitterBuffer::Impl {
         while (pending_nack_count > 0 &&
                nacks_in_window < kMaxNacksPerWindow) {
             auto& range = pendingNackFront();
+            if (range.recovery_candidate && !range.recovery_authorized) {
+                return;
+            }
             while (range.cursor < range.end && wasReceived(range.cursor)) {
                 range.cursor++;
             }
@@ -390,9 +415,11 @@ struct VideoRtpJitterBuffer::Impl {
 
     void sendNacks(uint32_t first_missing,
                    uint32_t end,
+                   uint32_t timestamp,
                    uint64_t now_ms,
-                   const NackCallback& nack) {
-        if (!nack || waiting_keyframe || end <= first_missing ||
+                   const NackCallback& nack,
+                   bool recovery_authorized) {
+        if (!nack || end <= first_missing ||
             end - first_missing > kMaxNackGap) {
             return;
         }
@@ -400,14 +427,22 @@ struct VideoRtpJitterBuffer::Impl {
         if (pending_nack_count >= kMaxPendingNackRanges) return;
         const size_t tail =
             (pending_nack_head + pending_nack_count) % kMaxPendingNackRanges;
-        pending_nack_ranges[tail] = {first_missing, end};
+        pending_nack_ranges[tail] = {
+            first_missing,
+            end,
+            timestamp,
+            waiting_keyframe,
+            !waiting_keyframe || recovery_authorized,
+        };
         pending_nack_count++;
         drainPendingNacks(now_ms, nack);
     }
 
     SequenceUpdate noteSequence(uint16_t sequence,
+                                uint32_t timestamp,
                                 uint64_t now_ms,
-                                const NackCallback& nack) {
+                                const NackCallback& nack,
+                                bool recovery_authorized) {
         SequenceUpdate update;
         if (!have_sequence) {
             have_sequence = true;
@@ -450,7 +485,12 @@ struct VideoRtpJitterBuffer::Impl {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
                 counters.last_gap_packets = delta - 1;
 #endif
-                sendNacks(previous_highest + 1, extended, now_ms, nack);
+                sendNacks(previous_highest + 1,
+                          extended,
+                          timestamp,
+                          now_ms,
+                          nack,
+                          recovery_authorized);
             }
         } else {
             const uint32_t distance = highest_sequence - extended;
@@ -523,6 +563,37 @@ struct VideoRtpJitterBuffer::Impl {
         return false;
     }
 
+    static bool packetMayContainRecoveryPoint(const uint8_t* payload,
+                                              size_t size) {
+        if (!payload || size == 0) return false;
+        const uint8_t type = naluType(payload, size);
+        if (type == 5 || type == 7 || type == 8) return true;
+        if (type == 28) {
+            if (size < 2) return false;
+            const uint8_t fragmented_type = payload[1] & 0x1f;
+            return fragmented_type == 5 || fragmented_type == 7 ||
+                   fragmented_type == 8;
+        }
+        if (type != 24) return false;
+
+        size_t position = 1;
+        while (position + 2 <= size) {
+            const size_t nalu_size =
+                (static_cast<size_t>(payload[position]) << 8) |
+                payload[position + 1];
+            position += 2;
+            if (nalu_size == 0 || nalu_size > size - position) return false;
+            const uint8_t aggregated_type = naluType(payload + position,
+                                                      nalu_size);
+            if (aggregated_type == 5 || aggregated_type == 7 ||
+                aggregated_type == 8) {
+                return true;
+            }
+            position += nalu_size;
+        }
+        return false;
+    }
+
     static bool frameMayContainIdr(const Frame& frame) {
         for (const auto& packet : frame.packets) {
             if (packetMayContainIdr(packetPayload(frame, packet),
@@ -531,6 +602,41 @@ struct VideoRtpJitterBuffer::Impl {
             }
         }
         return false;
+    }
+
+    static bool frameMayContainRecoveryPoint(const Frame& frame) {
+        for (const auto& packet : frame.packets) {
+            if (packetMayContainRecoveryPoint(packetPayload(frame, packet),
+                                              packet.payload_size)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool frameMayContainIdr(uint32_t timestamp) const {
+        for (const auto& frame : frames) {
+            if (frame.timestamp == timestamp) return frameMayContainIdr(frame);
+        }
+        return false;
+    }
+
+    void authorizeRecoveryNacks(uint32_t timestamp,
+                                uint64_t now_ms,
+                                const NackCallback& nack) {
+        // Once an IDR fragment is observed, only its timestamp can still
+        // repair the decoder. Older tentative gaps are stale P-frames.
+        filterPendingNacks([timestamp](const MissingRange& range) {
+            return !range.recovery_candidate || range.timestamp == timestamp;
+        });
+        for (size_t index = 0; index < pending_nack_count; ++index) {
+            auto& range = pending_nack_ranges[
+                (pending_nack_head + index) % kMaxPendingNackRanges];
+            if (range.recovery_candidate && range.timestamp == timestamp) {
+                range.recovery_authorized = true;
+            }
+        }
+        drainPendingNacks(now_ms, nack);
     }
 
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
@@ -568,14 +674,30 @@ struct VideoRtpJitterBuffer::Impl {
 
     void enterRecovery(const RecoveryCallback& recovery,
                        uint64_t now_ms,
+                       uint32_t discarded_timestamp,
+                       bool reset_decoder,
                        const char*) {
         const bool was_waiting = waiting_keyframe;
         waiting_keyframe = true;
-        clearPendingNacks();
+        // A later buffered IDR may already have a pending range. Keep only
+        // those later-frame ranges and wait for that frame's IDR evidence.
+        filterPendingNacks([this, discarded_timestamp](MissingRange& range) {
+            if (!timestampNewer(range.timestamp, discarded_timestamp)) {
+                return false;
+            }
+            range.recovery_candidate = true;
+            range.recovery_authorized = frameMayContainIdr(range.timestamp);
+            return true;
+        });
         soft_recovery_active = false;
         soft_losses_in_window = 0;
-        if (!was_waiting) {
+        const bool request_decoder_reset =
+            reset_decoder && !decoder_reset_notified;
+        if (request_decoder_reset) {
+            decoder_reset_notified = true;
             notifyRecovery(recovery, true, now_ms, true);
+        } else if (!was_waiting) {
+            notifyRecovery(recovery, false, now_ms, true);
         } else {
             notifyRecovery(recovery, false, now_ms, false);
         }
@@ -708,6 +830,7 @@ struct VideoRtpJitterBuffer::Impl {
                     soft_recovery_active = false;
                     soft_losses_in_window = 0;
                     recovery_notified = false;
+                    decoder_reset_notified = false;
                 } else if (result == AssembleResult::CompleteDiscontinuous) {
                     requestSoftRecovery(recovery, now_ms);
                 } else if (soft_recovery_active) {
@@ -731,12 +854,18 @@ struct VideoRtpJitterBuffer::Impl {
 
             const uint64_t frame_age_ms = elapsedMs(now_ms, front.first_seen_ms);
             const uint64_t idle_age_ms = elapsedMs(now_ms, front.last_progress_ms);
-            const bool idle_timeout = idle_age_ms >= hold_ms;
+            const bool contains_idr = frameMayContainIdr(front);
+            const bool recovery_candidate = waiting_keyframe &&
+                frameMayContainRecoveryPoint(front);
+            const uint64_t frame_hold_ms = recovery_candidate
+                ? recovery_hold_ms
+                : hold_ms;
+            const bool idle_timeout = idle_age_ms >= frame_hold_ms;
             const bool hard_timeout = frame_age_ms >= kMaxFrameHoldMs;
             if (result == AssembleResult::Invalid ||
                 result == AssembleResult::Overflow || idle_timeout ||
                 hard_timeout) {
-                const bool contains_idr = frameMayContainIdr(front);
+                const uint32_t frame_timestamp = front.timestamp;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
                 const bool marker_seen = front.marker_seen;
                 const bool partition_head_seen = frameHasPartitionHead(front);
@@ -766,6 +895,8 @@ struct VideoRtpJitterBuffer::Impl {
                 if (!hard_recovery && idle_timeout) {
                     hard_recovery = softLossRequiresHardRecovery(now_ms);
                 }
+                const bool reset_decoder = result == AssembleResult::Invalid ||
+                    result == AssembleResult::Overflow;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
                 const char* reject_reason = result == AssembleResult::Invalid
                     ? "invalid_h264"
@@ -774,21 +905,25 @@ struct VideoRtpJitterBuffer::Impl {
                         : hard_timeout ? "hard_timeout" : "idle_timeout";
                 lunar::dropDiagnosticLog(
                     "rtp-jitter",
-                    "reject_reason=%s hard_recovery=%d frame_age_ms=%llu "
+                    "reject_reason=%s hard_recovery=%d reset_decoder=%d "
+                    "frame_age_ms=%llu "
                     "idle_age_ms=%llu hold_ms=%llu packets=%zu marker_seen=%d "
                     "partition_head_seen=%d contains_idr=%d",
                     reject_reason,
                     hard_recovery ? 1 : 0,
+                    reset_decoder ? 1 : 0,
                     static_cast<unsigned long long>(frame_age_ms),
                     static_cast<unsigned long long>(idle_age_ms),
-                    static_cast<unsigned long long>(hold_ms),
+                    static_cast<unsigned long long>(frame_hold_ms),
                     frame_packets,
                     marker_seen ? 1 : 0,
                     partition_head_seen ? 1 : 0,
                     contains_idr ? 1 : 0);
 #endif
                 if (hard_recovery) {
-                    enterRecovery(recovery, now_ms, "incomplete frame");
+                    enterRecovery(recovery, now_ms, frame_timestamp,
+                                  reset_decoder,
+                                  "incomplete frame");
                 } else {
                     requestSoftRecovery(recovery, now_ms);
                 }
@@ -800,9 +935,10 @@ struct VideoRtpJitterBuffer::Impl {
 
     void overflow(const RecoveryCallback& recovery, uint64_t now_ms) {
         clearFrames();
+        clearPendingNacks();
         counters.overflow_frames++;
         counters.corrupt_frames++;
-        enterRecovery(recovery, now_ms, "jitter buffer overflow");
+        enterRecovery(recovery, now_ms, 0, true, "jitter buffer overflow");
     }
 
     void receive(const uint8_t* packet,
@@ -833,7 +969,13 @@ struct VideoRtpJitterBuffer::Impl {
 
         drainPendingNacks(now_ms, nack);
 
-        const SequenceUpdate sequence = noteSequence(parsed.sequence, now_ms, nack);
+        const bool recovery_authorized =
+            packetMayContainIdr(parsed.payload, parsed.payload_size);
+        const SequenceUpdate sequence = noteSequence(parsed.sequence,
+                                                     parsed.timestamp,
+                                                     now_ms,
+                                                     nack,
+                                                     recovery_authorized);
         if (sequence.duplicate) return;
 
         if (parsed.payload_size > kMaxRtpPayloadBytes) {
@@ -892,6 +1034,9 @@ struct VideoRtpJitterBuffer::Impl {
         if (parsed.payload_size > 0) frame->last_progress_ms = now_ms;
         buffered_packets++;
         buffered_bytes += parsed.payload_size;
+        if (waiting_keyframe && recovery_authorized) {
+            authorizeRecoveryNacks(parsed.timestamp, now_ms, nack);
+        }
         drain(now_ms, emit, recovery);
     }
 
@@ -938,6 +1083,11 @@ void VideoRtpJitterBuffer::reset() {
 
 void VideoRtpJitterBuffer::setHoldMs(uint64_t hold_ms) {
     impl_->hold_ms = std::max<uint64_t>(1, std::min<uint64_t>(hold_ms, 1000));
+}
+
+void VideoRtpJitterBuffer::setRecoveryHoldMs(uint64_t hold_ms) {
+    impl_->recovery_hold_ms = std::max<uint64_t>(kDefaultHoldMs,
+        std::min<uint64_t>(hold_ms, kMaxRecoveryHoldMs));
 }
 
 void VideoRtpJitterBuffer::receive(const uint8_t* packet,

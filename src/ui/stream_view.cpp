@@ -185,14 +185,6 @@ brls::View* StreamView::createContentView() {
     root->registerAction(brls::getStr("lunarnx/stream/stop_action_minus"),
         brls::ControllerButton::BUTTON_BACK, stop_handler);
 
-    // R-stick click: toggle detailed stats only
-    root->registerAction(brls::getStr("lunarnx/stream/toggle_stats"),
-        brls::ControllerButton::BUTTON_RSB,
-        [this](brls::View*) -> bool {
-            if (performance_visible_ && perf_overlay_) perf_overlay_->toggle();
-            return true;
-        });
-
     if (stream::usesZeroCopyRender(ctrl_->getDefaultVideoBackend())) {
         auto* hardware_video = new HardwareVideoView(ctrl_);
         hardware_video->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
@@ -214,7 +206,7 @@ brls::View* StreamView::createContentView() {
     overlay_->setDetachedPosition(0, 0);
     root->addView(overlay_);
 
-    // Detailed stats overlay (R3 toggle, starts hidden)
+    // Detailed stats overlay (starts hidden)
     perf_overlay_ = new PerfOverlay(&ctrl_->getPerfStats());
     perf_overlay_->detach();
     perf_overlay_->setDetachedPosition(10, 76);

@@ -1,4 +1,3 @@
-#include "app/video_recovery_policy.h"
 #include "webrtc/peer_manager.h"
 #include "webrtc/video_rtp_jitter_buffer.h"
 
@@ -6,7 +5,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -39,6 +37,14 @@ struct PeerManagerQueueTestAccess {
     }
     static bool complete(PeerManager& peer, const Command& command, int result) {
         return peer.completeOutboundCommand(command, result);
+    }
+    static bool select(const PeerManager& peer,
+                       Command& command,
+                       bool allow_sctp) {
+        return peer.selectOutboundCommand(command, allow_sctp);
+    }
+    static bool enqueueNack(PeerManager& peer, uint16_t pid, uint16_t blp) {
+        return peer.enqueueNack(pid, blp);
     }
 };
 
@@ -109,19 +115,6 @@ size_t nackCoverage(const std::vector<std::pair<uint16_t, uint16_t>>& nacks) {
     return requested.size();
 }
 
-uint64_t recoveryRequestDelayMs(uint64_t outage_ms) {
-    using namespace std::chrono;
-    lunar::app::VideoRecoveryTransportRetry retry;
-    const auto start = steady_clock::time_point{};
-    for (uint64_t now_ms = 0; now_ms <= outage_ms + 1000; now_ms += 16) {
-        if (retry.shouldRetry(true, start + milliseconds(now_ms)) &&
-            now_ms >= outage_ms) {
-            return now_ms - outage_ms;
-        }
-    }
-    return UINT64_MAX;
-}
-
 void scenarioSinglePacketRepair() {
     JitterHarness h;
     h.open(10);
@@ -159,31 +152,52 @@ void scenarioRecordedGaps() {
               << " total_nacks=9 covered_packets=153 coverage_ms=59\n";
 }
 
-void scenarioRecoverySuppressesNackStorm() {
+void scenarioRecoveryRepairsCurrentKeyframe() {
     JitterHarness h;
     h.jitter.setHoldMs(50);
     h.open(2000);
     h.push(rtp(2001, 2000, false, {0x7c, 0x85, 0x11}), 1);
-    h.push(rtp(2003, 3000, true, {0x61, 0x22}), 60);
+    h.push(rtp(2002, 3000, true, {0x61, 0x22}), 60);
     assert(h.jitter.waitingForKeyframe());
     const size_t before = h.nacks.size();
-    h.push(rtp(2050, 4000, false, {}, 8), 61);
-    h.push(rtp(2100, 5000, false, {}, 8), 120);
-    const size_t after = h.nacks.size();
-    assert(after == before);
-    std::cout << "METRIC scenario=waiting_for_keyframe extra_nacks="
-              << (after - before) << " decoder_resets=" << h.decoder_resets
-              << " waiting=1\n";
+    h.push(rtp(2004, 4000, true, {0x61, 0x44}), 61);
+    assert(h.nacks.size() == before);
+
+    h.push(rtp(2005, 5000, false, {0x7c, 0x85, 0x55}), 62);
+    h.push(rtp(2007, 5000, true, {0x7c, 0x45, 0x77}), 63);
+    assert(h.nacks.size() == before + 1);
+    assert(h.nacks.back().first == 2006);
+
+    h.push(rtp(2006, 5000, false, {0x7c, 0x05, 0x66}), 64);
+    assert(h.frames == 2);
+    assert(!h.jitter.waitingForKeyframe());
+    std::cout << "METRIC scenario=recovery_keyframe_repair old_frame_nacks=0 "
+                 "keyframe_nacks=1 repaired=1 waiting=0\n";
 }
 
-void scenarioRecoveryRetryLatency() {
-    for (const uint64_t outage_ms : {100u, 500u, 900u}) {
-        const uint64_t delay_ms = recoveryRequestDelayMs(outage_ms);
-        assert(delay_ms <= 200);
-        std::cout << "METRIC scenario=outage_" << outage_ms
-                  << "ms retry_delay_ms=" << delay_ms
-                  << " retry_bound_ms=200\n";
-    }
+void scenarioHighRttRecoveryPreservesCandidateIdr() {
+    JitterHarness h;
+    h.jitter.setHoldMs(180);
+    h.jitter.setRecoveryHoldMs(720);
+    h.open(3000);
+    h.push(rtp(3001, 2000, true, {0x78, 0x00, 0x05, 0x67}), 1);
+    assert(h.jitter.waitingForKeyframe());
+    const auto corrupt_before = h.jitter.stats().corrupt_frames;
+
+    h.push(rtp(3002, 3000, false, {0x67, 0x42}), 2);
+    h.push(rtp(3004, 3000, true, {0x65, 0x44}), 3);
+    assert(h.nacks.back().first == 3003);
+    h.push(rtp(3005, 4000, false, {}, 8), 200);
+    h.push(rtp(3006, 4000, false, {}, 8), 400);
+    assert(h.jitter.stats().corrupt_frames == corrupt_before);
+
+    h.push(rtp(3003, 3000, false, {0x68, 0x22}), 572);
+    assert(h.frames == 2);
+    assert(!h.jitter.waitingForKeyframe());
+    assert(h.jitter.stats().corrupt_frames == corrupt_before);
+    std::cout << "METRIC scenario=high_rtt_recovery rtt_ms=570 "
+                 "recovery_hold_ms=720 repaired_after_ms=570 "
+                 "additional_corrupt_frames=0 waiting=0\n";
 }
 
 void scenarioOutboundPriority() {
@@ -200,13 +214,18 @@ void scenarioOutboundPriority() {
     assert(!Access::complete(peer, Access::front(peer), 12));
     assert(Access::complete(peer, Access::front(peer),
                             MBEDTLS_ERR_SSL_WANT_WRITE));
+    assert(Access::enqueueNack(peer, 77, 0x0003));
+    Access::Command selected;
+    assert(Access::select(peer, selected, false));
+    assert(selected.type == Access::Type::Nack);
+    assert(!Access::complete(peer, selected, 12));
     assert(peer.sendLatestInputData(latest, sizeof(latest)));
     types = Access::types(peer);
     assert(types.size() == 2);
     assert(types[0] == Access::Type::Control);
     assert(types[1] == Access::Type::InputLatest);
     std::cout << "METRIC scenario=control_backpressure pli_position=0 "
-                 "pending_input_states=1 queue_size=2\n";
+                 "nack_bypassed_sctp=1 pending_input_states=1 queue_size=2\n";
 }
 
 } // namespace
@@ -214,8 +233,8 @@ void scenarioOutboundPriority() {
 int main() {
     scenarioSinglePacketRepair();
     scenarioRecordedGaps();
-    scenarioRecoverySuppressesNackStorm();
-    scenarioRecoveryRetryLatency();
+    scenarioRecoveryRepairsCurrentKeyframe();
+    scenarioHighRttRecoveryPreservesCandidateIdr();
     scenarioOutboundPriority();
     return 0;
 }

@@ -64,9 +64,13 @@ def main() -> None:
             "Shutdown should wait for GPU idle before destroying mappings")
 
     present_start = renderer.index("void VideoRenderer::present()")
-    present_end = renderer.index("void VideoRenderer::prepareDecoderReset()", present_start)
+    present_end = renderer.index("bool VideoRenderer::prepareDecoderReset()", present_start)
     require("s->q.waitIdle()" not in renderer[present_start:present_end],
             "Borealis draw must not wait for queue idle before endFrame/presentImage")
+    present = renderer[present_start:present_end]
+    require("decoder_reset_drain_steps>s->submitted_frames.size()" in present and
+            present.index("present_ring->begin") < present.index("s->fms.clear()"),
+            "Decoder reset must retire every video fence before releasing NVDEC mappings")
 
     print("Zero-copy frame lifetime tests passed")
 

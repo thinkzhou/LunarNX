@@ -379,6 +379,7 @@ bool VideoDecoder::deliverFrame(AVFrame* frame,
     }
 
     AVFrame* callback_frame = frame;
+    const uint64_t probe_frame_index = static_cast<uint64_t>(log_index) + 1;
 
 #ifdef __SWITCH__
     if (video_backend_ == VideoBackend::HardwareCopyOut &&
@@ -440,6 +441,17 @@ bool VideoDecoder::deliverFrame(AVFrame* frame,
     }
 
     if (on_frame_) {
+        if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
+            lunar::cloud1080CrashProbeLog(
+                "crash-probe",
+                "DEBUG-c1080 phase=decoded-frame-callback-begin au=%llu "
+                "frame=%dx%d format=%d pts_ns=%llu",
+                static_cast<unsigned long long>(probe_frame_index),
+                callback_frame->width,
+                callback_frame->height,
+                callback_frame->format,
+                static_cast<unsigned long long>(timestamp));
+        }
         VideoFrame vf;
         vf.width = callback_frame->width;
         vf.height = callback_frame->height;
@@ -457,6 +469,12 @@ bool VideoDecoder::deliverFrame(AVFrame* frame,
         }
         vf.avframe = callback_frame;
         on_frame_(vf);
+        if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
+            lunar::cloud1080CrashProbeLog(
+                "crash-probe",
+                "DEBUG-c1080 phase=decoded-frame-callback-end au=%llu",
+                static_cast<unsigned long long>(probe_frame_index));
+        }
     }
 
     av_frame_free(&callback_frame);
@@ -467,8 +485,23 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
     if (!initialized_) return false;
     auto* ctx = static_cast<AVCodecContext*>(codec_ctx_);
     const int log_index = g_video_decode_logs.fetch_add(1);
+    const uint64_t probe_frame_index = static_cast<uint64_t>(log_index) + 1;
     const bool log = shouldLogVideoDecode(log_index);
     const auto au = inspectH264AccessUnit(data, len);
+    if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
+        lunar::cloud1080CrashProbeLog(
+            "crash-probe",
+            "DEBUG-c1080 phase=decode-begin au=%llu bytes=%zu pts_ns=%llu "
+            "nal=%s sps=%d pps=%d idr=%d ready=%d",
+            static_cast<unsigned long long>(probe_frame_index),
+            len,
+            static_cast<unsigned long long>(timestamp),
+            au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+            au.has_sps ? 1 : 0,
+            au.has_pps ? 1 : 0,
+            au.has_idr ? 1 : 0,
+            h264_decoder_ready_ ? 1 : 0);
+    }
     if (perf_) {
         perf_->recordVideoAccessUnit(
             len,
@@ -537,6 +570,12 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
         if (au.has_idr) pkt->flags |= AV_PKT_FLAG_KEY;
 
         int ret = avcodec_send_packet(ctx, pkt);
+        if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
+            lunar::cloud1080CrashProbeLog(
+                "crash-probe",
+                "DEBUG-c1080 phase=decode-send au=%llu ret=%d",
+                static_cast<unsigned long long>(probe_frame_index), ret);
+        }
         bool decode_ok = ret >= 0 || ret == AVERROR(EAGAIN);
         if (log) {
             lunar::diagnosticLog("video",
@@ -644,6 +683,15 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                                  log_index,
                                  decoded_frames,
                                  ret);
+        }
+        if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
+            lunar::cloud1080CrashProbeLog(
+                "crash-probe",
+                "DEBUG-c1080 phase=decode-end au=%llu frames=%d send_ret=%d ok=%d",
+                static_cast<unsigned long long>(probe_frame_index),
+                decoded_frames,
+                ret,
+                decode_ok ? 1 : 0);
         }
         return decode_ok;
     }

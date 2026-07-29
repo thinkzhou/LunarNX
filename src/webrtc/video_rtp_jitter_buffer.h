@@ -50,7 +50,12 @@ public:
     using RecoveryCallback = std::function<void(bool)>;
 
     static constexpr uint64_t kDefaultHoldMs = 120;
-    static constexpr uint64_t kMaxFrameHoldMs = 250;
+    // A progressing access unit may legitimately span the ordinary idle
+    // deadline when the receiver thread is briefly descheduled. This is only
+    // a final memory-safety bound; normal latency is governed by hold_ms.
+    static constexpr uint64_t kMaxFrameHoldMs = 1000;
+    static constexpr uint64_t kDefaultRecoveryHoldMs = 300;
+    static constexpr uint64_t kMaxRecoveryHoldMs = 800;
     static constexpr size_t kMaxBufferedFrames = 32;
     static constexpr size_t kMaxBufferedPackets = 2048;
     static constexpr size_t kMaxBufferedBytes = 3 * 1024 * 1024;
@@ -63,6 +68,9 @@ public:
 
     void reset();
     void setHoldMs(uint64_t hold_ms);
+    // This longer window applies only to a candidate IDR while recovering.
+    // Ordinary P-frames keep the low-latency hold above.
+    void setRecoveryHoldMs(uint64_t hold_ms);
     void receive(const uint8_t* packet,
                  size_t size,
                  uint64_t now_ms,

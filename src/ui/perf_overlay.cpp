@@ -12,7 +12,7 @@ PerfOverlay::PerfOverlay(const stream::PerfStats* perf) : Box(brls::Axis::COLUMN
     this->setCornerRadius(14);
     this->setPadding(14, 16, 14, 16);
     this->setWidth(500);
-    this->setVisibility(brls::Visibility::GONE); // Hidden by default, R3 to show
+    this->setVisibility(brls::Visibility::GONE);
 
     auto* title = new brls::Label();
     title->setHeight(30);

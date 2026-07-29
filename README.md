@@ -101,7 +101,7 @@ LunarNX maps buttons by their physical position, so the Nintendo face-button lab
 | Plus | Menu |
 | L + R + Plus (together) | Xbox Guide / Nexus button |
 | Left stick click | L3 |
-| Right stick click | R3 and performance overlay toggle |
+| Right stick click | R3 |
 | D-pad / sticks | D-pad / sticks |
 
 ZL and ZR are digital Switch buttons, so Xbox trigger input is reported as either 0% or 100%.

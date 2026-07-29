@@ -8,7 +8,6 @@ namespace lunar::ui {
 
 /// Semi-transparent performance overlay drawn on top of the stream.
 /// Shows FPS, decode latency, network stats, battery.
-/// Toggle with R-stick click (R3) during streaming.
 class PerfOverlay : public brls::Box {
 public:
     PerfOverlay(const stream::PerfStats* perf);

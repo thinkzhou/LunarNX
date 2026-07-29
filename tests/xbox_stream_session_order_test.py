@@ -36,6 +36,11 @@ def main():
             "Startup keyframe retry must run after the initial keyframe request")
     require("kStartupKeyframeRetryInterval{1}" in source,
             "Startup keyframe retry should be faster than normal damage recovery")
+    require("kRecoveryKeyframeInterval{1}" in source,
+            "Damage recovery must retain its unified one-second request cadence")
+    require("VideoRecoveryTransportRetry" not in source and
+            "transport-only keyframe retry" not in source,
+            "Recovery must not add an independent 200 ms transport-only PLI")
     require("video callback begin" in Path("src/webrtc/peer_manager.cpp").read_text(),
             "PeerManager should keep bounded media callback diagnostics")
     require(answer_pos < candidates_pos,
@@ -49,10 +54,18 @@ def main():
     loop_process_pos = source.index("transport_.processEvents();", source.index("while (streaming_"))
     require(input_pos < loop_process_pos,
             "Input must be sampled and sent before inbound media processing can consume the loop budget")
+    require("kNetworkPumpInterval{2}" in source,
+            "WebRTC must use a short pump cadence independent of input polling")
+    require("const bool input_due" in source,
+            "Input sampling must remain gated to its 16 ms cadence")
     require("next_input_tick += kInputPollInterval" in source,
             "Input polling must use an absolute cadence instead of work time plus a fixed sleep")
-    require("sleepUntilCancelled(next_input_tick" in source,
-            "The stream loop must sleep to the next 16 ms input deadline")
+    require("next_network_tick += kNetworkPumpInterval" in source,
+            "The WebRTC pump must maintain its own absolute cadence")
+    require("std::min(next_network_tick, next_input_tick)" in source,
+            "The stream loop must wake for networking before the next input deadline")
+    require("sleepUntilCancelled(next_input_tick" not in source,
+            "The WebRTC pump must not sleep until the next 16 ms input deadline")
 
     print("Xbox stream session order tests passed")
 

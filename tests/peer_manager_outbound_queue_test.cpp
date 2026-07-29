@@ -5,6 +5,7 @@
 #include <cassert>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <thread>
 #include <vector>
 
@@ -35,6 +36,29 @@ struct PeerManagerQueueTestAccess {
     static bool complete(PeerManager& peer, const Command& command, int result) {
         return peer.completeOutboundCommand(command, result);
     }
+    static bool select(const PeerManager& peer,
+                       Command& command,
+                       bool allow_sctp) {
+        return peer.selectOutboundCommand(command, allow_sctp);
+    }
+    static bool enqueueNack(PeerManager& peer, uint16_t pid, uint16_t blp) {
+        return peer.enqueueNack(pid, blp);
+    }
+    static bool waitingForKeyframe(const PeerManager& peer) {
+        return peer.video_jitter_.waitingForKeyframe();
+    }
+    static void receiveVideo(PeerManager& peer,
+                             const std::vector<uint8_t>& packet,
+                             uint64_t now_ms) {
+        peer.video_jitter_.setHoldMs(50);
+        peer.video_jitter_.receive(
+            packet.data(), packet.size(), now_ms,
+            [](const uint8_t*, size_t, uint16_t, uint32_t) {},
+            [&peer](uint16_t pid, uint16_t blp) {
+                return peer.enqueueNack(pid, blp);
+            },
+            [](bool) {});
+    }
     static Command push(PeerManager& peer, Type type) {
         std::lock_guard<std::mutex> lock(peer.outbound_mutex_);
         Command command;
@@ -46,6 +70,28 @@ struct PeerManagerQueueTestAccess {
 };
 
 } // namespace lunar::webrtc
+
+namespace {
+
+std::vector<uint8_t> rtp(uint16_t sequence,
+                         uint32_t timestamp,
+                         bool marker,
+                         const std::vector<uint8_t>& payload) {
+    std::vector<uint8_t> packet(12 + payload.size(), 0);
+    packet[0] = 0x80;
+    packet[1] = static_cast<uint8_t>(102 | (marker ? 0x80 : 0));
+    packet[2] = static_cast<uint8_t>(sequence >> 8);
+    packet[3] = static_cast<uint8_t>(sequence);
+    packet[4] = static_cast<uint8_t>(timestamp >> 24);
+    packet[5] = static_cast<uint8_t>(timestamp >> 16);
+    packet[6] = static_cast<uint8_t>(timestamp >> 8);
+    packet[7] = static_cast<uint8_t>(timestamp);
+    packet[11] = 1;
+    std::memcpy(packet.data() + 12, payload.data(), payload.size());
+    return packet;
+}
+
+} // namespace
 
 int main() {
     using lunar::webrtc::PeerManager;
@@ -115,6 +161,36 @@ int main() {
     pli = Access::front(peer);
     assert(!Access::complete(peer, pli, 12));
     assert(Access::front(peer).type == Access::Type::Control);
+
+    PeerManager scheduler;
+    Access::connect(scheduler);
+    assert(scheduler.sendControlData(payload, sizeof(payload)));
+    reliable = Access::front(scheduler);
+    assert(Access::complete(scheduler, reliable, MBEDTLS_ERR_SSL_WANT_WRITE));
+    assert(Access::enqueueNack(scheduler, 77, 0x0003));
+    Access::Command selected;
+    assert(Access::select(scheduler, selected, false));
+    assert(selected.type == Access::Type::Nack);
+
+    PeerManager recovery_nack;
+    Access::connect(recovery_nack);
+    Access::receiveVideo(recovery_nack,
+                         rtp(100, 1000, true, {0x65, 0x11}), 0);
+    Access::receiveVideo(recovery_nack,
+                         rtp(101, 2000, false, {0x7c, 0x85, 0x22}), 1);
+    Access::receiveVideo(recovery_nack,
+                         rtp(102, 3000, true, {0x61, 0x33}), 60);
+    assert(Access::waitingForKeyframe(recovery_nack));
+    Access::receiveVideo(recovery_nack,
+                         rtp(103, 4000, false, {0x67, 0x42}), 61);
+    Access::receiveVideo(recovery_nack,
+                         rtp(105, 4000, false, {0x68, 0x44}), 62);
+    assert(Access::size(recovery_nack) == 0);
+    Access::receiveVideo(recovery_nack,
+                         rtp(106, 4000, true, {0x65, 0x55}), 63);
+    assert(Access::size(recovery_nack) == 1);
+    assert(Access::front(recovery_nack).type == Access::Type::Nack);
+    assert(Access::front(recovery_nack).pid == 104);
 
     std::vector<uint8_t> oversized(1025, 0);
     assert(!peer.sendMessageData(oversized.data(), oversized.size()));

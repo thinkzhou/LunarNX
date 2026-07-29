@@ -35,6 +35,7 @@ static bool setsys_initialized = false;
 static bool set_initialized = false;
 static bool psm_initialized = false;
 static bool nifm_initialized = false;
+static bool lbl_initialized = false;
 
 static void switchEnsureLogDirectory(void)
 {
@@ -126,6 +127,7 @@ void userAppInit()
     set_initialized = logInitResult("setInitialize", setInitialize());
     psm_initialized = logInitResult("psmInitialize", psmInitialize());
     nifm_initialized = logInitResult("nifmInitialize", nifmInitialize(NifmServiceType_User));
+    lbl_initialized = logInitResult("lblInitialize", lblInitialize());
     switchEarlyLog("userAppInit done");
 }
 
@@ -134,6 +136,8 @@ void userAppExit()
     printf("userAppExit\n");
     switchEarlyLog("userAppExit begin");
 
+    if (lbl_initialized)
+        lblExit();
     if (nifm_initialized)
         nifmExit();
     if (psm_initialized)
