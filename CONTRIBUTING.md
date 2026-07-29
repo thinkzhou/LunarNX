@@ -17,9 +17,9 @@ final compatibility target.
 
 ## Setup and build
 
-Follow [README.md](README.md) for dependency setup and build commands. The
-release-style Switch configuration keeps application and network diagnostics
-disabled.
+Follow the [development guide](docs/development.md) for dependency setup and
+build commands. The release-style Switch configuration keeps application and
+network diagnostics disabled.
 
 ## Validation
 
