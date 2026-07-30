@@ -23,13 +23,13 @@ def main() -> None:
     require("void presentVideoFrame();" in pipeline_h and
             "void MediaPipeline::presentVideoFrame()" in pipeline,
             "The UI frame loop needs an explicit media presentation entry point")
-    require("void presentVideoFrame();" in controller_h and
+    require("void presentVideoFrame() override;" in controller_h and
             "void StreamController::presentVideoFrame()" in controller,
-            "StreamController should expose the presentation entry point to the view")
+            "StreamController should implement the runtime presentation entry point")
     require("class HardwareVideoView" in stream_view and
-            "ctrl_->presentVideoFrame();" in stream_view,
+            "runtime_->presentVideoFrame();" in stream_view,
             "Zero-copy video should be redrawn from a Borealis View every UI frame")
-    require("usesZeroCopyRender(ctrl_->getDefaultVideoBackend())" in stream_view,
+    require("usesZeroCopyRender(runtime_->getDefaultVideoBackend())" in stream_view,
             "Only zero-copy mode should install the hardware video view")
 
     require("if (rendered) presentFrame(generation);" not in pipeline and

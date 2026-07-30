@@ -26,11 +26,13 @@ require("state.lb = false" in reader and
         "state.menu = false" in reader,
         "the Guide chord must not leak bumper/Menu presses to the Xbox")
 require("menu_xbox_button" in stream_view and
-        "ctrl_->requestGuideButton()" in stream_view,
+        "runtime_->requestPlatformHomeButton()" in stream_view,
         "the stream menu must expose an Xbox Guide button")
 require("requestGuideButton" in controller and
+        "requestPlatformHomeButton" in controller and
+        "requestGuideButton();" in controller_impl and
         "guide_button_requested_.exchange(false)" in controller_impl,
-        "the controller must expose a one-shot Guide request")
+        "the runtime home action must forward to the one-shot Guide request")
 require("consume_guide_button" in session_header and
         "gamepad_state.guide = true" in session,
         "the stream input loop must consume the menu Guide request")
