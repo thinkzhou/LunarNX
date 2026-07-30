@@ -21,12 +21,12 @@
 
 namespace lunar::app {
 
-class StreamController {
+class StreamController : public IStreamRuntime {
 public:
     using StateCallback = std::function<void(StreamState, const std::string&)>;
 
     StreamController();
-    ~StreamController();
+    ~StreamController() override;
 
     // Auth
     bool startAuth();
@@ -70,22 +70,23 @@ public:
                           const stream::MediaPipelineOptions& options,
                           int bitrate_kbps);
     void stopStream();
-    void stopStream(bool set_disconnected);
-    StreamState getState() const { return state_.load(); }
+    void stopStream(bool set_disconnected) override;
+    StreamState getState() const override { return state_.load(); }
     std::string getLastStreamError() const;
 
-    const stream::PerfStats& getPerfStats() const { return perf_; }
-    int getStreamWidth() const { return stream_width_; }
-    int getStreamHeight() const { return stream_height_; }
+    const stream::PerfStats& getPerfStats() const override { return perf_; }
+    int getStreamWidth() const override { return stream_width_; }
+    int getStreamHeight() const override { return stream_height_; }
     void setStateCallback(StateCallback cb);
-    void setInputSuppressed(bool suppressed) { input_suppressed_ = suppressed; }
+    void setInputSuppressed(bool suppressed) override { input_suppressed_ = suppressed; }
+    void requestPlatformHomeButton() override;
     void requestGuideButton();
     bool consumeGuideButtonRequest();
     void setBaseUrl(const std::string& url) { base_url_ = url; }
     void setForceRegionIp(const std::string& ip);
     std::string getForceRegionIp() const;
     void setDefaultVideoBackend(stream::VideoBackend backend);
-    stream::VideoBackend getDefaultVideoBackend() const;
+    stream::VideoBackend getDefaultVideoBackend() const override;
     void setRumbleEnabled(bool enabled);
     bool getRumbleEnabled() const { return rumble_enabled_.load(); }
     void setRumbleStrengthPercent(int percent);
@@ -98,8 +99,8 @@ public:
     bool bypassAuthForMock(const std::string& base_url);
 
     // Per-frame update for input + rendering
-    void update();
-    void presentVideoFrame();
+    void update() override;
+    void presentVideoFrame() override;
 
 private:
     api::HttpClient& http();

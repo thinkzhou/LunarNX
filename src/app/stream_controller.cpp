@@ -668,6 +668,10 @@ void StreamController::requestGuideButton() {
     guide_button_requested_.store(true);
 }
 
+void StreamController::requestPlatformHomeButton() {
+    requestGuideButton();
+}
+
 bool StreamController::consumeGuideButtonRequest() {
     return guide_button_requested_.exchange(false);
 }
