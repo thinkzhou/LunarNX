@@ -5,6 +5,7 @@
 #include "ui_style.h"
 #include "../diagnostics.h"
 #include "../platform/network_worker.h"
+#include "../stream/media_pipeline.h"
 #include "../stream/software_video_frame.h"
 #include <switch.h>
 #include <algorithm>
@@ -105,33 +106,34 @@ private:
 
 class HardwareVideoView : public brls::View {
 public:
-    explicit HardwareVideoView(std::shared_ptr<app::StreamController> ctrl)
-        : ctrl_(std::move(ctrl)) {}
+    explicit HardwareVideoView(std::shared_ptr<app::IStreamRuntime> runtime)
+        : runtime_(std::move(runtime)) {}
 
     void draw(NVGcontext*, float, float, float, float,
               brls::Style, brls::FrameContext*) override {
-        ctrl_->presentVideoFrame();
+        runtime_->presentVideoFrame();
     }
 
 private:
-    std::shared_ptr<app::StreamController> ctrl_;
+    std::shared_ptr<app::IStreamRuntime> runtime_;
 };
 
 }
 
-StreamView::StreamView(std::shared_ptr<app::StreamController> ctrl) : ctrl_(std::move(ctrl)) {}
+StreamView::StreamView(std::shared_ptr<app::IStreamRuntime> runtime)
+    : runtime_(std::move(runtime)) {}
 
 StreamView::~StreamView() {
     alive_->store(false);
     running_ = false;
-    ctrl_->setInputSuppressed(false);
+    runtime_->setInputSuppressed(false);
     if (update_thread_.joinable()) update_thread_.join();
-    auto ctrl = ctrl_;
-    const auto state = ctrl_->getState();
+    auto runtime = runtime_;
+    const auto state = runtime_->getState();
     const bool already_reported_failure =
         state == app::StreamState::Disconnected || state == app::StreamState::Error;
-    lunar::platform::startNetworkWorker("stop-stream", [ctrl, already_reported_failure]() {
-        ctrl->stopStream(!already_reported_failure);
+    lunar::platform::startNetworkWorker("stop-stream", [runtime, already_reported_failure]() {
+        runtime->stopStream(!already_reported_failure);
     });
 }
 
@@ -167,7 +169,7 @@ brls::View* StreamView::createContentView() {
     // Minus + Plus: stop with double-press confirmation. Keep single Minus as Xbox View.
     auto stop_handler = [this](brls::View*) -> bool {
         if (!isExitComboPressed()) return false;
-        ctrl_->setInputSuppressed(true);
+        runtime_->setInputSuppressed(true);
         auto now = std::chrono::steady_clock::now();
         if (exit_pending_.load() && std::chrono::duration_cast<std::chrono::seconds>(
                 now - exit_press_time_).count() < 3) {
@@ -185,8 +187,8 @@ brls::View* StreamView::createContentView() {
     root->registerAction(brls::getStr("lunarnx/stream/stop_action_minus"),
         brls::ControllerButton::BUTTON_BACK, stop_handler);
 
-    if (stream::usesZeroCopyRender(ctrl_->getDefaultVideoBackend())) {
-        auto* hardware_video = new HardwareVideoView(ctrl_);
+    if (stream::usesZeroCopyRender(runtime_->getDefaultVideoBackend())) {
+        auto* hardware_video = new HardwareVideoView(runtime_);
         hardware_video->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
         hardware_video->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
         hardware_video->setDetachedPosition(0, 0);
@@ -201,13 +203,13 @@ brls::View* StreamView::createContentView() {
     }
 
     // Top status bar
-    overlay_ = new StreamOverlay(&ctrl_->getPerfStats());
+    overlay_ = new StreamOverlay(&runtime_->getPerfStats());
     overlay_->detach();
     overlay_->setDetachedPosition(0, 0);
     root->addView(overlay_);
 
     // Detailed stats overlay (starts hidden)
-    perf_overlay_ = new PerfOverlay(&ctrl_->getPerfStats());
+    perf_overlay_ = new PerfOverlay(&runtime_->getPerfStats());
     perf_overlay_->detach();
     perf_overlay_->setDetachedPosition(10, 76);
     root->addView(perf_overlay_);
@@ -263,7 +265,7 @@ brls::View* StreamView::createContentView() {
     xbox_button->setText(brls::getStr("lunarnx/stream/menu_xbox_button"));
     xbox_button->registerClickAction([this](brls::View*) -> bool {
         setQuickMenuVisible(false);
-        ctrl_->requestGuideButton();
+        runtime_->requestPlatformHomeButton();
         return true;
     });
     quick_menu_->addView(xbox_button);
@@ -358,7 +360,7 @@ void StreamView::setQuickMenuVisible(bool visible) {
 }
 
 void StreamView::updateInputSuppression() {
-    ctrl_->setInputSuppressed(quick_menu_visible_ || exit_pending_.load());
+    runtime_->setInputSuppressed(quick_menu_visible_ || exit_pending_.load());
 }
 
 void StreamView::updatePerformanceVisibility() {
@@ -383,7 +385,7 @@ void StreamView::handleQuickDisconnect() {
             std::chrono::steady_clock::duration(disconnect_arm_ticks_.load()));
         if (now - armed_at < kQuickDisconnectConfirmWindow) {
             running_ = false;
-            ctrl_->setInputSuppressed(false);
+            runtime_->setInputSuppressed(false);
             brls::Application::popActivity(brls::TransitionAnimation::NONE);
             return;
         }
@@ -402,11 +404,11 @@ void StreamView::runLoop() {
     auto last_stats = steady_clock::now();
     uint32_t last_frames = 0;
     while (running_) {
-        ctrl_->update();
+        runtime_->update();
         std::this_thread::sleep_for(milliseconds(500));
 
         auto now = steady_clock::now();
-        auto& p = ctrl_->getPerfStats();
+        auto& p = runtime_->getPerfStats();
         uint32_t frames = p.video_frames.load();
         float sec = duration<float>(now - last_stats).count();
         float fps = (frames - last_frames) / (sec > 0 ? sec : 1.0f);
@@ -448,11 +450,11 @@ void StreamView::runLoop() {
         }
 
         // Update overlays
-        int w = ctrl_->getStreamWidth();
-        int h = ctrl_->getStreamHeight();
+        int w = runtime_->getStreamWidth();
+        int h = runtime_->getStreamHeight();
         std::string res = std::to_string(w) + "x" + std::to_string(h);
         std::string video_backend = stream::videoBackendOverlayName(
-            ctrl_->getDefaultVideoBackend());
+            runtime_->getDefaultVideoBackend());
         auto alive = alive_;
         brls::sync([alive, this, fps, res, video_backend]() {
             if (!alive->load()) return;
@@ -461,7 +463,7 @@ void StreamView::runLoop() {
         });
 
         // Detect disconnect/error
-        auto state = ctrl_->getState();
+        auto state = runtime_->getState();
         if (state == app::StreamState::Disconnected || state == app::StreamState::Error) {
             running_ = false;
             auto alive = alive_;

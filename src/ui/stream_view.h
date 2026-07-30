@@ -1,7 +1,7 @@
 #pragma once
 #ifdef __SWITCH__
 #include <borealis.hpp>
-#include "../app/stream_controller.h"
+#include "../app/stream_runtime.h"
 #include <thread>
 #include <atomic>
 #include <chrono>
@@ -11,13 +11,13 @@ namespace lunar::ui {
 
 class StreamView : public brls::Activity {
 public:
-    StreamView(std::shared_ptr<app::StreamController> ctrl);
+    StreamView(std::shared_ptr<app::IStreamRuntime> runtime);
     ~StreamView();
 
     brls::View* createContentView() override;
 
 private:
-    std::shared_ptr<app::StreamController> ctrl_;
+    std::shared_ptr<app::IStreamRuntime> runtime_;
     std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
     class StreamOverlay* overlay_ = nullptr;
     class PerfOverlay* perf_overlay_ = nullptr;
