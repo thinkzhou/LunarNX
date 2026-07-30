@@ -12,6 +12,7 @@
 #include "xbox_session_client.h"
 #include "xbox_stream_session.h"
 #include "stream_profile.h"
+#include "stream_runtime.h"
 #include <string>
 #include <atomic>
 #include <functional>
@@ -19,8 +20,6 @@
 #include <mutex>
 
 namespace lunar::app {
-
-enum class StreamState { Idle, Authenticating, Connecting, Streaming, Disconnected, Error };
 
 class StreamController {
 public:
