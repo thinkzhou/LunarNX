@@ -78,7 +78,7 @@ static void logCallback(ChiakiLogLevel level, const char* msg, void* user) {
             g_send_buffer_overflow_count.fetch_add(1, std::memory_order_relaxed) + 1;
         // Preserve logarithmic evidence without opening the SD log on every
         // Chiaki network-thread overflow. 1..4 and powers of two produce only
-        // 13 async records for the 1037-event hardware trace.
+        // 12 async records for the 1037-event hardware trace.
         if (count <= 4 || isPowerOfTwo(count)) {
             lunar::dropDiagnosticLog(
                 "chiaki-flow", "%s count=%llu", msg,
