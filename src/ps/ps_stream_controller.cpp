@@ -106,6 +106,7 @@ bool PsStreamController::startStream() {
             setState(app::StreamState::Error, last_error_);
             return false;
         }
+        if (cancel_requested_.load()) return false;
     }
 
     // Create long-lived components (lightweight constructors only — heavy init
@@ -178,6 +179,8 @@ bool PsStreamController::startStream() {
 
     setState(app::StreamState::Connecting, "Connecting to PlayStation...");
 
+    if (cancel_requested_.load()) return false;
+
     // Start the chiaki session immediately so the session thread begins
     // regist/request/ctrl over the punched CTRL channel without delay.
     bool ok;
@@ -190,9 +193,15 @@ bool PsStreamController::startStream() {
     }
 
     if (!ok) {
+        if (cancel_requested_.load()) return false;
         last_error_ = mock_replay ? mock_session_->lastError()
                                   : session_->lastError();
         setState(app::StreamState::Error, last_error_);
+        return false;
+    }
+    if (cancel_requested_.load()) {
+        if (mock_session_) mock_session_->stop();
+        else session_->stop();
         return false;
     }
 
@@ -283,7 +292,6 @@ void PsStreamController::stopVideoMonitor() {
 
 void PsStreamController::requestCancel() {
     cancel_requested_ = true;
-    if (mock_session_) mock_session_->stop();
     std::lock_guard<std::mutex> lock(remote_connector_mutex_);
     if (remote_connector_) remote_connector_->cancel();
 }
