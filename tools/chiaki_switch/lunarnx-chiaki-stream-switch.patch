@@ -1,0 +1,292 @@
+diff --git a/lib/include/chiaki/session.h b/lib/include/chiaki/session.h
+index e90ecea4..a552da04 100644
+--- a/lib/include/chiaki/session.h
++++ b/lib/include/chiaki/session.h
+@@ -266,6 +266,7 @@ typedef struct chiaki_session_t
+ 	bool login_pin_entered;
+ 	bool psn_regist_succeeded;
+ 	bool stream_connection_switch_received;
++	struct senkusha_t *senkusha;
+ 	uint8_t *login_pin;
+ 	size_t login_pin_size;
+ 
+@@ -292,6 +293,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_request_idr(ChiakiSession *session)
+ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_controller_state(ChiakiSession *session, ChiakiControllerState *state);
+ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_login_pin(ChiakiSession *session, const uint8_t *pin, size_t pin_size);
+ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_stream_connection_switch_received(ChiakiSession *session);
++CHIAKI_EXPORT bool chiaki_session_get_stream_connection_switch_received(ChiakiSession *session);
+ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_goto_bed(ChiakiSession *session);
+ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_toggle_microphone(ChiakiSession *session, bool muted);
+ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_connect_microphone(ChiakiSession *session);
+diff --git a/lib/src/ctrl.c b/lib/src/ctrl.c
+index 6a3b7622..ee26bf46 100644
+--- a/lib/src/ctrl.c
++++ b/lib/src/ctrl.c
+@@ -951,12 +951,7 @@ static void ctrl_message_received_switch_to_stream_connection(ChiakiCtrl *ctrl,
+ {
+ 	if(payload_size != 0)
+ 		CHIAKI_LOGW(ctrl->session->log, "Ctrl received Switch to Stream Connection Ack with non-empty payload");
+-	if(!ctrl->session->stream_connection_switch_received)
+-	{
+-		chiaki_session_set_stream_connection_switch_received(ctrl->session);
+-	}
+-	else
+-		CHIAKI_LOGI(ctrl->session->log, "Received an extra stream connection switch ACK, ignoring...");
++	chiaki_session_set_stream_connection_switch_received(ctrl->session);
+ }
+ 
+ static void ctrl_message_received_login_pin_req(ChiakiCtrl *ctrl, uint8_t *payload, size_t payload_size)
+diff --git a/lib/src/senkusha.c b/lib/src/senkusha.c
+index 05b45178..cdab1972 100644
+--- a/lib/src/senkusha.c
++++ b/lib/src/senkusha.c
+@@ -109,7 +109,17 @@ CHIAKI_EXPORT void chiaki_senkusha_fini(ChiakiSenkusha *senkusha)
+ static bool state_finished_cond_check(void *user)
+ {
+ 	ChiakiSenkusha *senkusha = user;
+-	return senkusha->state_finished || senkusha->should_stop;
++	return senkusha->state_finished || senkusha->should_stop
++		|| chiaki_session_get_stream_connection_switch_received(senkusha->session);
+ }
++
++static bool senkusha_stream_switch_interrupted(ChiakiSenkusha *senkusha)
++{
++	if(!chiaki_session_get_stream_connection_switch_received(senkusha->session))
++		return false;
++	CHIAKI_LOGI(senkusha->log, "Senkusha interrupted by early stream switch ACK state=%d; skipping remaining probes", senkusha->state);
++	CHIAKI_LOGI(senkusha->log, "Senkusha has no measured result after early stream switch ACK; using safe MTU fallback");
++	return true;
++}
+ 
+ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint32_t *mtu_in, uint32_t *mtu_out, uint64_t *rtt_us, chiaki_socket_t *socket)
+@@ -161,5 +167,10 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
+ 	err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, CONNECT_TIMEOUT_MS, state_finished_cond_check, senkusha);
+ 	assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
++	if(senkusha_stream_switch_interrupted(senkusha))
++	{
++		err = CHIAKI_ERR_UNKNOWN;
++		QUIT(quit_takion);
++	}
+ 	if(!senkusha->state_finished)
+ 	{
+ 		if(err == CHIAKI_ERR_TIMEOUT)
+@@ -192,6 +203,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
+ 	err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, EXPECT_TIMEOUT_MS, state_finished_cond_check, senkusha);
+ 	assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
+ 
++	if(senkusha_stream_switch_interrupted(senkusha))
++	{
++		err = CHIAKI_ERR_UNKNOWN;
++		QUIT(quit_takion);
++	}
+ 	if(!senkusha->state_finished)
+ 	{
+ 		if(err == CHIAKI_ERR_TIMEOUT)
+@@ -225,6 +241,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_senkusha_run(ChiakiSenkusha *senkusha, uint
+ 	err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, EXPECT_TIMEOUT_MS, state_finished_cond_check, senkusha);
+ 	assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
+ 
++	if(senkusha_stream_switch_interrupted(senkusha))
++	{
++		err = CHIAKI_ERR_UNKNOWN;
++		QUIT(quit_takion);
++	}
+ 	if(!senkusha->state_finished)
+ 	{
+ 		if(err == CHIAKI_ERR_TIMEOUT)
+@@ -340,6 +369,8 @@ static ChiakiErrorCode senkusha_run_rtt_test(ChiakiSenkusha *senkusha, uint16_t
+ 		err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, EXPECT_PONG_TIMEOUT_MS, state_finished_cond_check, senkusha);
+ 		assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
+ 
++		if(senkusha_stream_switch_interrupted(senkusha))
++			return CHIAKI_ERR_UNKNOWN;
+ 		if(!senkusha->state_finished)
+ 		{
+ 			if(err == CHIAKI_ERR_TIMEOUT)
+@@ -422,6 +453,8 @@ static ChiakiErrorCode senkusha_run_mtu_in_test(ChiakiSenkusha *senkusha, uint3
+ 			err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, timeout_ms, state_finished_cond_check, senkusha);
+ 			assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
+ 
++			if(senkusha_stream_switch_interrupted(senkusha))
++				return CHIAKI_ERR_UNKNOWN;
+ 			if(!senkusha->state_finished)
+ 			{
+ 				if(err == CHIAKI_ERR_TIMEOUT)
+@@ -485,6 +518,8 @@ static ChiakiErrorCode senkusha_run_mtu_out_test(ChiakiSenkusha *senkusha, uint
+ 	err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, EXPECT_TIMEOUT_MS, state_finished_cond_check, senkusha);
+ 	assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
+ 
++	if(senkusha_stream_switch_interrupted(senkusha))
++		return CHIAKI_ERR_UNKNOWN;
+ 	if(!senkusha->state_finished)
+ 	{
+ 		if(err == CHIAKI_ERR_TIMEOUT)
+@@ -559,6 +594,11 @@ static ChiakiErrorCode senkusha_run_mtu_out_test(ChiakiSenkusha *senkusha, uint
+ 				err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, timeout_ms, state_finished_cond_check, senkusha);
+ 			}
+ 
++			if(senkusha_stream_switch_interrupted(senkusha))
++			{
++				err = CHIAKI_ERR_UNKNOWN;
++				goto beach;
++			}
+ 			assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
+ 
+ 			if(!senkusha->state_finished)
+@@ -947,6 +987,8 @@ static ChiakiErrorCode senkusha_send_data_wait_for_ack(ChiakiSenkusha *senkusha
+ 	err = chiaki_cond_timedwait_pred(&senkusha->state_cond, &senkusha->state_mutex, EXPECT_TIMEOUT_MS, state_finished_cond_check, senkusha);
+ 	assert(err == CHIAKI_ERR_SUCCESS || err == CHIAKI_ERR_TIMEOUT);
+ 
++	if(senkusha_stream_switch_interrupted(senkusha))
++		return CHIAKI_ERR_UNKNOWN;
+ 	if(!senkusha->state_finished)
+ 	{
+ 		if(err == CHIAKI_ERR_TIMEOUT)
+diff --git a/lib/src/session.c b/lib/src/session.c
+index 41c6bbf0..b59633ab 100644
+--- a/lib/src/session.c
++++ b/lib/src/session.c
+@@ -203,6 +203,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
+ 	session->login_pin_entered = false;
+ 	session->psn_regist_succeeded = false;
+ 	session->stream_connection_switch_received = false;
++	session->senkusha = NULL;
+ 	session->login_pin = NULL;
+ 	session->login_pin_size = 0;
+ 	chiaki_mutex_unlock(&session->state_mutex);
+@@ -371,12 +372,29 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_set_stream_connection_switch_receiv
+ {
+ 	ChiakiErrorCode err = chiaki_mutex_lock(&session->state_mutex);
+ 	assert(err == CHIAKI_ERR_SUCCESS);
++	bool already_received = session->stream_connection_switch_received;
+ 	session->stream_connection_switch_received = true;
++	if(!already_received)
++		CHIAKI_LOGI(session->log, "Stream switch ACK received; waking Senkusha (active=%d)", session->senkusha != NULL);
++	else
++		CHIAKI_LOGI(session->log, "Received an extra stream connection switch ACK, ignoring...");
++	if(!already_received && session->senkusha)
++		chiaki_cond_signal(&session->senkusha->state_cond);
+ 	chiaki_mutex_unlock(&session->state_mutex);
+-	chiaki_cond_signal(&session->state_cond);
++	if(!already_received)
++		chiaki_cond_signal(&session->state_cond);
+ 	return CHIAKI_ERR_SUCCESS;
+ }
+ 
++CHIAKI_EXPORT bool chiaki_session_get_stream_connection_switch_received(ChiakiSession *session)
++{
++	ChiakiErrorCode err = chiaki_mutex_lock(&session->state_mutex);
++	assert(err == CHIAKI_ERR_SUCCESS);
++	bool received = session->stream_connection_switch_received;
++	chiaki_mutex_unlock(&session->state_mutex);
++	return received;
++}
++
+ void chiaki_session_send_event(ChiakiSession *session, ChiakiEvent *event)
+ {
+ 	if(!session->event_cb)
+@@ -619,11 +637,20 @@ ctrl_failed:
+ 	CHIAKI_LOGI(session->log, "Starting Senkusha");
+ 
+ 	ChiakiSenkusha senkusha;
++	chiaki_mutex_unlock(&session->state_mutex);
+ 	err = chiaki_senkusha_init(&senkusha, session);
+ 	if(err != CHIAKI_ERR_SUCCESS)
++	{
++		chiaki_mutex_lock(&session->state_mutex);
+ 		QUIT(quit_ctrl);
++	}
++	chiaki_mutex_lock(&session->state_mutex);
++	session->senkusha = &senkusha;
++	chiaki_mutex_unlock(&session->state_mutex);
+ 
+ 	err = chiaki_senkusha_run(&senkusha, &session->mtu_in, &session->mtu_out, &session->rtt_us, data_sock);
++	chiaki_mutex_lock(&session->state_mutex);
++	session->senkusha = NULL;
+ 	chiaki_senkusha_fini(&senkusha);
+ 	CHECK_STOP(quit_ctrl);
+ 	if(session->ctrl_failed)
+@@ -648,17 +675,25 @@ ctrl_failed:
+ 	if(session->rudp)
+ 	{
+ 		ChiakiErrorCode err;
+-		err = chiaki_rudp_send_switch_to_stream_connection_message(session->rudp);
+-		if(err != CHIAKI_ERR_SUCCESS)
++		if(!session->stream_connection_switch_received)
+ 		{
+-			CHIAKI_LOGE(session->log, "Failed to send switch to stream connection message");
+-			QUIT(quit_ctrl);
++			err = chiaki_rudp_send_switch_to_stream_connection_message(session->rudp);
++			if(err != CHIAKI_ERR_SUCCESS)
++			{
++				CHIAKI_LOGE(session->log, "Failed to send switch to stream connection message");
++				QUIT(quit_ctrl);
++			}
++			CHIAKI_LOGI(session->log, "Sent switch to stream connection request; waiting for ACK");
++			err = chiaki_cond_timedwait_pred(&session->state_cond, &session->state_mutex, SESSION_EXPECT_TIMEOUT_MS, session_check_state_pred_stream_connection_switch, session);
++			if(!session->stream_connection_switch_received)
++			{
++				CHIAKI_LOGE(session->log, "Failed to receive switch to stream connection ack!");
++				QUIT(quit_ctrl);
++			}
+ 		}
+-		err = chiaki_cond_timedwait_pred(&session->state_cond, &session->state_mutex, SESSION_EXPECT_TIMEOUT_MS, session_check_state_pred_stream_connection_switch, session);
+-		if(!session->stream_connection_switch_received)
++		else
+ 		{
+-			CHIAKI_LOGE(session->log, "Failed to receive switch to stream connection ack!");
+-			QUIT(quit_ctrl);
++			CHIAKI_LOGI(session->log, "Stream switch ACK arrived during Senkusha; skipping duplicate switch request");
+ 		}
+ 		CHECK_STOP(quit_ctrl);
+ 		CHIAKI_LOGI(session->log, "Received Switch to Stream Connection Ack... Switching to Stream Connection now");
+diff --git a/lib/src/takion.c b/lib/src/takion.c
+index 38f9f5df..3c3dee2c 100644
+--- a/lib/src/takion.c
++++ b/lib/src/takion.c
+@@ -14,6 +14,9 @@
+ #include <string.h>
+ #include <assert.h>
+ 
++#include <takion.pb.h>
++#include <pb_decode.h>
++
+ #ifdef __APPLE__
+ #include <TargetConditionals.h>
+ #if TARGET_OS_OSX
+@@ -866,8 +869,8 @@ static ChiakiErrorCode takion_handshake(ChiakiTakion *takion, uint32_t *seq_num_
+ 		return CHIAKI_ERR_INVALID_RESPONSE;
+ 	}
+ 
+-	CHIAKI_LOGI(takion->log, "Takion received init ack with remote tag %#x, outbound streams: %#x, inbound streams: %#x",
+-		init_ack_payload.tag, init_ack_payload.outbound_streams, init_ack_payload.inbound_streams);
++	CHIAKI_LOGI(takion->log, "Takion received init ack with remote tag %#x, initial seq num %#x, outbound streams: %#x, inbound streams: %#x",
++		init_ack_payload.tag, init_ack_payload.initial_seq_num, init_ack_payload.outbound_streams, init_ack_payload.inbound_streams);
+ 
+ 	takion->tag_remote = init_ack_payload.tag;
+ 	*seq_num_remote_initial = takion->tag_remote; //init_ack_payload.initial_seq_num;
+@@ -919,8 +922,23 @@ static ChiakiErrorCode takion_handshake(ChiakiTakion *takion, uint32_t *seq_num_
+ static void takion_data_drop(uint64_t seq_num, void *elem_user, void *cb_user)
+ {
+ 	ChiakiTakion *takion = cb_user;
+-	CHIAKI_LOGE(takion->log, "Takion dropping data with seq num %#llx", (unsigned long long)seq_num);
+ 	TakionDataPacketEntry *entry = elem_user;
++	uint8_t data_type = entry->payload_size >= 9 ? entry->payload[8] : 0xff;
++	int protobuf_type = -1;
++	if(data_type == CHIAKI_TAKION_MESSAGE_DATA_TYPE_PROTOBUF && entry->payload_size > 9)
++	{
++		tkproto_TakionMessage msg = tkproto_TakionMessage_init_zero;
++		pb_istream_t stream = pb_istream_from_buffer(entry->payload + 9, entry->payload_size - 9);
++		if(pb_decode(&stream, tkproto_TakionMessage_fields, &msg))
++			protobuf_type = (int)msg.type;
++	}
++	CHIAKI_LOGE(takion->log,
++		"Takion dropping data seq=%#llx queue_begin=%#llx queue_count=%llu channel=%#x data_type=%#x protobuf_type=%d payload_size=%llu",
++		(unsigned long long)seq_num,
++		(unsigned long long)takion->data_queue.begin,
++		(unsigned long long)takion->data_queue.count,
++		entry->channel, data_type, protobuf_type,
++		(unsigned long long)entry->payload_size);
+ 	free(entry->packet_buf);
+ 	free(entry);
+ }
