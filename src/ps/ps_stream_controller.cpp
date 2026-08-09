@@ -13,6 +13,13 @@
 
 namespace lunar::ps {
 
+void PsStreamController::releasePendingRemoteResult() {
+    if (remote_result_.holepunch_session) {
+        chiaki_holepunch_session_fini(remote_result_.holepunch_session);
+    }
+    remote_result_ = {};
+}
+
 PsStreamController::PsStreamController(const PsConsole& console,
                                         const std::string& psn_access_token,
                                         const std::string& psn_account_id,
@@ -83,7 +90,10 @@ bool PsStreamController::startStream() {
             remote_connector_ =
                 std::make_unique<PsRemoteConnector>(psn_access_token_, &remote_log_);
         }
-        if (cancel_requested_.load()) return false;
+        if (cancel_requested_.load()) {
+            releasePendingRemoteResult();
+            return false;
+        }
 
         uint8_t console_uid[32]{};
         if (!decodeDuid(route.console_duid, console_uid)) {
@@ -106,7 +116,10 @@ bool PsStreamController::startStream() {
             setState(app::StreamState::Error, last_error_);
             return false;
         }
-        if (cancel_requested_.load()) return false;
+        if (cancel_requested_.load()) {
+            releasePendingRemoteResult();
+            return false;
+        }
     }
 
     // Create long-lived components (lightweight constructors only — heavy init
@@ -310,6 +323,7 @@ void PsStreamController::stopStream(bool set_disconnected) {
             remote_connector_.reset();
         }
     }
+    releasePendingRemoteResult();
     bridge_.reset();
     if (media_) {
         media_->setVideoReadyCallback({});

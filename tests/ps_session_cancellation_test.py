@@ -24,6 +24,12 @@ require("releaseRemoteHolepunch()" in SESSION and
 require("if (cancel_requested_.load())" in CONTROLLER and
         "if (mock_session_) mock_session_->stop();" in CONTROLLER,
         "controller must re-check cancellation after session startup")
+after_connector = CONTROLLER.split("connector->connect", 1)[1].split(
+    "// Create long-lived components", 1)[0]
+require("void PsStreamController::releasePendingRemoteResult()" in CONTROLLER and
+        "chiaki_holepunch_session_fini(remote_result_.holepunch_session)" in CONTROLLER and
+        "releasePendingRemoteResult();" in after_connector,
+        "cancellation after connector handoff must release the pending holepunch session")
 
 request_cancel = CONTROLLER.split(
     "void PsStreamController::requestCancel()", 1)[1].split(

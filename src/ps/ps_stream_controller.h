@@ -61,6 +61,7 @@ private:
     void startVideoMonitor();
     void stopVideoMonitor();
     bool requestRecoveryIDR();
+    void releasePendingRemoteResult();
 
     PsConsole console_;
     std::string psn_access_token_;
