@@ -39,6 +39,9 @@ bool PsStreamController::startStream() {
     if (cancel_requested_.load()) return false;
     setState(app::StreamState::Connecting, "Setting up stream...");
     stream_transport_connected_ = false;
+    last_input_buttons_ = 0;
+    input_transition_logs_ = 0;
+    lunar::startDropDiagnosticWriter();
 
     const bool mock_replay = psMockReplayEnabled();
     bool has_token = !psn_access_token_.empty();
@@ -304,6 +307,7 @@ void PsStreamController::stopStream(bool set_disconnected) {
         media_->setVideoReadyCallback({});
         media_->shutdown();
     }
+    lunar::stopDropDiagnosticWriter();
     if (set_disconnected) setState(app::StreamState::Disconnected, "Stopped");
 }
 
@@ -322,11 +326,18 @@ void PsStreamController::update() {
     else session_->setControllerState(cs);
     perf_.recordInputPacket();
     if (cs.buttons != last_input_buttons_) {
-        diagnosticLog("ps-input",
-                      "buttons old=0x%x new=0x%x lx=%d ly=%d rx=%d ry=%d l2=%u r2=%u",
-                      last_input_buttons_, cs.buttons,
-                      cs.left_x, cs.left_y, cs.right_x, cs.right_y,
-                      cs.l2_state, cs.r2_state);
+        // Release builds use APP_DIAG=0. Preserve a small amount of real-input
+        // evidence through the asynchronous writer without synchronously
+        // touching the SD card from the 8 ms input loop.
+        if (input_transition_logs_ < 64) {
+            lunar::dropDiagnosticLog(
+                "ps-input",
+                "buttons old=0x%x new=0x%x lx=%d ly=%d rx=%d ry=%d l2=%u r2=%u",
+                last_input_buttons_, cs.buttons,
+                cs.left_x, cs.left_y, cs.right_x, cs.right_y,
+                cs.l2_state, cs.r2_state);
+            input_transition_logs_++;
+        }
         last_input_buttons_ = cs.buttons;
     }
 

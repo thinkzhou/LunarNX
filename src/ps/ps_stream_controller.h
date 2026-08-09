@@ -97,6 +97,7 @@ private:
     std::atomic<bool> input_suppressed_{false};
     std::atomic<bool> ps_button_requested_{false};
     uint32_t last_input_buttons_ = 0;
+    uint32_t input_transition_logs_ = 0;
     std::atomic<bool> cancel_requested_{false};
     std::atomic<bool> shutdown_{false};
     std::atomic<bool> video_monitor_stop_{false};

@@ -21,8 +21,12 @@ require("sleep_for(milliseconds(500))" not in VIEW,
         "input and performance refresh must not share the old 2 Hz cadence")
 require("perf_.recordInputPacket()" in PS_CONTROLLER,
         "PS input sends must be visible in the performance counters")
-require('diagnosticLog("ps-input"' in PS_CONTROLLER,
-        "button transitions need a bounded real-hardware diagnostic")
+require('dropDiagnosticLog(\n                "ps-input"' in PS_CONTROLLER and
+        "input_transition_logs_ < 64" in PS_CONTROLLER,
+        "button transitions need a bounded asynchronous real-hardware diagnostic")
+require("startDropDiagnosticWriter()" in PS_CONTROLLER and
+        "stopDropDiagnosticWriter()" in PS_CONTROLLER,
+        "PS sessions must own the asynchronous diagnostic writer lifecycle")
 require("std::shared_lock<std::shared_mutex> operation_lock(stream_operation_mutex_)" in
         PS_CONTROLLER,
         "input and presentation must share lifetime protection without blocking each other")
