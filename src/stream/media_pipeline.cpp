@@ -25,8 +25,8 @@ constexpr size_t kMaxVideoQueuePackets = 2048;
 constexpr size_t kMaxVideoQueueBytes = 32 * 1024 * 1024;
 constexpr size_t kMaxAudioQueuePackets = 512;
 constexpr size_t kMaxAudioQueueBytes = 4 * 1024 * 1024;
-constexpr int kMediaQueueLogLimit = 32;
-constexpr int kMediaWorkerLogLimit = 32;
+constexpr int kMediaQueueLogLimit = 8;
+constexpr int kMediaWorkerLogLimit = 8;
 constexpr int kVideoSyncLogLimit = 16;
 
 std::atomic<int> g_media_queue_logs{0};
@@ -83,6 +83,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         shutdownUnlocked();
 
         const uint32_t generation = generation_.fetch_add(1) + 1;
+        video_ready_notified_ = false;
         perf_ = perf;
 
         try {
@@ -219,6 +220,7 @@ void MediaPipeline::shutdownUnlocked() {
     video_decoder_reset_pending_ = false;
     video_waiting_for_keyframe_ = false;
     video_recovery_epoch_ = 0;
+    video_ready_notified_ = false;
     if (video_renderer_) {
         lunar::diagnosticLog("media", "shutdown video renderer begin");
         video_renderer_->shutdown();
@@ -264,6 +266,11 @@ bool MediaPipeline::decodeAudioPacket(const uint8_t* data, size_t len,
                                       uint16_t sequence,
                                       uint64_t timestamp) {
     return enqueueAudioPacket(data, len, sequence, timestamp);
+}
+
+void MediaPipeline::setVideoReadyCallback(std::function<void()> callback) {
+    std::lock_guard<std::mutex> lock(video_ready_callback_mutex_);
+    video_ready_callback_ = std::move(callback);
 }
 
 void MediaPipeline::clearVideoRecoveryRequest() {
@@ -486,6 +493,49 @@ bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,
     return true;
 }
 
+bool MediaPipeline::playDecodedAudio(const AudioFrame& frame) {
+    if (!running_.load() || frame.sample_rate != 48000 || frame.channels != 2 ||
+        frame.sample_count == 0 || frame.pcm_data.empty() ||
+        frame.sample_count > SIZE_MAX / (2 * sizeof(int16_t)) ||
+        frame.pcm_data.size() != frame.sample_count * 2 * sizeof(int16_t) ||
+        frame.pcm_data.size() > kMaxAudioQueueBytes) {
+        if (perf_) perf_->recordAudioDrop();
+        return false;
+    }
+
+    QueuedDecodedAudio queued;
+    queued.generation = generation_.load();
+    try {
+        queued.frame = frame;
+    } catch (...) {
+        if (perf_) perf_->recordAudioDrop();
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        if (audio_worker_stop_ || !running_.load()) return false;
+        while (!decoded_audio_queue_.empty() &&
+               (decoded_audio_queue_.size() >= kMaxAudioQueuePackets ||
+                queued_decoded_audio_bytes_ + queued.frame.pcm_data.size() >
+                    kMaxAudioQueueBytes)) {
+            queued_decoded_audio_bytes_ -=
+                decoded_audio_queue_.front().frame.pcm_data.size();
+            decoded_audio_queue_.pop_front();
+            if (perf_) perf_->recordAudioDrop();
+        }
+        if (queued_decoded_audio_bytes_ + queued.frame.pcm_data.size() >
+            kMaxAudioQueueBytes) {
+            if (perf_) perf_->recordAudioDrop();
+            return false;
+        }
+        queued_decoded_audio_bytes_ += queued.frame.pcm_data.size();
+        decoded_audio_queue_.push_back(std::move(queued));
+    }
+    audio_queue_cv_.notify_one();
+    return true;
+}
+
 bool MediaPipeline::startWorkers(uint32_t generation) {
     {
         std::lock_guard<std::mutex> lock(video_queue_mutex_);
@@ -507,7 +557,9 @@ bool MediaPipeline::startWorkers(uint32_t generation) {
         audio_worker_stop_ = false;
         audio_worker_generation_ = generation;
         audio_queue_.clear();
+        decoded_audio_queue_.clear();
         queued_audio_bytes_ = 0;
+        queued_decoded_audio_bytes_ = 0;
         last_decoded_audio_end_ns_ = 0;
     }
     g_media_queue_logs = 0;
@@ -569,7 +621,9 @@ void MediaPipeline::stopWorkers() {
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
         audio_queue_.clear();
+        decoded_audio_queue_.clear();
         queued_audio_bytes_ = 0;
+        queued_decoded_audio_bytes_ = 0;
         audio_worker_generation_ = 0;
         audio_worker_stop_ = false;
         last_decoded_audio_end_ns_ = 0;
@@ -649,16 +703,34 @@ void MediaPipeline::audioWorkerLoop() {
     AudioPacketReorder reorder;
     while (true) {
         EncodedAudioPacket packet;
+        QueuedDecodedAudio decoded;
+        bool have_encoded = false;
+        bool have_decoded = false;
         {
             std::unique_lock<std::mutex> lock(audio_queue_mutex_);
             audio_queue_cv_.wait(lock, [this]() {
-                return audio_worker_stop_ || !audio_queue_.empty();
+                return audio_worker_stop_ || !audio_queue_.empty() ||
+                       !decoded_audio_queue_.empty();
             });
             if (audio_worker_stop_) break;
-            packet = std::move(audio_queue_.front());
-            audio_queue_.pop_front();
-            queued_audio_bytes_ -= packet.data.size();
+            if (!decoded_audio_queue_.empty()) {
+                decoded = std::move(decoded_audio_queue_.front());
+                decoded_audio_queue_.pop_front();
+                queued_decoded_audio_bytes_ -= decoded.frame.pcm_data.size();
+                have_decoded = true;
+            } else {
+                packet = std::move(audio_queue_.front());
+                audio_queue_.pop_front();
+                queued_audio_bytes_ -= packet.data.size();
+                have_encoded = true;
+            }
         }
+
+        if (have_decoded) {
+            submitDecodedAudio(decoded.frame, decoded.generation);
+            continue;
+        }
+        if (!have_encoded) continue;
 
         if (packet.generation != audio_worker_generation_ ||
             !isGenerationActive(packet.generation)) {
@@ -829,6 +901,10 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
                 rendered ? 1 : 0);
         }
         if (rendered && perf_) perf_->recordFrame();
+        if (rendered && !video_ready_notified_.exchange(true)) {
+            std::lock_guard<std::mutex> lock(video_ready_callback_mutex_);
+            if (video_ready_callback_) video_ready_callback_();
+        }
     }
 }
 
@@ -848,6 +924,18 @@ void MediaPipeline::handleAudioFrame(const AudioFrame& frame,
         frame.sample_rate,
         audio_player_->queuedSampleCount());
     av_sync_->updateAudioPts(playback_timestamp);
+}
+
+bool MediaPipeline::submitDecodedAudio(const AudioFrame& frame,
+                                       uint32_t generation) {
+    if (!isGenerationActive(generation) || !audio_player_ || !av_sync_) return false;
+    if (!audio_player_->play(frame)) return false;
+    if (perf_) perf_->recordAudioFrame();
+    const uint64_t playback_ts = estimateAudioPlaybackTimestamp(
+        frame.timestamp, frame.sample_count, frame.sample_rate,
+        audio_player_->queuedSampleCount());
+    av_sync_->updateAudioPts(playback_ts);
+    return true;
 }
 
 void MediaPipeline::presentVideoFrame() {

@@ -208,6 +208,8 @@ bool VideoDecoder::initialize(int width, int height) {
     h264_decoder_ready_ = false;
     h264_seen_sps_ = false;
     h264_seen_pps_ = false;
+    h264_parameter_sets_.clear();
+    h264_parameter_sets_pending_ = false;
     h264_wait_log_count_ = 0;
     h264_error_log_count_ = 0;
 #ifdef __SWITCH__
@@ -524,6 +526,36 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
 
     h264_seen_sps_ = h264_seen_sps_ || au.has_sps;
     h264_seen_pps_ = h264_seen_pps_ || au.has_pps;
+    // Chiaki reports the PS5's initial SPS/PPS as a standalone access unit.
+    // NVDEC rejects parameter-set-only packets, so retain them and prepend
+    // them to the next VCL access unit instead of treating this as a decode
+    // failure. The same path handles standalone parameter-set updates.
+    if (!au.has_vcl) {
+        constexpr size_t kMaxH264ParameterSetBytes = 64 * 1024;
+        if (au.has_sps) h264_parameter_sets_.clear();
+        if (au.has_sps || au.has_pps) {
+            if (len <= kMaxH264ParameterSetBytes &&
+                h264_parameter_sets_.size() <=
+                    kMaxH264ParameterSetBytes - len) {
+                h264_parameter_sets_.insert(h264_parameter_sets_.end(),
+                                            data, data + len);
+                h264_parameter_sets_pending_ = true;
+            } else {
+                h264_parameter_sets_.clear();
+                h264_parameter_sets_pending_ = false;
+                lunar::diagnosticLog(
+                    "video", "discard oversized H264 parameter sets len=%zu", len);
+            }
+        }
+        if (log) {
+            lunar::diagnosticLog(
+                "video", "consume H264 non-VCL access unit nal=%s len=%zu cached=%zu",
+                au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+                len, h264_parameter_sets_.size());
+        }
+        return true;
+    }
+
     if (!h264_decoder_ready_) {
         if (h264_seen_sps_ && h264_seen_pps_ && au.has_idr) {
             h264_decoder_ready_ = true;
@@ -543,6 +575,21 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
             }
             return true;
         }
+    }
+
+    std::vector<uint8_t> startup_access_unit;
+    if (h264_parameter_sets_pending_ && !h264_parameter_sets_.empty()) {
+        startup_access_unit.reserve(h264_parameter_sets_.size() + len);
+        startup_access_unit.insert(startup_access_unit.end(),
+                                   h264_parameter_sets_.begin(),
+                                   h264_parameter_sets_.end());
+        startup_access_unit.insert(startup_access_unit.end(), data, data + len);
+        data = startup_access_unit.data();
+        len = startup_access_unit.size();
+        h264_parameter_sets_pending_ = false;
+        lunar::diagnosticLog("video",
+                             "prepended cached H264 parameter sets bytes=%zu total=%zu",
+                             h264_parameter_sets_.size(), len);
     }
 
 #ifdef __SWITCH__
@@ -840,6 +887,7 @@ bool VideoDecoder::resetForKeyframe() {
     // Keep SPS/PPS knowledge: Xbox may send them only in the first IDR, while
     // a requested recovery IDR can be a slice-only access unit.
     h264_decoder_ready_ = false;
+    h264_parameter_sets_pending_ = !h264_parameter_sets_.empty();
     h264_wait_log_count_ = 0;
     lunar::diagnosticLog("video", "H264 decoder reset; waiting for IDR");
     return true;
@@ -881,6 +929,8 @@ void VideoDecoder::shutdown() {
     h264_decoder_ready_ = false;
     h264_seen_sps_ = false;
     h264_seen_pps_ = false;
+    h264_parameter_sets_.clear();
+    h264_parameter_sets_pending_ = false;
     h264_wait_log_count_ = 0;
     h264_error_log_count_ = 0;
     initialized_ = false;

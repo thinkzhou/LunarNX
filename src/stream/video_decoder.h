@@ -4,6 +4,7 @@
 #include "media_pipeline.h"
 #include <functional>
 #include <cstdint>
+#include <vector>
 
 struct AVFrame;         // FFmpeg forward decl
 struct AVBufferRef;     // FFmpeg hw device context
@@ -69,6 +70,8 @@ private:
     bool h264_decoder_ready_ = false;
     bool h264_seen_sps_ = false;
     bool h264_seen_pps_ = false;
+    std::vector<uint8_t> h264_parameter_sets_;
+    bool h264_parameter_sets_pending_ = false;
     int h264_wait_log_count_ = 0;
     int h264_error_log_count_ = 0;
 };

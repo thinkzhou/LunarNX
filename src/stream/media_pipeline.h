@@ -3,8 +3,10 @@
 #include "../common.h"
 #include "../diagnostics.h"
 #include "audio_packet_reorder.h"
+#include "audio_decoder.h"
 #include "stream_backend_provider.h"
 #include <atomic>
+#include <functional>
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
 #include <chrono>
 #endif
@@ -22,7 +24,6 @@ namespace lunar::stream {
 class AudioDecoder;
 class AudioPlayer;
 class AVSync;
-struct AudioFrame;
 struct PerfStats;
 struct VideoFrame;
 class VideoDecoder;
@@ -93,6 +94,10 @@ public:
                            size_t len,
                            uint16_t sequence,
                            uint64_t timestamp);
+    // Queue already-decoded PCM audio (Chiaki path). Audren is only touched by
+    // the media audio worker, just like the Xbox Opus decode path.
+    bool playDecodedAudio(const AudioFrame& frame);
+    void setVideoReadyCallback(std::function<void()> callback);
     // A media discontinuity requires a fresh IDR.  The video worker performs
     // the decoder reset independently; the session acknowledges this flag
     // after a throttled control/PLI request succeeds.
@@ -119,6 +124,11 @@ private:
         std::vector<uint8_t> data;
     };
 
+    struct QueuedDecodedAudio {
+        AudioFrame frame;
+        uint32_t generation = 0;
+    };
+
     bool enqueueVideoPacket(const uint8_t* data, size_t len, uint64_t timestamp);
     bool enqueueAudioPacket(const uint8_t* data,
                             size_t len,
@@ -142,6 +152,7 @@ private:
     bool isGenerationActive(uint32_t generation) const;
     void handleVideoFrame(const VideoFrame& frame, uint32_t generation);
     void handleAudioFrame(const AudioFrame& frame, uint32_t generation);
+    bool submitDecodedAudio(const AudioFrame& frame, uint32_t generation);
     void shutdownUnlocked();
 
     StreamBackendProvider& provider_;
@@ -155,6 +166,9 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<uint32_t> generation_{0};
     mutable std::mutex lifecycle_mutex_;
+    std::mutex video_ready_callback_mutex_;
+    std::function<void()> video_ready_callback_;
+    std::atomic<bool> video_ready_notified_{false};
 
     std::mutex video_queue_mutex_;
     std::condition_variable video_queue_cv_;
@@ -172,9 +186,11 @@ private:
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;
     std::deque<EncodedAudioPacket> audio_queue_;
+    std::deque<QueuedDecodedAudio> decoded_audio_queue_;
     std::thread audio_worker_;
     bool audio_worker_stop_ = false;
     size_t queued_audio_bytes_ = 0;
+    size_t queued_decoded_audio_bytes_ = 0;
     uint32_t audio_worker_generation_ = 0;
     uint64_t last_decoded_audio_end_ns_ = 0;
 };

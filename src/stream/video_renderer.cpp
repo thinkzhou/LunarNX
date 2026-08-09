@@ -36,8 +36,10 @@ namespace {
   static constexpr unsigned PresentCmdSliceSize = 0x8000;
   static constexpr size_t MaxRetiredTargets =
       brls::FRAMEBUFFERS_COUNT * 6;
-  static constexpr int RenderLogLimit = 64;
-  static constexpr uint64_t HardwareProbeFrameLimit = 24;
+  // Real-hardware diagnostics are synchronously flushed to the SD card. Keep
+  // success-path probes tiny: the old first-24 + every-120-frame trace caused
+  // visible periodic stalls even though decode and presentation were healthy.
+  static constexpr int RenderLogLimit = 8;
   using RenderClock = std::chrono::steady_clock;
   std::atomic<int> render_logs{0};
 
@@ -46,8 +48,7 @@ namespace {
   }
 
   bool shouldLogHardwareProbe(uint64_t frame_id) {
-    return frame_id > 0 &&
-           (frame_id <= HardwareProbeFrameLimit || frame_id % 120 == 0);
+    return frame_id == 1;
   }
 
   bool shouldLogCloud1080HardwareProbe(uint64_t frame_id,
@@ -1716,6 +1717,14 @@ bool VideoRenderer::prepareDecoderReset(){
   if(!s)return false;
   std::unique_lock<std::mutex> lock(s->render_mutex);
   if(!s->ok||!s->q)return false;
+  bool has_submitted_frames=false;
+  for(auto* frame:s->submitted_frames){
+    if(frame){has_submitted_frames=true;break;}
+  }
+  if(!s->pending_frame&&!s->current_frame&&!has_submitted_frames&&
+     !s->present_slice_active){
+    return true;
+  }
   s->decoder_reset_ready=false;
   s->decoder_reset_drain_steps=0;
   s->resolution_transition_drain_steps=0;

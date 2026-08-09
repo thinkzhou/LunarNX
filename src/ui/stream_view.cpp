@@ -404,10 +404,15 @@ void StreamView::runLoop() {
     auto last_stats = steady_clock::now();
     uint32_t last_frames = 0;
     while (running_) {
+        // Controller input must be sampled much faster than the UI/performance
+        // refresh cadence. At 500 ms, normal button taps can begin and end
+        // between samples and never reach the remote console at all.
         runtime_->update();
-        std::this_thread::sleep_for(milliseconds(500));
+        std::this_thread::sleep_for(milliseconds(8));
 
         auto now = steady_clock::now();
+        if (now - last_stats < milliseconds(500)) continue;
+
         auto& p = runtime_->getPerfStats();
         uint32_t frames = p.video_frames.load();
         float sec = duration<float>(now - last_stats).count();

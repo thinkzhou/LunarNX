@@ -31,8 +31,8 @@ constexpr AudioRendererConfig kAudrenConfig{
     1,
     2,
 };
-constexpr int kAudioPlayerLogLimit = 12;
-constexpr int kAudioPlayerDetailLogLimit = 160;
+constexpr int kAudioPlayerLogLimit = 3;
+constexpr int kAudioPlayerDetailLogLimit = 24;
 std::atomic<int> g_audio_player_logs{0};
 std::atomic<int> g_audio_player_detail_logs{0};
 
