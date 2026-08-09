@@ -1,0 +1,82 @@
+#pragma once
+
+#ifdef __SWITCH__
+
+#include <chiaki/session.h>
+#include <chiaki/audio.h>
+#include <chiaki/opusdecoder.h>
+#include "../stream/media_pipeline.h"
+#include "../stream/audio_decoder.h"
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <chrono>
+#include <vector>
+
+namespace lunar::ps {
+
+class PsMediaBridge {
+public:
+    using EventCallback = std::function<void(ChiakiEvent*)>;
+    using RumbleCallback = std::function<void(uint8_t left, uint8_t right)>;
+    explicit PsMediaBridge(stream::MediaPipeline& media, int fps);
+    ~PsMediaBridge();
+
+    PsMediaBridge(const PsMediaBridge&) = delete;
+    PsMediaBridge& operator=(const PsMediaBridge&) = delete;
+
+    // Chiaki callbacks (called from chiaki's internal thread)
+    bool onVideoSample(uint8_t* data, size_t size, int32_t frames_lost, bool recovered);
+
+    ChiakiAudioSink audioSink();
+    void initializeAudio(ChiakiLog* log);
+    ChiakiEventCallback eventCallback();
+
+    void setEventForwarder(EventCallback cb) { event_cb_ = std::move(cb); }
+    void setRumbleForwarder(RumbleCallback cb) { rumble_cb_ = std::move(cb); }
+
+    // Static C callbacks exposed for chiaki API registration
+    static bool videoSampleCb(uint8_t* buf, size_t buf_size, int32_t frames_lost,
+                              bool frame_recovered, void* user);
+    static void eventCb(ChiakiEvent* event, void* user);
+
+private:
+    stream::MediaPipeline& media_;
+    int fps_;
+
+    // Video PTS tracking
+    uint64_t video_frame_count_ = 0;
+    std::atomic<uint64_t> next_video_pts_ns_{0};
+    uint64_t video_samples_since_summary_ = 0;
+    uint64_t video_sample_bytes_ = 0;
+    uint64_t video_lost_frames_ = 0;
+    uint64_t video_enqueue_failures_ = 0;
+    std::chrono::steady_clock::time_point video_summary_at_ =
+        std::chrono::steady_clock::now();
+
+    // Audio clock
+    int audio_sample_rate_ = 48000;
+    int audio_channels_ = 2;
+    int audio_frame_size_ = 0;
+    uint64_t audio_samples_played_ = 0;
+    uint64_t audio_epoch_ns_ = 0;
+
+    EventCallback event_cb_;
+    RumbleCallback rumble_cb_;
+    ChiakiOpusDecoder opus_decoder_{};
+    ChiakiAudioSink opus_sink_{};
+    bool opus_decoder_initialized_ = false;
+    bool audio_format_valid_ = false;
+
+    // Internal audio frame callback (called from chiaki thread)
+    void onDecodedAudioFrame(int16_t* buf, size_t samples_count);
+
+    static void audioHeaderCb(ChiakiAudioHeader* header, void* user);
+    static void audioFrameCb(uint8_t* buf, size_t buf_size, void* user);
+    static void decodedAudioSettingsCb(uint32_t channels, uint32_t rate, void* user);
+    static void decodedAudioFrameCb(int16_t* buf, size_t samples_count, void* user);
+};
+
+} // namespace lunar::ps
+
+#endif
