@@ -2,6 +2,7 @@
 
 #include "chiaki_log_adapter.h"
 #include "../diagnostics.h"
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -14,7 +15,14 @@ enum class NoisyLogKind {
     Retransmit,
     AvLoss,
     DataDrop,
+    SendBufferOverflow,
 };
+
+std::atomic<uint64_t> g_send_buffer_overflow_count{0};
+
+static bool isPowerOfTwo(uint64_t value) {
+    return value != 0 && (value & (value - 1)) == 0;
+}
 
 static NoisyLogKind noisyLogKind(const char* msg) {
     if (!msg) return NoisyLogKind::None;
@@ -44,6 +52,10 @@ static NoisyLogKind noisyLogKind(const char* msg) {
     if (std::strstr(msg, "Takion dropping data")) {
         return NoisyLogKind::DataDrop;
     }
+    if (std::strstr(msg, "Takion Send Buffer overflow") ||
+        std::strstr(msg, "Rudp Send Buffer overflow")) {
+        return NoisyLogKind::SendBufferOverflow;
+    }
     return NoisyLogKind::None;
 }
 
@@ -61,6 +73,19 @@ static void logCallback(ChiakiLogLevel level, const char* msg, void* user) {
     // deliberately stateless: it runs inside Chiaki's PSN and UDP threads.
     if (level == CHIAKI_LOG_DEBUG || level == CHIAKI_LOG_VERBOSE) return;
     const NoisyLogKind noisy = noisyLogKind(msg);
+    if (noisy == NoisyLogKind::SendBufferOverflow) {
+        const uint64_t count =
+            g_send_buffer_overflow_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        // Preserve logarithmic evidence without opening the SD log on every
+        // Chiaki network-thread overflow. 1..4 and powers of two produce only
+        // 13 async records for the 1037-event hardware trace.
+        if (count <= 4 || isPowerOfTwo(count)) {
+            lunar::dropDiagnosticLog(
+                "chiaki-flow", "%s count=%llu", msg,
+                static_cast<unsigned long long>(count));
+        }
+        return;
+    }
     if (noisy != NoisyLogKind::None) return;
 
     ensureDiagnosticLogDirectory();

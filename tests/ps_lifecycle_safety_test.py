@@ -30,6 +30,10 @@ require("std::atomic<uint64_t> next_video_pts_ns_" in BRIDGE_H,
 require("new ChiakiLogContext" not in LOG_ADAPTER and
         "log.user = const_cast<char*>(name)" in LOG_ADAPTER,
         "concurrent Chiaki logging must not leak heap-owned callback contexts")
+require('NoisyLogKind::SendBufferOverflow' in LOG_ADAPTER and
+        'dropDiagnosticLog(\n                "chiaki-flow"' in LOG_ADAPTER and
+        "count <= 4 || isPowerOfTwo(count)" in LOG_ADAPTER,
+        "send-buffer overflow spam must be aggregated asynchronously")
 require("if (!stream_transport_connected_.load()) continue;" in CONTROLLER,
         "first-video timeout must not run before StreamConnection is connected")
 
