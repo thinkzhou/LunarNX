@@ -18,6 +18,7 @@ constexpr std::chrono::seconds kDataChannelTimeout{45};
 constexpr std::chrono::seconds kStartupKeyframeRetryInterval{1};
 constexpr std::chrono::seconds kRecoveryKeyframeInterval{1};
 constexpr std::chrono::seconds kReceiverFeedbackInterval{1};
+constexpr int kGuidePulseFrames = 8;
 constexpr uint32_t kRecoveryMissingPacketsThreshold = 12;
 constexpr uint32_t kRecoveryCorruptFramesThreshold = 4;
 
@@ -532,6 +533,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
     bool control_started = false;
     bool first_loop_logged = false;
     bool first_input_logged = false;
+    int guide_pulse_frames_remaining = 0;
+    bool guide_release_pending = false;
     auto next_input_tick = std::chrono::steady_clock::now();
     auto next_network_tick = next_input_tick;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
@@ -557,14 +560,21 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             } catch (...) {
                 // Keep zeroed state.
             }
-            const bool guide_requested = control_started && input_connected &&
-                                         callbacks.consume_guide_button &&
-                                         callbacks.consume_guide_button();
-            if (guide_requested) {
-                // Send an unambiguous one-frame Nexus pulse. This also prevents
-                // the menu activation button from leaking into the game.
+            if (control_started && input_connected &&
+                callbacks.consume_guide_button &&
+                callbacks.consume_guide_button()) {
+                guide_pulse_frames_remaining = kGuidePulseFrames;
+                guide_release_pending = true;
+            }
+            if (guide_pulse_frames_remaining > 0) {
+                // The realtime input channel may drop a single frame. Hold
+                // Nexus briefly, then follow it with an explicit release.
                 gamepad_state = {};
                 gamepad_state.guide = true;
+                guide_pulse_frames_remaining--;
+            } else if (guide_release_pending) {
+                gamepad_state = {};
+                guide_release_pending = false;
             } else if (callbacks.input_suppressed && callbacks.input_suppressed()) {
                 gamepad_state.view = false;
                 gamepad_state.menu = false;

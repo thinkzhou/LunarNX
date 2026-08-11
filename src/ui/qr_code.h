@@ -17,6 +17,14 @@ struct QrCode {
     }
 };
 
+struct QrBitmap {
+    int size = 0;
+    std::vector<uint8_t> rgba;
+
+    bool empty() const { return size <= 0 || rgba.empty(); }
+};
+
 QrCode makeQrCode(const std::string& text);
+QrBitmap makeQrBitmap(const QrCode& qr, int quiet_zone = 4);
 
 } // namespace lunar::ui

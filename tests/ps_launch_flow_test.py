@@ -46,9 +46,16 @@ def main():
     require("requestCancel()" in cancel_body and
             "stopStream(false)" not in cancel_body,
             "loading UI cancellation must not destroy an active connector")
-    require("connect_worker_done_.store(true)" in ui and
-            "scheduleCancelCleanup()" in ui,
+    require("context->connect_worker_done = true" in ui and
+            "schedulePsConnectCleanup(context, controller)" in ui,
             "loading UI must defer cleanup until the connect worker exits")
+    connect_worker = ui.split('startNetworkWorker("ps-connect"', 1)[1].split(
+        '}, 8 * 1024 * 1024)', 1)[0]
+    require("[context, controller, status]" in connect_worker and
+            "[this" not in connect_worker,
+            "detached PS connect worker must not retain the loading activity")
+    require("setLaunchCallback({})" in ui and "setLoginPinCallback({})" in ui,
+            "PS loading callbacks must be cleared before stop or destruction")
     require("void requestCancel()" in controller and
             "PsStreamController::requestCancel()" in controller_source,
             "PS controller must expose non-destructive connection cancellation")
@@ -59,6 +66,10 @@ def main():
     require("new PsConnectActivity" in connect_body and
             "new StreamView(controller)" not in connect_body,
             "PS page must route startup through a loading activity")
+    require("loadPsSettings()" in connect_body and
+            "settings.width, settings.height, 60, settings.bitrate_kbps" in connect_body and
+            "1280, 720, 60, 10000" not in connect_body,
+            "PS launch must use the shared saved resolution and bitrate settings")
 
     print("PS launch flow tests passed")
 

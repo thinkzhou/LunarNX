@@ -13,10 +13,11 @@ class QrCodeView;
 
 class AuthActivity : public brls::Activity {
 public:
-    AuthActivity();
+    explicit AuthActivity(std::shared_ptr<app::StreamController> ctrl = nullptr);
     ~AuthActivity();
     brls::View* createContentView() override;
     void onResume() override;
+    static std::shared_ptr<app::StreamController> createConfiguredController();
 
 private:
     std::shared_ptr<app::StreamController> ctrl_;

@@ -179,6 +179,8 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         video_renderer_->setPostProcessMode(options.post_process_mode);
         video_renderer_->setDitheringEnabled(options.dithering_enabled,
                                              options.dithering_strength);
+        video_renderer_->setHoldNonTargetStartupFrames(
+            options.hold_non_target_startup_frames);
         lunar::diagnosticLog("media", "video renderer init begin");
         if (!video_renderer_->initialize("LunarNX", width, height)) {
             lunar::diagnosticLog("media", "video renderer init failed");
@@ -534,6 +536,19 @@ bool MediaPipeline::playDecodedAudio(const AudioFrame& frame) {
     }
     audio_queue_cv_.notify_one();
     return true;
+}
+
+void MediaPipeline::recordIncomingVideoSample(size_t bytes, uint64_t pts_ns,
+                                               uint32_t frames_lost) {
+    if (!perf_) return;
+    perf_->recordVideoPacket(bytes, pts_ns);
+    perf_->recordVideoNetworkBytes(bytes);
+    perf_->recordPackets(1, frames_lost);
+}
+
+void MediaPipeline::recordIncomingAudioPacket() {
+    if (!perf_) return;
+    perf_->recordAudioPacket();
 }
 
 bool MediaPipeline::startWorkers(uint32_t generation) {

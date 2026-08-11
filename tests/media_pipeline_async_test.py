@@ -39,6 +39,9 @@ def main():
     require("#include \"audio_packet_reorder.h\"" in header and
             "std::deque<EncodedAudioPacket>" in header,
             "MediaPipeline should store audio sequence and timestamp metadata")
+    require("std::deque<QueuedDecodedAudio>" in header and
+            "queued_decoded_audio_bytes_" in header,
+            "Decoded PCM must have its own bounded worker queue")
     require("void videoWorkerLoop();" in header,
             "MediaPipeline should drain video on its own worker")
     require("void audioWorkerLoop();" in header,
@@ -81,6 +84,12 @@ def main():
             "decodeVideoPacket must not synchronously call the video decoder")
     require("audio_decoder_->decode" not in audio_body,
             "decodeAudioPacket must not synchronously call the audio decoder")
+
+    decoded_audio_body = method_body(
+        impl, "bool MediaPipeline::playDecodedAudio(const AudioFrame& frame)")
+    require("decoded_audio_queue_.push_back" in decoded_audio_body and
+            "audio_player_->play" not in decoded_audio_body,
+            "Decoded PCM callbacks must enqueue instead of touching Audren")
 
     require(re.search(r"video_worker_\s*=\s*std::thread", impl),
             "MediaPipeline should start a video worker")
@@ -125,6 +134,10 @@ def main():
             "Audio frames should be submitted on the audio worker")
     require("lifecycle_mutex_" not in audio_handler,
             "Blocking audren writes must not hold the lifecycle mutex")
+    submit_decoded = method_body(
+        impl, "bool MediaPipeline::submitDecodedAudio(const AudioFrame& frame,")
+    require("audio_player_->play(frame)" in submit_decoded,
+            "Only the media audio worker should submit decoded PCM")
 
     initialize_body = method_body(
         impl,

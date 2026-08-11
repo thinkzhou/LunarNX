@@ -1,0 +1,12 @@
+prefix=/work/lib/switch
+exec_prefix=${prefix}
+libdir=${prefix}
+includedir=${prefix}/include/curl
+
+Name: libcurl
+Description: LunarNX Moonlight curl with WebSocket support for Nintendo Switch
+Version: 8.11.0
+Libs: -L${libdir} -lcurl
+Cflags: -I${includedir}
+supported_protocols=HTTP HTTPS WS WSS
+supported_features=SSL IPv6 libz threadsafe

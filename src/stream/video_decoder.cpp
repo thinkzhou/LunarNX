@@ -412,9 +412,9 @@ bool VideoDecoder::deliverFrame(AVFrame* frame,
         }
         av_frame_copy_props(sw_frame, frame);
         if (perf_) {
-            auto us = std::chrono::duration_cast<std::chrono::microseconds>(
+            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                 transfer_end - transfer_start).count();
-            perf_->recordDecodeLatency(static_cast<uint64_t>(us));
+            perf_->recordDecodeLatencyNs(static_cast<uint64_t>(ns));
         }
         const bool transfer_log = g_video_transfer_logs.fetch_add(1) < 8;
         if (log || transfer_log) {
@@ -656,8 +656,8 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                                              frame->format);
                     }
                     if (perf_) {
-                        auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-                        perf_->recordDecodeLatency(static_cast<uint64_t>(us));
+                        auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+                        perf_->recordDecodeLatencyNs(static_cast<uint64_t>(ns));
                     }
                     if (!deliverFrame(frame, timestamp, log_index, log)) {
                         decode_ok = false;
@@ -830,8 +830,8 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                                              frame->format);
                     }
                     if (perf_) {
-                        auto us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-                        perf_->recordDecodeLatency(static_cast<uint64_t>(us));
+                        auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+                        perf_->recordDecodeLatencyNs(static_cast<uint64_t>(ns));
                     }
                     if (!deliverFrame(frame, timestamp, log_index, log)) {
                         decode_ok = false;

@@ -163,8 +163,12 @@ static void apply_common_options(CURL* curl, const std::string& url, struct curl
     curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header_callback);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, headers);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hlist);
+    constexpr long timeout_seconds = (LUNARNX_CURL_TIMEOUT_MS + 999L) / 1000L;
+    constexpr long connect_timeout_seconds = timeout_seconds < 10L ? timeout_seconds : 10L;
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(LUNARNX_CURL_TIMEOUT_MS));
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 0L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_seconds);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, connect_timeout_seconds * 1000L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, connect_timeout_seconds);
     // Abort if the transfer stalls (common on /v2/titles at ~1MB under bad routes).
     // This lets callers fall back to recent titles instead of waiting the full timeout.
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);   // <1 KiB/s

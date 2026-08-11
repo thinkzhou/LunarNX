@@ -28,6 +28,9 @@ public:
     void setPostProcessMode(PostProcessMode mode);
     void setPostProcessEnabled(bool enabled);
     void setDitheringEnabled(bool enabled, float strength = 3.0f);
+    void setHoldNonTargetStartupFrames(bool enabled) {
+        hold_non_target_startup_frames_ = enabled;
+    }
     bool render(const VideoFrame& frame);
     void present();
     bool prepareDecoderReset();
@@ -45,6 +48,7 @@ private:
     PostProcessMode requested_post_process_mode_ = PostProcessMode::Off;
     bool requested_dithering_enabled_ = false;
     float requested_dithering_strength_ = 3.0f;
+    bool hold_non_target_startup_frames_ = false;
 #ifdef __SWITCH__
     void* ctx_ = nullptr;  // Deko3DContext* (Switch) or unused (Desktop)
     void* software_sws_ = nullptr;

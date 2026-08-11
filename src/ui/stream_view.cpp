@@ -203,13 +203,13 @@ brls::View* StreamView::createContentView() {
     }
 
     // Top status bar
-    overlay_ = new StreamOverlay(&runtime_->getPerfStats());
+    overlay_ = new StreamOverlay(&runtime_->getPerfStats(), runtime_->getStreamPlatform());
     overlay_->detach();
     overlay_->setDetachedPosition(0, 0);
     root->addView(overlay_);
 
     // Detailed stats overlay (starts hidden)
-    perf_overlay_ = new PerfOverlay(&runtime_->getPerfStats());
+    perf_overlay_ = new PerfOverlay(&runtime_->getPerfStats(), runtime_->getStreamPlatform());
     perf_overlay_->detach();
     perf_overlay_->setDetachedPosition(10, 76);
     root->addView(perf_overlay_);
@@ -259,16 +259,19 @@ brls::View* StreamView::createContentView() {
     });
     quick_menu_->addView(performance_button_);
 
-    auto* xbox_button = new brls::Button();
-    xbox_button->setHeight(64);
-    xbox_button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
-    xbox_button->setText(brls::getStr("lunarnx/stream/menu_xbox_button"));
-    xbox_button->registerClickAction([this](brls::View*) -> bool {
+    auto* platform_button = new brls::Button();
+    platform_button->setHeight(64);
+    platform_button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
+    platform_button->setText(brls::getStr(
+        runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation
+            ? "lunarnx/stream/menu_ps_button"
+            : "lunarnx/stream/menu_xbox_button"));
+    platform_button->registerClickAction([this](brls::View*) -> bool {
         setQuickMenuVisible(false);
         runtime_->requestPlatformHomeButton();
         return true;
     });
-    quick_menu_->addView(xbox_button);
+    quick_menu_->addView(platform_button);
 
     auto* spacer = new brls::Box(brls::Axis::COLUMN);
     spacer->setGrow(1.0f);
@@ -404,14 +407,8 @@ void StreamView::runLoop() {
     auto last_stats = steady_clock::now();
     uint32_t last_frames = 0;
     while (running_) {
-        // Controller input must be sampled much faster than the UI/performance
-        // refresh cadence. At 500 ms, normal button taps can begin and end
-        // between samples and never reach the remote console at all.
-        runtime_->update();
-        std::this_thread::sleep_for(milliseconds(8));
-
-        auto now = steady_clock::now();
-        if (now - last_stats < milliseconds(500)) continue;
+        std::this_thread::sleep_for(milliseconds(500));
+        const auto now = steady_clock::now();
 
         auto& p = runtime_->getPerfStats();
         uint32_t frames = p.video_frames.load();

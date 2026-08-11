@@ -1,0 +1,52 @@
+DEVKITPRO ?= /opt/devkitpro
+DEVKITA64  = $(DEVKITPRO)/devkitA64
+PORTLIBS   = $(DEVKITPRO)/portlibs/switch
+LIBNX      = $(DEVKITPRO)/libnx
+
+CC      = $(DEVKITA64)/bin/aarch64-none-elf-gcc
+CXX     = $(DEVKITA64)/bin/aarch64-none-elf-g++
+OBJCOPY = $(DEVKITA64)/bin/aarch64-none-elf-objcopy
+NACP    = $(DEVKITPRO)/tools/bin/nacptool
+ELF2NRO = $(DEVKITPRO)/tools/bin/elf2nro
+
+ARCH = -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
+COMMON_FLAGS = $(ARCH) -ffunction-sections -fdata-sections -D__SWITCH__ -DCHIAKI_LIB_ENABLE_LIBNX_CRYPTO -DCHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL -DCHIAKI_LIB_ENABLE_OPUS=1 -DCURL_STATICLIB -O2 -Wall -ftls-model=local-exec -Ilib/switch/include/curl -include lib/switch/include/curl/curl/curl.h
+CFLAGS = $(COMMON_FLAGS)
+CXXFLAGS = $(COMMON_FLAGS) -std=gnu++17
+LDFLAGS = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,--wrap=curl_easy_init
+INCDIRS = -I$(LIBNX)/include -I$(PORTLIBS)/include -Ilib/switch/include -Ilib/libpeer/third_party/mbedtls/include -Ilib/libpeer/third_party/mbedtls/build_switch/include
+LIBDIRS = -Llib/switch -Llib/libpeer/third_party/mbedtls/build_switch/library -L$(PORTLIBS)/lib -L$(LIBNX)/lib
+LIBS = -Wl,--start-group lib/switch/libchiaki.a lib/switch/libcurl.a lib/switch/libgf_complete.a lib/switch/libjerasure.a lib/switch/libprotobuf-nanopb.a -lmbedtls -lmbedx509 -lmbedcrypto -ljson-c -lminiupnpc -lz -lzstd -lnx -Wl,--end-group
+
+BUILD = build/switch-psprobe
+TARGET = $(BUILD)/LunarNXPsSessionProbe.nro
+ELF = $(BUILD)/LunarNXPsSessionProbe.elf
+OBJS = \
+    $(BUILD)/tools/psn_remote_probe_native.o \
+    $(BUILD)/src/platform/switch_posix_stubs.o \
+    $(BUILD)/src/platform/chiaki_curl_compat.o
+
+.PHONY: all clean
+
+all: $(TARGET)
+	@echo "=== PS Session Probe Build Complete ===" && ls -lh $(TARGET)
+
+$(TARGET): $(ELF)
+	$(OBJCOPY) -O binary $< $(BUILD)/LunarNXPsSessionProbe.bin
+	$(NACP) --create LunarNXPsSessionProbe "LunarNX Team" 0.1.0 $(BUILD)/nacp.tmp
+	$(ELF2NRO) $< $@ --nacp=$(BUILD)/nacp.tmp
+
+$(ELF): $(OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(LDFLAGS) $(OBJS) $(LIBDIRS) $(LIBS) -o $@
+
+$(BUILD)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(INCDIRS) -c $< -o $@
+
+$(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCDIRS) -c $< -o $@
+
+clean:
+	rm -rf $(BUILD)

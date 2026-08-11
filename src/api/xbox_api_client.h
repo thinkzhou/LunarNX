@@ -49,6 +49,7 @@ struct CreateSessionRequest {
     int width = 1280;
     int height = 720;
     std::string os_name;     // empty = derive from height
+    std::string locale = "en-US";
 };
 
 class XboxApiClient {
@@ -102,6 +103,9 @@ public:
     // When set, catalog.gamepass.com / titles.json calls are rewritten to this base
     // (used by local mock_xbox server). Empty means real Microsoft hosts.
     void setCatalogBaseUrl(const std::string& base_url) { catalog_base_url_ = base_url; }
+    void setCatalogLanguage(const std::string& locale) {
+        catalog_language_ = locale.empty() ? "en-US" : locale;
+    }
     void setSessionKind(GssvSessionKind kind) { session_kind_ = kind; }
     GssvSessionKind getSessionKind() const { return session_kind_; }
     std::string getSessionId() const { return session_id_; }
@@ -129,6 +133,7 @@ private:
     std::string gssv_token_;
     std::string base_url_;
     std::string catalog_base_url_;
+    std::string catalog_language_ = "en-US";
     GssvSessionKind session_kind_ = GssvSessionKind::Home;
     std::string session_id_;
     std::string last_error_;

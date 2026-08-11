@@ -44,8 +44,15 @@ Key areas:
 - Do not eagerly construct or start streaming controllers before the user enters
   the relevant flow.
 - Do not add Applet Mode blocking pages unless the user explicitly asks.
+- PlayStation code lives in `src/ps/` and links against chiaki-ng (AGPL-3.0).
+  Keep PS protocol code isolated from Xbox modules. The combined binary when
+  the PS path is linked must be distributed under AGPL-3.0 terms.
+- PlayStation PSN Remote requires the bundled curl 8.x WebSocket build, json-c,
+  and miniupnpc. Keep `CURL_PROVIDER=moonlight` for combined Xbox/PlayStation
+  Switch builds; devkitPro/wiliwili curl 7.69 cannot open `wss://` signaling.
 - Never commit tokens, auth files, simulator data dirs, generated logs, or
-  generated NRO/build artifacts.
+  generated NRO/build artifacts. This includes PS credential files
+  (ps_credentials.json, ps_token.json, psn_*.json).
 
 ## Build Commands
 
@@ -58,7 +65,7 @@ docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
     export DEVKITPRO=/opt/devkitpro
     export PATH=/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin:$PATH
     make -f Makefile.switch -j$(nproc) \
-      NETWORK_DIAG=0 CURL_PROVIDER=wiliwili CURL_VERIFY=0 \
+      NETWORK_DIAG=0 CURL_PROVIDER=moonlight CURL_VERIFY=0 \
       CURL_VERBOSE=0 CURL_TIMEOUT_MS=30000
   '
 ```
@@ -100,6 +107,27 @@ they can grow extremely large. Use the app log instead:
 ```sh
 $HOME/work/self/ryujinx-data/sdcard/switch/LunarNX/lunarnx.log
 ```
+
+For an interactive cloud-stream test where the user will click inside the
+emulated LunarNX window, launch the Canary app through macOS LaunchServices.
+Keep `--no-gui`: it skips the Ryubing manager while still showing the emulated
+game window. Direct `nohup` launches from an agent tool shell may exit when that
+shell finishes.
+
+```sh
+open -na /tmp/ryubing-canary-1.3.333/Ryujinx.app --args \
+  --no-gui \
+  --root-data-dir "$HOME/work/self/ryujinx-data" \
+  --disable-file-logging \
+  --disable-docked-mode \
+  --ignore-missing-services \
+  --use-hypervisor false \
+  --enable-internet-connection \
+  "$HOME/work/self/LunarNX/build/switch/LunarNX.nro"
+```
+
+Do not run the Canary executable with `--version` to probe it: this build may
+open the Ryubing manager instead of printing a version and exiting.
 
 Mock streaming is usually tested with:
 

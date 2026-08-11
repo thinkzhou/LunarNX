@@ -18,7 +18,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-RYUBING="${RYUBING:-/tmp/ryubing-canary-1.3.333/Ryujinx.app/Contents/MacOS/Ryujinx}"
+RYUBING="${RYUBING:-/tmp/ryubing-canary-complete-1.3.333/Ryujinx.app/Contents/MacOS/Ryujinx}"
 RYUJINX_DATA="${RYUJINX_DATA:-$HOME/work/self/ryujinx-data}"
 RYUBING_LOG_MODE="${RYUBING_LOG_MODE:-discard}"
 NRO="${1:-$PROJECT_DIR/build/switch/LunarNX.nro}"
@@ -27,6 +27,15 @@ if [ ! -x "$RYUBING" ]; then
     echo "FATAL: Ryubing executable not found or not executable: $RYUBING" >&2
     exit 1
 fi
+
+RYUBING_FRAMEWORKS="$(dirname "$(dirname "$RYUBING")")/Frameworks"
+for library in libavcodec.59.dylib libavutil.57.dylib; do
+    if [ ! -f "$RYUBING_FRAMEWORKS/$library" ]; then
+        echo "FATAL: incomplete Ryubing app; NVDEC dependency missing: $RYUBING_FRAMEWORKS/$library" >&2
+        echo "Re-extract the complete release archive before testing hardware decode." >&2
+        exit 1
+    fi
+done
 
 if [ ! -f "$NRO" ]; then
     echo "FATAL: NRO not found: $NRO" >&2

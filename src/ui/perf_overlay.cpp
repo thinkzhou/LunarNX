@@ -4,7 +4,8 @@
 
 namespace lunar::ui {
 
-PerfOverlay::PerfOverlay(const stream::PerfStats* perf) : Box(brls::Axis::COLUMN), perf_(perf) {
+PerfOverlay::PerfOverlay(const stream::PerfStats* perf, app::StreamPlatform platform)
+    : Box(brls::Axis::COLUMN), perf_(perf), platform_(platform) {
     const auto& p = uiPalette();
     this->setBackgroundColor(p.stream_overlay);
     this->setBorderThickness(1);
@@ -48,15 +49,29 @@ void PerfOverlay::update(float fps, const std::string& resolution,
     uint32_t rtp_video = perf_->rtp_video_packets.load();
     uint32_t rtp_audio = perf_->rtp_audio_packets.load();
     uint32_t video_missing = perf_->rtp_video_missing_packets.load();
+    const bool is_ps = platform_ == app::StreamPlatform::PlayStation;
+    if (is_ps && rtp_video == 0 && video_missing == 0 && perf_->video_packets.load() > 0) {
+        rtp_video = perf_->video_packets.load();
+        video_missing = perf_->packets_lost.load();
+    }
     uint32_t h264_corrupt = perf_->h264_corrupt_frames.load();
     uint32_t srtp_fail = perf_->srtp_rtp_decrypt_failures.load();
     uint32_t decode_errors = perf_->video_decode_errors.load();
-    float dec_ms   = perf_->avg_decode_ms();
+    const uint32_t decode_samples = perf_->decode_samples.load();
+    float dec_ms = is_ps ? perf_->avg_decode_ms()
+        : (decode_samples > 0
+            ? (perf_->decode_total_us.load() / static_cast<float>(decode_samples)) / 1000.0f
+            : 0.0f);
     float render_ms = perf_->avg_render_submit_ms();
     float post_ms = perf_->avg_post_process_ms();
     float upscaling_ms = perf_->avg_upscaling_ms();
     float sharpening_ms = perf_->avg_sharpening_ms();
     float dithering_ms = perf_->avg_dithering_ms();
+    const bool has_ps_transport = is_ps;
+    if (has_ps_transport) {
+        rtp_video = perf_->video_packets.load();
+        video_missing = perf_->ps_frames_lost.load();
+    }
 
     // Drop rate as percentage
     uint32_t recv = perf_->rtp_video_packets.load();
@@ -64,7 +79,8 @@ void PerfOverlay::update(float fps, const std::string& resolution,
     float drop_pct = (recv + lost > 0) ? (100.0f * lost / (recv + lost)) : 0.0f;
 
     std::string text = brls::getStr(
-        "lunarnx/perf/detail_frames", fps, video, audio, input);
+        is_ps ? "lunarnx/perf/detail_frames" : "lunarnx/perf/detail_frames_xbox",
+        fps, video, audio, input);
     text += "\n" + brls::getStr("lunarnx/perf/detail_decode", dec_ms);
     text += "\n" + brls::getStr(
         "lunarnx/perf/detail_render", render_ms, post_ms);

@@ -88,6 +88,7 @@ static void logCallback(ChiakiLogLevel level, const char* msg, void* user) {
     }
     if (noisy != NoisyLogKind::None) return;
 
+#if LUNARNX_DIAGNOSTIC_LOG
     ensureDiagnosticLogDirectory();
     std::lock_guard<std::mutex> file_lock(diagnosticLogMutex());
     FILE* f = std::fopen(get_diagnostic_log_path(), "a");
@@ -96,15 +97,22 @@ static void logCallback(ChiakiLogLevel level, const char* msg, void* user) {
     diagnosticTimestamp(timestamp, sizeof(timestamp));
     writeLogLine(f, timestamp, name, msg);
     std::fclose(f);
+#else
+    (void)level;
+#endif
 }
 
 ChiakiLog makeChiakiDiagnosticLog(const char* name) {
     ChiakiLog log{};
+#if LUNARNX_DIAGNOSTIC_LOG || LUNARNX_DROP_DIAGNOSTIC_LOG
     log.level_mask = CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR;
     log.cb = logCallback;
     // Callers use process-lifetime string literals, so no callback context
     // allocation or cross-thread cleanup is required.
     log.user = const_cast<char*>(name);
+#else
+    (void)name;
+#endif
     return log;
 }
 

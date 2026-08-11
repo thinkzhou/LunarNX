@@ -1,0 +1,218 @@
+diff --git a/lib/include/chiaki/streamconnection.h b/lib/include/chiaki/streamconnection.h
+index 56ec7b61..a8c570e9 100644
+--- a/lib/include/chiaki/streamconnection.h
++++ b/lib/include/chiaki/streamconnection.h
+@@ -13,11 +13,14 @@
+ #include "congestioncontrol.h"
+ 
+ #include <stdbool.h>
++#include <stddef.h>
+ 
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
+ 
++#define CHIAKI_STREAM_CONNECTION_RTT_WINDOW 8
++
+ typedef struct chiaki_session_t ChiakiSession;
+ 
+ typedef enum chiaki_dualsense_effect_intensity_t
+@@ -77,7 +80,10 @@ typedef struct chiaki_stream_connection_t
+ 	bool remote_disconnected;
+ 	char *remote_disconnect_reason;
+ 
++	double rtt;
+ 	double measured_bitrate;
++	double rtt_samples[CHIAKI_STREAM_CONNECTION_RTT_WINDOW];
++	size_t rtt_sample_count;
+ } ChiakiStreamConnection;
+ 
+ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_init(ChiakiStreamConnection *stream_connection, ChiakiSession *session, double packet_loss_max);
+diff --git a/lib/include/chiaki/takion.h b/lib/include/chiaki/takion.h
+index 16bad782..0bbd7345 100644
+--- a/lib/include/chiaki/takion.h
++++ b/lib/include/chiaki/takion.h
+@@ -96,6 +96,7 @@ typedef struct chiaki_takion_event_t
+ 		struct
+ 		{
+ 			ChiakiSeqNum32 seq_num;
++			uint64_t rtt_ms;
+ 		} data_ack;
+ 
+ 		ChiakiTakionAVPacket *av;
+diff --git a/lib/include/chiaki/takionsendbuffer.h b/lib/include/chiaki/takionsendbuffer.h
+index 8ddecc01..0eba92ed 100644
+--- a/lib/include/chiaki/takionsendbuffer.h
++++ b/lib/include/chiaki/takionsendbuffer.h
+@@ -52,7 +52,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_buffer_push(ChiakiTakionSendBuf
+ /**
+  * @param acked_seq_nums optional array of size of at least send_buffer->packets_size where acked seq nums will be stored
+  */
+-CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_buffer_ack(ChiakiTakionSendBuffer *send_buffer, ChiakiSeqNum32 seq_num, ChiakiSeqNum32 *acked_seq_nums, size_t *acked_seq_nums_count);
++CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_buffer_ack(ChiakiTakionSendBuffer *send_buffer, ChiakiSeqNum32 seq_num, ChiakiSeqNum32 *acked_seq_nums, size_t *acked_seq_nums_count, uint64_t *acked_rtt_ms);
+ 
+ #ifdef __cplusplus
+ }
+diff --git a/lib/src/streamconnection.c b/lib/src/streamconnection.c
+index afa1a60a..47a1d618 100644
+--- a/lib/src/streamconnection.c
++++ b/lib/src/streamconnection.c
+@@ -60,6 +60,7 @@ static void stream_connection_takion_data_expect_streaminfo(ChiakiStreamConnecti
+ static ChiakiErrorCode stream_connection_send_streaminfo_ack(ChiakiStreamConnection *stream_connection);
+ static void stream_connection_takion_av(ChiakiStreamConnection *stream_connection, ChiakiTakionAVPacket *packet);
+ static ChiakiErrorCode stream_connection_send_heartbeat(ChiakiStreamConnection *stream_connection);
++static void stream_connection_handle_data_ack(ChiakiStreamConnection *stream_connection, uint64_t rtt_ms);
+ 
+ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_init(ChiakiStreamConnection *stream_connection, ChiakiSession *session, double packet_loss_max)
+ {
+@@ -104,6 +105,10 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_init(ChiakiStreamConnecti
+ 	stream_connection->should_stop = false;
+ 	stream_connection->remote_disconnected = false;
+ 	stream_connection->remote_disconnect_reason = NULL;
++	stream_connection->rtt = 0.0;
++	stream_connection->measured_bitrate = 0.0;
++	stream_connection->rtt_sample_count = 0;
++	memset(stream_connection->rtt_samples, 0, sizeof(stream_connection->rtt_samples));
+ 
+ 	return CHIAKI_ERR_SUCCESS;
+ 
+@@ -394,6 +399,33 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_stream_connection_stop(ChiakiStreamConnecti
+ 	return err == CHIAKI_ERR_SUCCESS ? unlock_err : err;
+ }
+ 
++static void stream_connection_handle_data_ack(ChiakiStreamConnection *stream_connection, uint64_t rtt_ms)
++{
++	if(rtt_ms == 0)
++		return;
++
++	double sample = (double)rtt_ms;
++	if(sample > 2000.0)
++		return;
++
++	if(stream_connection->rtt_sample_count < CHIAKI_STREAM_CONNECTION_RTT_WINDOW)
++		stream_connection->rtt_samples[stream_connection->rtt_sample_count++] = sample;
++	else
++	{
++		memmove(stream_connection->rtt_samples, stream_connection->rtt_samples + 1,
++				(CHIAKI_STREAM_CONNECTION_RTT_WINDOW - 1) * sizeof(double));
++		stream_connection->rtt_samples[CHIAKI_STREAM_CONNECTION_RTT_WINDOW - 1] = sample;
++	}
++
++	double min_sample = stream_connection->rtt_samples[0];
++	for(size_t i = 1; i < stream_connection->rtt_sample_count; ++i)
++	{
++		if(stream_connection->rtt_samples[i] < min_sample)
++			min_sample = stream_connection->rtt_samples[i];
++	}
++	stream_connection->rtt = min_sample;
++}
++
+ static void stream_connection_takion_cb(ChiakiTakionEvent *event, void *user)
+ {
+ 	ChiakiStreamConnection *stream_connection = user;
+@@ -413,6 +445,9 @@ static void stream_connection_takion_cb(ChiakiTakionEvent *event, void *user)
+ 		case CHIAKI_TAKION_EVENT_TYPE_DATA:
+ 			stream_connection_takion_data(stream_connection, event->data.data_type, event->data.buf, event->data.buf_size);
+ 			break;
++		case CHIAKI_TAKION_EVENT_TYPE_DATA_ACK:
++			stream_connection_handle_data_ack(stream_connection, event->data_ack.rtt_ms);
++			break;
+ 		case CHIAKI_TAKION_EVENT_TYPE_AV:
+ 			stream_connection_takion_av(stream_connection, event->av);
+ 			break;
+@@ -701,6 +736,8 @@ static void stream_connection_takion_data_idle(ChiakiStreamConnection *stream_co
+ 			 q.target_bitrate, q.upstream_bitrate,
+ 			 q.upstream_loss,
+ 			 q.disable_upstream_audio, q.rtt, q.loss);
++		if(q.has_rtt && q.rtt > 0.0 && q.rtt <= 2000.0 && stream_connection->rtt <= 0.0)
++			stream_connection->rtt = q.rtt;
+ 		stream_connection->measured_bitrate = chiaki_stream_stats_bitrate(&stream_connection->video_receiver->frame_processor.stream_stats, stream_connection->session->connect_info.video_profile.max_fps) / 1000000.0;
+ 		CHIAKI_LOGV(stream_connection->log, "StreamConnection measured bitrate: %.4f MBit/s", stream_connection->measured_bitrate);
+ 		chiaki_stream_stats_reset(&stream_connection->video_receiver->frame_processor.stream_stats);
+diff --git a/lib/src/takion.c b/lib/src/takion.c
+index 3c3dee2c..a563fe7f 100644
+--- a/lib/src/takion.c
++++ b/lib/src/takion.c
+@@ -1461,14 +1461,16 @@ static void takion_handle_packet_message_data_ack(ChiakiTakion *takion, uint8_t
+ 			cumulative_seq_num, a_rwnd, gap_ack_blocks_count, dup_tsns_count);
+ 
+ 	ChiakiSeqNum32 acked_seq_nums[TAKION_SEND_BUFFER_SIZE];
++	uint64_t acked_rtt_ms[TAKION_SEND_BUFFER_SIZE];
+ 	size_t acked_seq_nums_count = 0;
+-	chiaki_takion_send_buffer_ack(&takion->send_buffer, cumulative_seq_num, acked_seq_nums, &acked_seq_nums_count);
++	chiaki_takion_send_buffer_ack(&takion->send_buffer, cumulative_seq_num, acked_seq_nums, &acked_seq_nums_count, acked_rtt_ms);
+ 
+ 	for(size_t i=0; i<acked_seq_nums_count; i++)
+ 	{
+ 		ChiakiTakionEvent event = { 0 };
+ 		event.type = CHIAKI_TAKION_EVENT_TYPE_DATA_ACK;
+ 		event.data_ack.seq_num = acked_seq_nums[i];
++		event.data_ack.rtt_ms = acked_rtt_ms[i];
+ 		takion->cb(&event, takion->cb_user);
+ 	}
+ }
+diff --git a/lib/src/takionsendbuffer.c b/lib/src/takionsendbuffer.c
+index 5cee13cf..9d0a0e61 100644
+--- a/lib/src/takionsendbuffer.c
++++ b/lib/src/takionsendbuffer.c
+@@ -20,6 +20,7 @@ struct chiaki_takion_send_buffer_packet_t
+ {
+ 	ChiakiSeqNum32 seq_num;
+ 	uint64_t tries;
++	uint64_t first_send_ms;
+ 	uint64_t last_send_ms; // chiaki_time_now_monotonic_ms()
+ 	uint8_t *buf;
+ 	size_t buf_size;
+@@ -105,10 +106,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_buffer_push(ChiakiTakionSendBuf
+ 		}
+ 	}
+ 
++	uint64_t now_ms = chiaki_time_now_monotonic_ms();
+ 	ChiakiTakionSendBufferPacket *packet = &send_buffer->packets[send_buffer->packets_count++];
+ 	packet->seq_num = seq_num;
+ 	packet->tries = 0;
+-	packet->last_send_ms = chiaki_time_now_monotonic_ms();
++	packet->first_send_ms = now_ms;
++	packet->last_send_ms = now_ms;
+ 	packet->buf = buf;
+ 	packet->buf_size = buf_size;
+ 
+@@ -127,7 +130,7 @@ beach:
+ 	return err;
+ }
+ 
+-CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_buffer_ack(ChiakiTakionSendBuffer *send_buffer, ChiakiSeqNum32 seq_num, ChiakiSeqNum32 *acked_seq_nums, size_t *acked_seq_nums_count)
++CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_buffer_ack(ChiakiTakionSendBuffer *send_buffer, ChiakiSeqNum32 seq_num, ChiakiSeqNum32 *acked_seq_nums, size_t *acked_seq_nums_count, uint64_t *acked_rtt_ms)
+ {
+ 	ChiakiErrorCode err = chiaki_mutex_lock(&send_buffer->mutex);
+ 	if(err != CHIAKI_ERR_SUCCESS)
+@@ -135,6 +138,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_buffer_ack(ChiakiTakionSendBuff
+ 
+ 	if(acked_seq_nums_count)
+ 		*acked_seq_nums_count = 0;
++	uint64_t now_ms = chiaki_time_now_monotonic_ms();
+ 
+ 	size_t i;
+ 	size_t shift = 0; // amount to shift back
+@@ -144,7 +148,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_send_buffer_ack(ChiakiTakionSendBuff
+ 		if(send_buffer->packets[i].seq_num == seq_num || chiaki_seq_num_32_lt(send_buffer->packets[i].seq_num, seq_num))
+ 		{
+ 			if(acked_seq_nums && acked_seq_nums_count)
++			{
++				if(acked_rtt_ms)
++					acked_rtt_ms[*acked_seq_nums_count] = now_ms > send_buffer->packets[i].first_send_ms
++						? now_ms - send_buffer->packets[i].first_send_ms : 0;
+ 				acked_seq_nums[(*acked_seq_nums_count)++] = send_buffer->packets[i].seq_num;
++			}
+ 
+ 			free(send_buffer->packets[i].buf);
+ 			if(shift_start == SIZE_MAX)
+@@ -250,7 +259,7 @@ static void takion_send_buffer_resend(ChiakiTakionSendBuffer *send_buffer)
+ 				ChiakiSeqNum32 ack_seq_nums[TAKION_SEND_BUFFER_SIZE];
+ 				size_t ack_seq_nums_count;
+ 				chiaki_mutex_unlock(&send_buffer->mutex);
+-				chiaki_takion_send_buffer_ack(send_buffer, packet->seq_num, ack_seq_nums, &ack_seq_nums_count);
++				chiaki_takion_send_buffer_ack(send_buffer, packet->seq_num, ack_seq_nums, &ack_seq_nums_count, NULL);
+ 				chiaki_mutex_lock(&send_buffer->mutex);
+ 				if(i > 0)
+ 					i-= 1;

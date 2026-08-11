@@ -13,6 +13,11 @@
 
 namespace lunar::ps {
 
+namespace {
+constexpr int kPsButtonPulseFrames = 16;
+constexpr std::chrono::milliseconds kPsInputInterval{8};
+}
+
 void PsStreamController::releasePendingRemoteResult() {
     if (remote_result_.holepunch_session) {
         chiaki_holepunch_session_fini(remote_result_.holepunch_session);
@@ -46,6 +51,9 @@ bool PsStreamController::startStream() {
     if (cancel_requested_.load()) return false;
     setState(app::StreamState::Connecting, "Setting up stream...");
     stream_transport_connected_ = false;
+    ps_button_requested_ = false;
+    ps_button_pulse_frames_remaining_ = 0;
+    ps_button_release_pending_ = false;
     last_input_buttons_ = 0;
     input_transition_logs_ = 0;
     lunar::startDropDiagnosticWriter();
@@ -112,7 +120,22 @@ bool PsStreamController::startStream() {
                     setState(app::StreamState::Connecting, phase);
                 },
                 remote_result_)) {
+            if (cancel_requested_.load() ||
+                remote_result_.error == CHIAKI_ERR_CANCELED) {
+                return false;
+            }
             last_error_ = "Remote connection failed";
+            if (remote_result_.attempts > 1) {
+                last_error_ += " after " + std::to_string(remote_result_.attempts) +
+                               " attempts";
+            }
+            if (!remote_result_.failed_phase.empty()) {
+                last_error_ += " at " + remote_result_.failed_phase;
+            }
+            if (remote_result_.error != CHIAKI_ERR_SUCCESS) {
+                last_error_ += ": ";
+                last_error_ += chiaki_error_string(remote_result_.error);
+            }
             setState(app::StreamState::Error, last_error_);
             return false;
         }
@@ -221,6 +244,7 @@ bool PsStreamController::startStream() {
     // Now initialize the media pipeline (NVDEC, audio) while the session
     // thread already runs regist/request on the CTRL channel in parallel.
     stream::MediaPipelineOptions media_opts;
+    media_opts.hold_non_target_startup_frames = true;
     media_opts.video_backend = video_backend_;
     if (!media_->initialize(width_, height_, &perf_, media_opts)) {
         last_error_ = "Failed to initialize media pipeline";
@@ -234,9 +258,33 @@ bool PsStreamController::startStream() {
     if (mock_session_) mock_session_->requestIDR();
     else session_->requestIDR();
     diagnosticLog("ps-controller", "media ready; requested initial IDR");
+    startInputLoop();
     startVideoMonitor();
 
     return true;
+}
+
+void PsStreamController::startInputLoop() {
+    stopInputLoop();
+    input_loop_stop_ = false;
+    input_thread_ = std::thread([this]() {
+        auto next_tick = std::chrono::steady_clock::now();
+        while (!input_loop_stop_.load()) {
+            update();
+            next_tick += kPsInputInterval;
+            const auto now = std::chrono::steady_clock::now();
+            if (next_tick <= now) next_tick = now + kPsInputInterval;
+            std::this_thread::sleep_until(next_tick);
+        }
+    });
+}
+
+void PsStreamController::stopInputLoop() {
+    input_loop_stop_ = true;
+    if (input_thread_.joinable() &&
+        input_thread_.get_id() != std::this_thread::get_id()) {
+        input_thread_.join();
+    }
 }
 
 void PsStreamController::startVideoMonitor() {
@@ -310,27 +358,50 @@ void PsStreamController::requestCancel() {
 }
 
 void PsStreamController::stopStream(bool set_disconnected) {
-    if (shutdown_.exchange(true)) return;
+    if (shutdown_.exchange(true)) {
+        diagnosticLog("ps-controller", "stop stream skipped: already stopped");
+        return;
+    }
+    diagnosticLog("ps-controller", "stop stream begin state=%d",
+                  static_cast<int>(state_.load()));
+    stopInputLoop();
+    diagnosticLog("ps-controller", "input loop stopped");
     stopVideoMonitor();
+    diagnosticLog("ps-controller", "video monitor stopped");
     std::unique_lock<std::shared_mutex> operation_lock(stream_operation_mutex_);
     cancel_requested_ = true;
-    if (mock_session_) { mock_session_->stop(); mock_session_.reset(); }
-    if (session_) { session_->stop(); session_.reset(); }
+    if (mock_session_) {
+        mock_session_->stop();
+        mock_session_.reset();
+        diagnosticLog("ps-controller", "mock session stopped");
+    }
+    if (session_) {
+        session_->stop();
+        session_.reset();
+        diagnosticLog("ps-controller", "chiaki session stopped and finalized");
+    }
     {
         std::lock_guard<std::mutex> remote_lock(remote_connector_mutex_);
         if (remote_connector_) {
             remote_connector_->cancel();
             remote_connector_.reset();
+            diagnosticLog("ps-controller", "remote connector released");
         }
     }
     releasePendingRemoteResult();
+    diagnosticLog("ps-controller", "pending holepunch released");
     bridge_.reset();
     if (media_) {
         media_->setVideoReadyCallback({});
         media_->shutdown();
+        diagnosticLog("ps-controller", "media pipeline stopped");
     }
     lunar::stopDropDiagnosticWriter();
+    ps_button_requested_ = false;
+    ps_button_pulse_frames_remaining_ = 0;
+    ps_button_release_pending_ = false;
     if (set_disconnected) setState(app::StreamState::Disconnected, "Stopped");
+    diagnosticLog("ps-controller", "stop stream complete");
 }
 
 void PsStreamController::update() {
@@ -339,9 +410,33 @@ void PsStreamController::update() {
         state_.load() != app::StreamState::Streaming) return;
     if (!gamepad_ || !input_mapper_) return;
 
+    const auto now = std::chrono::steady_clock::now();
+    if (session_ && (last_stats_sample_.time_since_epoch().count() == 0 ||
+        now - last_stats_sample_ >= std::chrono::milliseconds(500))) {
+        const auto stats = session_->transportStats();
+        perf_.recordPsTransportStats(stats.rtt_ms, stats.measured_bitrate_mbps,
+                                     stats.packet_loss_fraction,
+                                     stats.frames_lost);
+        last_stats_sample_ = now;
+    }
+
     auto state = gamepad_->read();
-    if (ps_button_requested_.exchange(false)) state.guide = true;
-    if (input_suppressed_.load()) state = {};
+    if (ps_button_requested_.exchange(false)) {
+        ps_button_pulse_frames_remaining_ = kPsButtonPulseFrames;
+        ps_button_release_pending_ = true;
+    }
+    if (ps_button_pulse_frames_remaining_ > 0) {
+        // A one-frame PS press is easy for the console UI to miss. Hold the
+        // virtual button briefly, then send an unambiguous release frame.
+        state = {};
+        state.guide = true;
+        ps_button_pulse_frames_remaining_--;
+    } else if (ps_button_release_pending_) {
+        state = {};
+        ps_button_release_pending_ = false;
+    } else if (input_suppressed_.load()) {
+        state = {};
+    }
 
     ChiakiControllerState cs = input_mapper_->map(state);
     if (mock_session_) mock_session_->setControllerState(cs);

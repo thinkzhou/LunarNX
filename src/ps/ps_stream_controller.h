@@ -43,6 +43,9 @@ public:
     int getStreamWidth() const override { return width_; }
     int getStreamHeight() const override { return height_; }
     stream::VideoBackend getDefaultVideoBackend() const override { return video_backend_; }
+    app::StreamPlatform getStreamPlatform() const override {
+        return app::StreamPlatform::PlayStation;
+    }
     void setInputSuppressed(bool suppressed) override { input_suppressed_ = suppressed; }
     void requestPlatformHomeButton() override { ps_button_requested_ = true; }
     void update() override;
@@ -58,6 +61,8 @@ public:
 
 private:
     void setState(app::StreamState s, const std::string& info = "");
+    void startInputLoop();
+    void stopInputLoop();
     void startVideoMonitor();
     void stopVideoMonitor();
     bool requestRecoveryIDR();
@@ -97,15 +102,20 @@ private:
     mutable std::shared_mutex stream_operation_mutex_;
     std::atomic<bool> input_suppressed_{false};
     std::atomic<bool> ps_button_requested_{false};
+    int ps_button_pulse_frames_remaining_ = 0;
+    bool ps_button_release_pending_ = false;
     uint32_t last_input_buttons_ = 0;
     uint32_t input_transition_logs_ = 0;
     std::atomic<bool> cancel_requested_{false};
     std::atomic<bool> shutdown_{false};
     std::atomic<bool> video_monitor_stop_{false};
     std::atomic<bool> stream_transport_connected_{false};
+    std::atomic<bool> input_loop_stop_{true};
+    std::thread input_thread_;
     std::thread video_monitor_thread_;
     std::mutex video_recovery_mutex_;
     std::chrono::steady_clock::time_point last_recovery_request_{};
+    std::chrono::steady_clock::time_point last_stats_sample_{};
 };
 
 } // namespace lunar::ps

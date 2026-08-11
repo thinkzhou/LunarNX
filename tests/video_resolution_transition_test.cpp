@@ -43,6 +43,20 @@ void test_persistent_non_target_stream_is_presented_after_deadline() {
     assert(transition.activeHeight() == 1440);
 }
 
+void test_non_target_xbox_startup_frame_is_presented_immediately() {
+    VideoResolutionTransition transition(1920, 1080, false);
+
+    assert(transition.observeFrame(1280, 720, 1000) ==
+           ResolutionFrameDecision::Present);
+    assert(transition.activeWidth() == 1280);
+    assert(transition.activeHeight() == 720);
+    assert(!transition.hasStartupCandidate());
+
+    assert(transition.observeFrame(1920, 1080, 1010) ==
+           ResolutionFrameDecision::BeginTransition);
+    assert(transition.isTransitioning());
+}
+
 void test_runtime_change_drains_once_and_tracks_latest_candidate() {
     VideoResolutionTransition transition(1920, 1080);
     assert(transition.observeFrame(2560, 1440, 0) ==
@@ -87,6 +101,7 @@ int main() {
     test_target_first_frame_has_no_startup_delay();
     test_non_target_startup_frame_waits_for_target();
     test_persistent_non_target_stream_is_presented_after_deadline();
+    test_non_target_xbox_startup_frame_is_presented_immediately();
     test_runtime_change_drains_once_and_tracks_latest_candidate();
     test_reset_requires_startup_selection_again();
     std::cout << "Video resolution transition tests passed\n";

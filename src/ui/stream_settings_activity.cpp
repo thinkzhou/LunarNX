@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <vector>
@@ -55,6 +56,51 @@ const LanguageOption kLanguages[] = {
 };
 
 constexpr size_t kLanguageCount = sizeof(kLanguages) / sizeof(kLanguages[0]);
+
+struct GameLanguageOption {
+    const char* value;
+    const char* label;
+};
+
+const GameLanguageOption kGameLanguages[] = {
+    {"ar-SA", "Arabic (Saudi Arabia)"},
+    {"cs-CZ", "Czech"},
+    {"da-DK", "Danish"},
+    {"de-DE", "Deutsch"},
+    {"el-GR", "Greek"},
+    {"en-GB", "English (United Kingdom)"},
+    {"en-US", "English (United States)"},
+    {"es-ES", "Espanol (Espana)"},
+    {"es-MX", "Espanol (Mexico)"},
+    {"fi-FI", "Finnish"},
+    {"fr-FR", "Francais"},
+    {"he-IL", "Hebrew"},
+    {"hu-HU", "Hungarian"},
+    {"it-IT", "Italiano"},
+    {"ja-JP", "Japanese"},
+    {"ko-KR", "Korean"},
+    {"nb-NO", "Norwegian"},
+    {"nl-NL", "Dutch"},
+    {"pl-PL", "Polish"},
+    {"pt-BR", "Portuguese (Brazil)"},
+    {"pt-PT", "Portuguese (Portugal)"},
+    {"ru-RU", "Russian"},
+    {"sk-SK", "Slovak"},
+    {"sv-SE", "Swedish"},
+    {"tr-TR", "Turkish"},
+    {"zh-CN", "Chinese (Simplified)"},
+    {"zh-TW", "Chinese (Traditional)"},
+};
+
+constexpr size_t kGameLanguageCount =
+    sizeof(kGameLanguages) / sizeof(kGameLanguages[0]);
+
+int gameLanguageIndex(const std::string& locale) {
+    for (size_t i = 0; i < kGameLanguageCount; ++i) {
+        if (locale == kGameLanguages[i].value) return static_cast<int>(i);
+    }
+    return 6;
+}
 
 int regionIndexForIp(const std::string& ip) {
     for (size_t i = 0; i < kRegionCount; ++i) {
@@ -114,21 +160,6 @@ void saveRegion(const char* ip) {
     cJSON_Delete(root);
 }
 
-void saveRumbleSettings(bool enabled, int strength_percent) {
-    cJSON* root = readConfig();
-    cJSON_DeleteItemFromObject(root, "vibration");
-    cJSON_AddBoolToObject(root, "vibration", enabled);
-    cJSON_DeleteItemFromObject(root, "rumble_strength_percent");
-    cJSON_AddNumberToObject(root, "rumble_strength_percent", strength_percent);
-    const bool written = writeConfig(root);
-    cJSON_Delete(root);
-    lunar::diagnosticLog("ui-settings",
-                         "rumble saved=%s enabled=%s strength=%d%%",
-                         written ? "true" : "false",
-                         enabled ? "true" : "false",
-                         strength_percent);
-}
-
 constexpr int kRumbleStrengths[] = {25, 50, 75, 100};
 
 int rumbleStrengthIndex(int percent) {
@@ -142,7 +173,117 @@ int rumbleStrengthIndex(int percent) {
     return closest;
 }
 
+const char* videoBackendConfigValue(stream::VideoBackend backend) {
+    switch (backend) {
+        case stream::VideoBackend::HardwareCopyOut: return "hardware_copy_out";
+        case stream::VideoBackend::Software: return "software";
+        case stream::VideoBackend::HardwareZeroCopy:
+        default: return "hardware_zero_copy";
+    }
+}
+
+stream::VideoBackend parseVideoBackend(const char* value) {
+    if (value && std::strcmp(value, "hardware_copy_out") == 0) {
+        return stream::VideoBackend::HardwareCopyOut;
+    }
+    if (value && std::strcmp(value, "software") == 0) {
+        return stream::VideoBackend::Software;
+    }
+    if (value && std::strcmp(value, "hardware") == 0) {
+        return stream::VideoBackend::HardwareCopyOut;
+    }
+    return stream::VideoBackend::HardwareZeroCopy;
+}
+
+const char* postProcessConfigValue(stream::PostProcessMode mode) {
+    switch (mode) {
+        case stream::PostProcessMode::Upscale: return "upscale";
+        case stream::PostProcessMode::UpscaleRcas: return "upscale_rcas";
+        case stream::PostProcessMode::Off:
+        default: return "off";
+    }
+}
+
+stream::PostProcessMode parsePostProcess(const char* value) {
+    if (value && std::strcmp(value, "upscale") == 0) {
+        return stream::PostProcessMode::Upscale;
+    }
+    if (value && std::strcmp(value, "upscale_rcas") == 0) {
+        return stream::PostProcessMode::UpscaleRcas;
+    }
+    return stream::PostProcessMode::Off;
+}
+
 } // namespace
+
+StreamSettingsSnapshot loadStreamSettings() {
+    StreamSettingsSnapshot settings;
+    cJSON* root = readConfig();
+    if (!root) return settings;
+
+    const cJSON* resolution = cJSON_GetObjectItemCaseSensitive(root, "resolution");
+    if (cJSON_IsNumber(resolution) && resolution->valueint >= 1080) {
+        settings.width = 1920;
+        settings.height = 1080;
+    }
+    const cJSON* bitrate = cJSON_GetObjectItemCaseSensitive(root, "bitrate");
+    if (cJSON_IsNumber(bitrate) && bitrate->valuedouble > 0) {
+        settings.bitrate_kbps = static_cast<int>(bitrate->valuedouble * 1000.0);
+    } else if (settings.height >= 1080) {
+        settings.bitrate_kbps = 20000;
+    }
+    const cJSON* game_language =
+        cJSON_GetObjectItemCaseSensitive(root, "preferred_game_language");
+    if (cJSON_IsString(game_language) && game_language->valuestring &&
+        game_language->valuestring[0]) {
+        settings.preferred_game_language = game_language->valuestring;
+    }
+    const cJSON* backend = cJSON_GetObjectItemCaseSensitive(root, "video_backend");
+    settings.video_backend = parseVideoBackend(
+        cJSON_IsString(backend) ? backend->valuestring : nullptr);
+    const cJSON* post = cJSON_GetObjectItemCaseSensitive(root, "post_process_mode");
+    settings.post_process_mode = parsePostProcess(
+        cJSON_IsString(post) ? post->valuestring : nullptr);
+    const cJSON* dithering = cJSON_GetObjectItemCaseSensitive(root, "dithering");
+    if (cJSON_IsBool(dithering)) settings.dithering_enabled = cJSON_IsTrue(dithering);
+    const cJSON* vibration = cJSON_GetObjectItemCaseSensitive(root, "vibration");
+    if (cJSON_IsBool(vibration)) settings.vibration_enabled = cJSON_IsTrue(vibration);
+    const cJSON* strength =
+        cJSON_GetObjectItemCaseSensitive(root, "rumble_strength_percent");
+    if (cJSON_IsNumber(strength)) {
+        settings.rumble_strength_percent = std::clamp(strength->valueint, 0, 100);
+    }
+    cJSON_Delete(root);
+    return settings;
+}
+
+bool saveStreamSettings(const StreamSettingsSnapshot& settings) {
+    cJSON* root = readConfig();
+    if (!root) return false;
+    cJSON_DeleteItemFromObject(root, "resolution");
+    cJSON_AddNumberToObject(root, "resolution", settings.height);
+    cJSON_DeleteItemFromObject(root, "bitrate");
+    cJSON_AddNumberToObject(root, "bitrate", settings.bitrate_kbps / 1000.0);
+    cJSON_DeleteItemFromObject(root, "preferred_game_language");
+    cJSON_AddStringToObject(root, "preferred_game_language",
+                            settings.preferred_game_language.c_str());
+    cJSON_DeleteItemFromObject(root, "video_backend");
+    cJSON_AddStringToObject(root, "video_backend",
+                            videoBackendConfigValue(settings.video_backend));
+    cJSON_DeleteItemFromObject(root, "post_process_mode");
+    cJSON_AddStringToObject(root, "post_process_mode",
+                            postProcessConfigValue(settings.post_process_mode));
+    cJSON_DeleteItemFromObject(root, "dithering");
+    cJSON_AddBoolToObject(root, "dithering", settings.dithering_enabled);
+    cJSON_DeleteItemFromObject(root, "vibration");
+    cJSON_AddBoolToObject(root, "vibration", settings.vibration_enabled);
+    cJSON_DeleteItemFromObject(root, "rumble_strength_percent");
+    cJSON_AddNumberToObject(root, "rumble_strength_percent",
+                            settings.rumble_strength_percent);
+    const bool written = writeConfig(root);
+    cJSON_Delete(root);
+    return written;
+}
 
 StreamSettingsActivity::StreamSettingsActivity(
     std::shared_ptr<app::StreamController> ctrl,
@@ -276,7 +417,7 @@ brls::View* StreamSettingsActivity::createContentView() {
             } else {
                 settings_.video_backend = stream::VideoBackend::HardwareZeroCopy;
             }
-            ctrl_->setDefaultVideoBackend(settings_.video_backend);
+            if (ctrl_) ctrl_->setDefaultVideoBackend(settings_.video_backend);
         });
     video_card->addView(decoder);
     root->addView(video_card);
@@ -330,7 +471,7 @@ brls::View* StreamSettingsActivity::createContentView() {
         settings_.vibration_enabled,
         [this](bool enabled) {
             settings_.vibration_enabled = enabled;
-            ctrl_->setRumbleEnabled(enabled);
+            if (ctrl_) ctrl_->setRumbleEnabled(enabled);
         });
     controller_card->addView(vibration);
 
@@ -341,7 +482,9 @@ brls::View* StreamSettingsActivity::createContentView() {
         [this](int selected) {
             selected = std::max(0, std::min(selected, 3));
             settings_.rumble_strength_percent = kRumbleStrengths[selected];
-            ctrl_->setRumbleStrengthPercent(settings_.rumble_strength_percent);
+            if (ctrl_) {
+                ctrl_->setRumbleStrengthPercent(settings_.rumble_strength_percent);
+            }
         });
     controller_card->addView(rumble_strength);
     root->addView(controller_card);
@@ -351,6 +494,25 @@ brls::View* StreamSettingsActivity::createContentView() {
         brls::getStr("lunarnx/settings/region_section_detail")));
     auto* cloud_card = makeUiCard();
     cloud_card->setPadding(4, 8, 4, 8);
+    std::vector<std::string> game_language_labels;
+    game_language_labels.reserve(kGameLanguageCount);
+    for (const auto& option : kGameLanguages) {
+        game_language_labels.emplace_back(option.label);
+    }
+    auto* game_language = new brls::SelectorCell();
+    game_language->init(brls::getStr("lunarnx/settings/game_language"),
+        game_language_labels,
+        gameLanguageIndex(settings_.preferred_game_language),
+        [this](int selected) {
+            selected = std::max(0, std::min(selected,
+                static_cast<int>(kGameLanguageCount - 1)));
+            settings_.preferred_game_language = kGameLanguages[selected].value;
+            if (ctrl_) {
+                ctrl_->setPreferredGameLanguage(
+                    settings_.preferred_game_language);
+            }
+        });
+    cloud_card->addView(game_language);
     std::vector<std::string> region_labels;
     region_labels.reserve(kRegionCount);
     for (const auto& region : kRegions) {
@@ -358,11 +520,11 @@ brls::View* StreamSettingsActivity::createContentView() {
     }
     auto* region = new brls::SelectorCell();
     region->init(brls::getStr("lunarnx/settings/region"), region_labels,
-        regionIndexForIp(ctrl_->getForceRegionIp()),
+        ctrl_ ? regionIndexForIp(ctrl_->getForceRegionIp()) : 0,
         [this](int selected) {
             selected = std::max(0, std::min(selected,
                 static_cast<int>(kRegionCount - 1)));
-            ctrl_->setForceRegionIp(kRegions[selected].ip);
+            if (ctrl_) ctrl_->setForceRegionIp(kRegions[selected].ip);
             saveRegion(kRegions[selected].ip);
             lunar::diagnosticLog("ui-settings", "xCloud region=%s ip=%s",
                                  kRegions[selected].label_key,
@@ -393,8 +555,7 @@ brls::View* StreamSettingsActivity::createContentView() {
 void StreamSettingsActivity::closeSettings() {
     if (closed_) return;
     closed_ = true;
-    saveRumbleSettings(settings_.vibration_enabled,
-                       settings_.rumble_strength_percent);
+    saveStreamSettings(settings_);
     if (completion_) completion_(settings_);
     brls::Application::popActivity(brls::TransitionAnimation::NONE);
 }

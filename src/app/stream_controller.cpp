@@ -141,6 +141,24 @@ std::string StreamController::getForceRegionIp() const {
     return const_cast<StreamController*>(this)->auth().getForceRegionIp();
 }
 
+void StreamController::setPreferredGameLanguage(const std::string& locale) {
+    std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
+    const std::string normalized = locale.empty() ? "en-US" : locale;
+    if (preferred_game_language_ == normalized) return;
+    preferred_game_language_ = normalized;
+    cloud_titles_.clear();
+    recent_cloud_titles_.clear();
+    new_cloud_titles_.clear();
+    last_cloud_title_error_.clear();
+    lunar::diagnosticLog("stream-controller", "preferred game language=%s",
+                         preferred_game_language_.c_str());
+}
+
+std::string StreamController::getPreferredGameLanguage() const {
+    std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
+    return preferred_game_language_;
+}
+
 bool StreamController::startAuth() {
     setState(StreamState::Authenticating);
     return auth().startDeviceCodeAuth();
@@ -203,6 +221,7 @@ void StreamController::signOut() {
         guide_button_requested_ = false;
     }
     std::remove(lunar::get_token_path());
+    std::remove(lunar::get_xbox_console_cache_path());
     setState(StreamState::Idle, "Signed out");
     signing_out_ = false;
 }
@@ -332,6 +351,26 @@ bool StreamController::fetchConsoles() {
         } else {
             lunar::diagnosticLog("stream-controller", "Fetch consoles succeeded count=%zu",
                                  consoles_.size());
+            // Persist the console list so the UI shows it immediately on next launch.
+            // consoles_ is already locked by the enclosing scope.
+            cJSON* root = cJSON_CreateObject();
+            cJSON* arr = cJSON_CreateArray();
+            for (const auto& c : consoles_) {
+                cJSON* entry = cJSON_CreateObject();
+                cJSON_AddStringToObject(entry, "id", c.id.c_str());
+                cJSON_AddStringToObject(entry, "name", c.name.c_str());
+                cJSON_AddStringToObject(entry, "console_type", c.console_type.c_str());
+                cJSON_AddStringToObject(entry, "power_state", c.power_state.c_str());
+                cJSON_AddItemToObject(arr, "", entry);
+            }
+            cJSON_AddItemToObject(root, "consoles", arr);
+            char* json = cJSON_PrintUnformatted(root);
+            cJSON_Delete(root);
+            if (json) {
+                FILE* f = std::fopen(lunar::get_xbox_console_cache_path(), "wb");
+                if (f) { std::fputs(json, f); std::fclose(f); }
+                free(json);
+            }
         }
         return found;
     }
@@ -348,10 +387,7 @@ std::string StreamController::getConsoleFetchError() const {
 }
 
 bool StreamController::hasCloudAccess() const {
-    // Local mock server exposes a full xCloud catalog for UI testing.
-    if (mock_mode_.load()) {
-        return true;
-    }
+    if (mock_mode_.load()) return true;
     return auth_ && auth_->hasCloudAccess();
 }
 
@@ -453,6 +489,8 @@ bool StreamController::fetchCloudTitles(bool force_refresh) {
         return false;
     }
     } // !mock_mode
+
+    api->setCatalogLanguage(getPreferredGameLanguage());
 
     std::vector<api::CloudTitle> recent;
     std::vector<api::CloudTitle> newly;
@@ -567,6 +605,7 @@ std::vector<api::CloudTitle> parseCloudTitleArray(cJSON* arr) {
 } // namespace
 
 bool StreamController::loadCloudLibraryCache(bool allow_stale) {
+    const std::string expected_locale = getPreferredGameLanguage();
     const char* path = lunar::get_cloud_library_cache_path();
     FILE* f = std::fopen(path, "rb");
     if (!f) return false;
@@ -585,6 +624,15 @@ bool StreamController::loadCloudLibraryCache(bool allow_stale) {
     if (!root) return false;
     cJSON* ts = cJSON_GetObjectItem(root, "cache_time_ms");
     if (!ts || !cJSON_IsNumber(ts)) {
+        cJSON_Delete(root);
+        return false;
+    }
+    cJSON* locale = cJSON_GetObjectItem(root, "locale");
+    const std::string cached_locale =
+        locale && cJSON_IsString(locale) && locale->valuestring
+            ? locale->valuestring
+            : "en-US";
+    if (cached_locale != expected_locale) {
         cJSON_Delete(root);
         return false;
     }
@@ -622,11 +670,13 @@ void StreamController::saveCloudLibraryCache() const {
     std::vector<api::CloudTitle> library;
     std::vector<api::CloudTitle> recent;
     std::vector<api::CloudTitle> newly;
+    std::string locale;
     {
         std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
         library = cloud_titles_;
         recent = recent_cloud_titles_;
         newly = new_cloud_titles_;
+        locale = preferred_game_language_;
     }
     if (library.empty()) return;
 
@@ -635,6 +685,7 @@ void StreamController::saveCloudLibraryCache() const {
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
     cJSON_AddNumberToObject(root, "cache_time_ms", now_ms);
+    cJSON_AddStringToObject(root, "locale", locale.c_str());
     cJSON* lib_arr = cJSON_CreateArray();
     cJSON* recent_arr = cJSON_CreateArray();
     cJSON* new_arr = cJSON_CreateArray();
@@ -658,6 +709,84 @@ void StreamController::saveCloudLibraryCache() const {
     free(json);
 }
 
+
+bool StreamController::loadConsoleCache() {
+    const char* path = lunar::get_xbox_console_cache_path();
+    FILE* f = std::fopen(path, "rb");
+    if (!f) return false;
+    if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return false; }
+    long len = std::ftell(f);
+    if (len <= 0) { std::fclose(f); return false; }
+    std::rewind(f);
+    std::string content(static_cast<size_t>(len), '\0');
+    if (std::fread(content.data(), 1, static_cast<size_t>(len), f) != static_cast<size_t>(len)) {
+        std::fclose(f);
+        return false;
+    }
+    std::fclose(f);
+
+    cJSON* root = cJSON_Parse(content.c_str());
+    if (!root) return false;
+    cJSON* arr = cJSON_GetObjectItem(root, "consoles");
+    if (!arr || !cJSON_IsArray(arr)) { cJSON_Delete(root); return false; }
+
+    std::vector<api::XboxConsole> cached;
+    cJSON* item = nullptr;
+    cJSON_ArrayForEach(item, arr) {
+        api::XboxConsole c;
+        cJSON* jid = cJSON_GetObjectItem(item, "id");
+        cJSON* jname = cJSON_GetObjectItem(item, "name");
+        cJSON* jtype = cJSON_GetObjectItem(item, "console_type");
+        cJSON* jpower = cJSON_GetObjectItem(item, "power_state");
+        if (jid && cJSON_IsString(jid)) c.id = jid->valuestring;
+        if (jname && cJSON_IsString(jname)) c.name = jname->valuestring;
+        if (jtype && cJSON_IsString(jtype)) c.console_type = jtype->valuestring;
+        if (jpower && cJSON_IsString(jpower)) c.power_state = jpower->valuestring;
+        cached.push_back(std::move(c));
+    }
+    cJSON_Delete(root);
+
+    if (cached.empty()) return false;
+    {
+        std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
+        consoles_ = std::move(cached);
+    }
+    lunar::diagnosticLog("stream-controller", "Loaded console cache count=%zu", consoles_.size());
+    return true;
+}
+
+void StreamController::saveConsoleCache() const {
+    std::vector<api::XboxConsole> copy;
+    {
+        std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
+        copy = consoles_;
+    }
+    if (copy.empty()) return;
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON* arr = cJSON_CreateArray();
+    for (const auto& c : copy) {
+        cJSON* entry = cJSON_CreateObject();
+        cJSON_AddStringToObject(entry, "id", c.id.c_str());
+        cJSON_AddStringToObject(entry, "name", c.name.c_str());
+        cJSON_AddStringToObject(entry, "console_type", c.console_type.c_str());
+        cJSON_AddStringToObject(entry, "power_state", c.power_state.c_str());
+        cJSON_AddItemToObject(arr, "", entry);
+    }
+    cJSON_AddItemToObject(root, "consoles", arr);
+
+    char* json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) return;
+    FILE* f = std::fopen(lunar::get_xbox_console_cache_path(), "wb");
+    if (f) {
+        std::fputs(json, f);
+        std::fclose(f);
+        lunar::diagnosticLog("stream-controller", "Saved console cache count=%zu",
+                             copy.size());
+    }
+    free(json);
+}
 
 std::string StreamController::getLastStreamError() const {
     std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
@@ -756,6 +885,7 @@ bool StreamController::startCloudStream(const std::string& title_id,
                                         int bitrate_kbps) {
     StreamProfile profile = makeCloudStreamProfile(
         title_id, width, height, bitrate_kbps);
+    profile.locale = getPreferredGameLanguage();
     return startStreamWithProfile(profile, options);
 }
 

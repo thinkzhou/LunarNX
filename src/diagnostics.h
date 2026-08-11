@@ -8,17 +8,18 @@
 #include <condition_variable>
 #include <cstring>
 #include <cstdio>
+#include <ctime>
 #include <mutex>
 #include <thread>
 #include <vector>
 #include <sys/stat.h>
 
 #ifndef LUNARNX_DIAGNOSTIC_LOG
-#define LUNARNX_DIAGNOSTIC_LOG 1
+#define LUNARNX_DIAGNOSTIC_LOG 0
 #endif
 
 #ifndef LUNARNX_DROP_DIAGNOSTIC_LOG
-#define LUNARNX_DROP_DIAGNOSTIC_LOG 1
+#define LUNARNX_DROP_DIAGNOSTIC_LOG 0
 #endif
 
 namespace lunar {
@@ -48,6 +49,33 @@ inline uint64_t diagnosticMonotonicMs() {
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start).count());
+}
+
+// UTC wall-clock timestamps make appended logs unambiguous across process
+// restarts and avoid depending on the console/emulator timezone configuration.
+inline void diagnosticTimestamp(char* buffer, size_t buffer_size) noexcept {
+    if (!buffer || buffer_size == 0) return;
+
+    const auto now = std::chrono::system_clock::now();
+    const auto since_epoch = now.time_since_epoch();
+    const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+        since_epoch).count() % 1000;
+    const std::time_t time = std::chrono::system_clock::to_time_t(now);
+    std::tm utc_time{};
+#ifdef _WIN32
+    const bool converted = gmtime_s(&utc_time, &time) == 0;
+#else
+    const bool converted = gmtime_r(&time, &utc_time) != nullptr;
+#endif
+    if (!converted) {
+        std::snprintf(buffer, buffer_size, "0000-00-00T00:00:00.000Z");
+        return;
+    }
+    std::snprintf(buffer, buffer_size,
+                  "%04d-%02d-%02dT%02d:%02d:%02d.%03lldZ",
+                  utc_time.tm_year + 1900, utc_time.tm_mon + 1,
+                  utc_time.tm_mday, utc_time.tm_hour, utc_time.tm_min,
+                  utc_time.tm_sec, static_cast<long long>(milliseconds));
 }
 
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
@@ -283,7 +311,9 @@ inline void diagnosticLog(const char* component, const char* format, ...) noexce
         FILE* log = std::fopen(get_diagnostic_log_path(), "a");
         if (!log) return;
 
-        std::fprintf(log, "[%s] ", component ? component : "diag");
+        char timestamp[80]{};
+        diagnosticTimestamp(timestamp, sizeof(timestamp));
+        std::fprintf(log, "[%s] [%s] ", timestamp, component ? component : "diag");
 
         va_list args;
         va_start(args, format);

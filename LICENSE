@@ -1,4 +1,6 @@
-MIT License
+LunarNX is dual-licensed:
+
+Original LunarNX code (src/ excluding src/ps/) is available under the MIT License:
 
 Copyright (c) 2026 LunarNX contributors
 
@@ -19,3 +21,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+PlayStation support (src/ps/) links against chiaki-ng which is licensed under
+the GNU Affero General Public License v3.0 (AGPL-3.0). The combined work, when
+the PlayStation path is enabled and linked, must be distributed under the terms
+of the AGPL-3.0. The full AGPL-3.0 license text is in LICENSES/AGPL-3.0.txt.
+
+When distributing a binary that includes chiaki-ng, you must also make the
+complete corresponding source code available under AGPL-3.0, including all
+Switch/mbedTLS modifications to chiaki-ng (see tools/chiaki_switch/).

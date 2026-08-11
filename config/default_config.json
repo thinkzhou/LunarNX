@@ -20,5 +20,10 @@
     "power_on": false,
     "gamepad_mapping": null,
     "video_backend": "hardware_zero_copy",
+    "ps_network_profile": "native_switch",
+    "ps_port_guessing_sockets": 0,
+    "ps_relay_host": "",
+    "ps_relay_port": 47998,
+    "ps_relay_secret": "",
     "base_url": ""
 }

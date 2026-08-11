@@ -9,6 +9,7 @@
 #include <chiaki/remote/holepunch.h>
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <string>
 
 namespace lunar::ps {
@@ -19,6 +20,13 @@ enum class PsSessionState {
     Streaming,
     Stopping,
     Error,
+};
+
+struct PsTransportStats {
+    uint32_t rtt_ms = 0;
+    float measured_bitrate_mbps = 0.0f;
+    float packet_loss_fraction = 0.0f;
+    uint32_t frames_lost = 0;
 };
 
 struct PsSessionCallbacks {
@@ -51,11 +59,15 @@ public:
 
     void stop();
     PsSessionState state() const { return state_.load(); }
-    std::string lastError() const { return last_error_; }
+    std::string lastError() const {
+        std::lock_guard<std::mutex> lock(last_error_mutex_);
+        return last_error_;
+    }
 
     void setLoginPin(const std::string& pin);
     void setControllerState(ChiakiControllerState& state);
     void requestIDR();
+    PsTransportStats transportStats() const;
 
 private:
     void configureConnectInfo();
@@ -63,6 +75,11 @@ private:
     bool startupCancelled(const char* stage);
     void releaseRemoteHolepunch();
     static void sessionEventCb(ChiakiEvent* event, void* user);
+    static bool videoSampleCb(uint8_t* buf, size_t buf_size, int32_t frames_lost,
+                              bool frame_recovered, void* user);
+    void maybeRefreshTransportStats();
+    void refreshTransportStats();
+    void setLastError(std::string error);
     void handleEvent(ChiakiEvent* event);
 
     std::string host_addr_;
@@ -83,7 +100,13 @@ private:
     bool started_ = false;
 
     std::atomic<PsSessionState> state_{PsSessionState::Idle};
+    std::atomic<uint32_t> transport_rtt_ms_{0};
+    std::atomic<float> transport_bitrate_mbps_{0.0f};
+    std::atomic<float> transport_packet_loss_{0.0f};
+    std::atomic<uint32_t> transport_frames_lost_{0};
+    std::atomic<uint64_t> transport_refresh_ms_{0};
     std::string last_error_;
+    mutable std::mutex last_error_mutex_;
     PsSessionCallbacks callbacks_;
 };
 

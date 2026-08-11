@@ -1,0 +1,45 @@
+diff --git a/lib/src/remote/holepunch.c b/lib/src/remote/holepunch.c
+index 9c71f4eb..8d230b18 100644
+--- a/lib/src/remote/holepunch.c
++++ b/lib/src/remote/holepunch.c
+@@ -5714,6 +5714,40 @@ static bool get_client_addr_remote_upnp(ChiakiLog *log, UPNPGatewayInfo *gw_info
+ */
+ static ChiakiErrorCode get_stun_servers(Session *session)
+ {
++#ifdef __SWITCH__
++    /*
++     * raw.githubusercontent.com is unreliable from the target network. Keep
++     * the real-hardware-tested IPv4 servers in measured-latency order instead
++     * of spending ten seconds fetching an arbitrary remote ordering.
++     */
++    static const StunServer switch_stun_servers[] = {
++        {"stun.sonetel.com", 3478},
++        {"stun.siptrunk.com", 3478},
++        {"stun.romancecompass.com", 3478},
++        {"stun.axialys.net", 3478},
++        {"stun.flashdance.cx", 3478},
++        {"stun.sip.us", 3478},
++        {"stun.galeriemagnet.at", 3478},
++        {"stun.moonlight-stream.org", 3478},
++    };
++
++    session->num_stun_servers = 0;
++    session->num_stun_servers_ipv6 = 0;
++    for(size_t i = 0; i < sizeof(switch_stun_servers) / sizeof(switch_stun_servers[0]); i++)
++    {
++        const char *host = switch_stun_servers[i].host;
++        session->stun_server_list[i].host = malloc(strlen(host) + 1);
++        if(!session->stun_server_list[i].host)
++            return CHIAKI_ERR_MEMORY;
++        strcpy(session->stun_server_list[i].host, host);
++        session->stun_server_list[i].port = switch_stun_servers[i].port;
++        session->num_stun_servers++;
++    }
++    CHIAKI_LOGI(session->log, "Using %zu ordered LunarNX Switch STUN servers",
++        session->num_stun_servers);
++    return CHIAKI_ERR_SUCCESS;
++#endif
++
+     ChiakiErrorCode err = CHIAKI_ERR_SUCCESS;
+     const char STUN_HOSTS_URL[] = "https://raw.githubusercontent.com/pradt2/always-online-stun/master/valid_hosts.txt";
+     CURL *curl = curl_easy_init();

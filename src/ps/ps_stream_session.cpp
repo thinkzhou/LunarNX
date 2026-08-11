@@ -4,9 +4,17 @@
 #include "chiaki_log_adapter.h"
 #include "../diagnostics.h"
 #include <cstring>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <utility>
 
 namespace lunar::ps {
+
+void PsStreamSession::setLastError(std::string error) {
+    std::lock_guard<std::mutex> lock(last_error_mutex_);
+    last_error_ = std::move(error);
+}
 
 void PsStreamSession::releaseRemoteHolepunch() {
     if (!remote_result_.holepunch_session) return;
@@ -17,8 +25,8 @@ void PsStreamSession::releaseRemoteHolepunch() {
 
 bool PsStreamSession::startupCancelled(const char* stage) {
     if (!callbacks_.external_cancel || !callbacks_.external_cancel()) return false;
-    last_error_ = std::string("Session start cancelled at ") + stage;
-    diagnosticLog("ps-session", "%s", last_error_.c_str());
+    setLastError(std::string("Session start cancelled at ") + stage);
+    diagnosticLog("ps-session", "%s", lastError().c_str());
     state_.store(PsSessionState::Idle);
     return true;
 }
@@ -65,7 +73,7 @@ void PsStreamSession::configureConnectInfo() {
         connect_info_.holepunch_session = remote_result_.holepunch_session;
         if (remote_result_.psn_account_id.size() !=
             sizeof(connect_info_.psn_account_id)) {
-            last_error_ = "PSN account ID has invalid size";
+            setLastError("PSN account ID has invalid size");
             return;
         }
         std::memcpy(connect_info_.psn_account_id,
@@ -90,12 +98,13 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
     diagnosticLog("ps-session", "doStart begin remote_mode=%d valid=%d acct_size=%zu BUILD_V3_SESSION_INIT_LOG",
                   remote_mode_, remote_result_.valid,
                   remote_result_.psn_account_id.size());
-    last_error_.clear();
+    setLastError({});
     configureConnectInfo();
-    if (!last_error_.empty()) {
+    const std::string configure_error = lastError();
+    if (!configure_error.empty()) {
         state_.store(PsSessionState::Error);
         releaseRemoteHolepunch();
-        if (callbacks_.on_error) callbacks_.on_error(last_error_);
+        if (callbacks_.on_error) callbacks_.on_error(configure_error);
         return false;
     }
 
@@ -115,15 +124,15 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
         remote_result_.valid = false;
     }
     if (err != CHIAKI_ERR_SUCCESS) {
-        last_error_ = "Session init failed: " + std::string(chiaki_error_string(err));
+        setLastError("Session init failed: " + std::string(chiaki_error_string(err)));
         state_.store(PsSessionState::Error);
-        if (callbacks_.on_error) callbacks_.on_error(last_error_);
+        if (callbacks_.on_error) callbacks_.on_error(lastError());
         return false;
     }
     initialized_ = true;
 
     chiaki_session_set_event_cb(&session_, sessionEventCb, this);
-    chiaki_session_set_video_sample_cb(&session_, PsMediaBridge::videoSampleCb, &bridge_);
+    chiaki_session_set_video_sample_cb(&session_, videoSampleCb, this);
 
     ChiakiAudioSink sink = bridge_.audioSink();
     chiaki_session_set_audio_sink(&session_, &sink);
@@ -138,9 +147,9 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
     err = chiaki_session_start(&session_);
     diagnosticLog("ps-session", "chiaki_session_start rc=%d", err);
     if (err != CHIAKI_ERR_SUCCESS) {
-        last_error_ = "Session start failed: " + std::string(chiaki_error_string(err));
+        setLastError("Session start failed: " + std::string(chiaki_error_string(err)));
         state_.store(PsSessionState::Error);
-        if (callbacks_.on_error) callbacks_.on_error(last_error_);
+        if (callbacks_.on_error) callbacks_.on_error(lastError());
         return false;
     }
     started_ = true;
@@ -204,6 +213,58 @@ void PsStreamSession::requestIDR() {
     chiaki_session_request_idr(&session_);
 }
 
+PsTransportStats PsStreamSession::transportStats() const {
+    PsTransportStats stats;
+    stats.rtt_ms = transport_rtt_ms_.load(std::memory_order_relaxed);
+    stats.measured_bitrate_mbps = transport_bitrate_mbps_.load(std::memory_order_relaxed);
+    stats.packet_loss_fraction = transport_packet_loss_.load(std::memory_order_relaxed);
+    stats.frames_lost = transport_frames_lost_.load(std::memory_order_relaxed);
+    return stats;
+}
+
+void PsStreamSession::refreshTransportStats() {
+    if (!initialized_) return;
+    const double dynamic_rtt = session_.stream_connection.rtt;
+    const uint32_t rtt_ms = dynamic_rtt > 0.0
+        ? static_cast<uint32_t>(std::lround(dynamic_rtt))
+        : static_cast<uint32_t>(session_.rtt_us / 1000ULL);
+    transport_rtt_ms_.store(rtt_ms, std::memory_order_relaxed);
+    transport_bitrate_mbps_.store(static_cast<float>(
+        session_.stream_connection.measured_bitrate), std::memory_order_relaxed);
+    auto* congestion = &session_.stream_connection.congestion_control;
+    if (chiaki_bool_pred_cond_lock(&congestion->stop_cond) == CHIAKI_ERR_SUCCESS) {
+        transport_packet_loss_.store(static_cast<float>(congestion->packet_loss),
+                                     std::memory_order_relaxed);
+        chiaki_bool_pred_cond_unlock(&congestion->stop_cond);
+    }
+    if (session_.stream_connection.video_receiver) {
+        transport_frames_lost_.store(static_cast<uint32_t>(std::max(
+            chiaki_video_receiver_get_frames_lost_total(
+                session_.stream_connection.video_receiver), 0)), std::memory_order_relaxed);
+    }
+}
+
+void PsStreamSession::maybeRefreshTransportStats() {
+    const uint64_t now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    uint64_t last_ms = transport_refresh_ms_.load(std::memory_order_relaxed);
+    if (now_ms - last_ms >= 500 &&
+        transport_refresh_ms_.compare_exchange_strong(
+            last_ms, now_ms, std::memory_order_relaxed)) {
+        refreshTransportStats();
+    }
+}
+
+bool PsStreamSession::videoSampleCb(uint8_t* buf, size_t buf_size,
+                                    int32_t frames_lost, bool frame_recovered,
+                                    void* user) {
+    auto* self = static_cast<PsStreamSession*>(user);
+    if (!self) return false;
+    self->maybeRefreshTransportStats();
+    return self->bridge_.onVideoSample(buf, buf_size, frames_lost, frame_recovered);
+}
+
 void PsStreamSession::sessionEventCb(ChiakiEvent* event, void* user) {
     auto* self = static_cast<PsStreamSession*>(user);
     if (!self || !event) return;
@@ -256,9 +317,9 @@ void PsStreamSession::handleEvent(ChiakiEvent* event) {
             if (event->quit.reason == CHIAKI_QUIT_REASON_STOPPED) {
                 if (callbacks_.on_disconnected) callbacks_.on_disconnected(reason_str);
             } else if (chiaki_quit_reason_is_error(event->quit.reason)) {
-                last_error_ = "Session error: " + std::string(reason_str);
+                setLastError("Session error: " + std::string(reason_str));
                 state_.store(PsSessionState::Error);
-                if (callbacks_.on_error) callbacks_.on_error(last_error_);
+                if (callbacks_.on_error) callbacks_.on_error(lastError());
             } else {
                 if (callbacks_.on_disconnected) callbacks_.on_disconnected(reason_str);
             }

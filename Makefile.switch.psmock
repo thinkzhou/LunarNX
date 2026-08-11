@@ -1,0 +1,6 @@
+BUILD = build/switch-psmock
+PS_MOCK_REPLAY = 1
+APP_DIAG = 1
+EXTRA_DFLAGS = -DLUNARNX_PS_MOCK_AUTORUN=1
+
+include Makefile.switch

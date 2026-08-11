@@ -16,7 +16,7 @@
 | 文件 | 路径 |
 |------|------|
 | Ryubing Canary 安装包 | `~/Downloads/ryujinx-canary-1.3.333-macos_universal.app.tar.gz` |
-| Ryubing Canary 可执行文件 | `/tmp/ryubing-canary-1.3.333/Ryujinx.app/Contents/MacOS/Ryujinx` |
+| Ryubing Canary 可执行文件 | `/tmp/ryubing-canary-complete-1.3.333/Ryujinx.app/Contents/MacOS/Ryujinx` |
 | 旧 Headless 二进制 | `~/work/self/ryujinx/publish_headless/Ryujinx.Headless.SDL2` (38MB, arm64) |
 | 旧 Headless 源码 | `~/work/self/ryujinx/` (来自 git.axenov.dev/Museum/ryujinx) |
 | Ryujinx 数据目录 | `~/work/self/ryujinx-data/` |
@@ -42,6 +42,38 @@ export http_proxy=http://127.0.0.1:7897
 ```
 
 ## 测试命令
+
+### 需要用户手动操作的云游戏测试
+
+由 Agent 启动模拟器、用户在 LunarNX 窗口中手动点击云游戏时，使用 macOS
+LaunchServices 启动 app bundle：
+
+```bash
+open -na /tmp/ryubing-canary-complete-1.3.333/Ryujinx.app --args \
+  --no-gui \
+  --root-data-dir "$HOME/work/self/ryujinx-data" \
+  --disable-file-logging \
+  --disable-docked-mode \
+  --ignore-missing-services \
+  --use-hypervisor false \
+  --enable-internet-connection \
+  "$HOME/work/self/LunarNX/build/switch/LunarNX.nro"
+```
+
+这里的 `--no-gui` 只跳过 Ryubing 游戏管理器，仍会显示可交互的 LunarNX
+模拟画面窗口。通过 Agent 工具 shell 直接 `nohup` 主二进制时，进程可能随 shell
+结束而退出；`open -na` 会把 app 交给 macOS LaunchServices 托管。
+
+不要用 `Ryujinx --version` 探测 Canary 版本：1.3.333 的这个构建可能打开游戏
+管理器，而不是输出版本后退出。
+
+完整 app bundle 的 `Contents/Frameworks` 必须包含
+`libavcodec.59.dylib` 和 `libavutil.57.dylib`。缺少它们时 UI 和软件解码仍可能
+启动，但第一次 NVDEC 提交会因 `DllNotFoundException` 终止模拟器。
+`scripts/run_ryubing_nro.sh` 会在启动前检查这两个文件；若缺失，应从完整 release
+archive 重新解压，而不是把该崩溃归因于 LunarNX 媒体管线。
+
+### 其他测试命令
 
 ```bash
 # 推荐：Ryubing Canary headless 模式运行完整 LunarNX
@@ -80,6 +112,36 @@ RYUJINX_ENABLE_INTERNET=1 ./scripts/run_nro_test.sh build/switch-netprobe/LunarN
   --enable-internet-connection \
   build/switch-smoke/LunarNXSmoke.nro
 ```
+
+### PSN Remote Play UDP relay
+
+Ryubing 的 guest NAT 可能无法稳定接收 PS5 的 UDP hole-punch 回包。此时在
+Mac 上启动仓库内的 relay helper，并在 LunarNX 配置文件中选择 `ryubing`：
+
+```bash
+python3 tools/ps_udp_relay/ps_udp_relay.py \
+  --listen-address <Mac-LAN-IP> \
+  --control-port 47998 \
+  --secret '<same-secret-as-ps_relay_secret>'
+```
+
+配置 `sdcard/switch/LunarNX/config.json`（不要填写 PSN token）：
+
+```json
+{
+  "ps_network_profile": "ryubing",
+  "ps_relay_host": "<Mac-LAN-IP>",
+  "ps_relay_port": 47998,
+  "ps_relay_secret": "<shared-secret>"
+}
+```
+
+relay 的控制面和 CTRL/DATA tunnel 都使用 UDP。控制请求带 HMAC、request ID、
+超时重试和响应去重，避免模拟器的 blocking TCP socket 缺陷，也避免 `open` 响应
+丢失时重复创建公网映射。relay 只用于 Ryubing；实体 Switch 使用默认的
+`native_switch` 路径，不需要也不应配置 relay。LunarNX 日志中应先出现
+`Connected to Ryubing UDP relay control`，随后是 `Punching control channel through
+relay...`。helper 不接收或记录 PSN token。
 
 ## 关键 CLI 参数
 

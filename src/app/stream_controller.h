@@ -50,6 +50,7 @@ public:
     std::string getConsoleFetchError() const;
     bool hasCloudAccess() const;
     bool restoreCloudTitlesFromCache();
+    bool loadConsoleCache();
     bool fetchCloudTitles(bool force_refresh = false);
     std::vector<api::CloudTitle> getCloudTitles() const;          // full library
     std::vector<api::CloudTitle> getRecentCloudTitles() const;    // recent subset
@@ -85,8 +86,11 @@ public:
     void setBaseUrl(const std::string& url) { base_url_ = url; }
     void setForceRegionIp(const std::string& ip);
     std::string getForceRegionIp() const;
+    void setPreferredGameLanguage(const std::string& locale);
+    std::string getPreferredGameLanguage() const;
     void setDefaultVideoBackend(stream::VideoBackend backend);
     stream::VideoBackend getDefaultVideoBackend() const override;
+    StreamPlatform getStreamPlatform() const override { return StreamPlatform::Xbox; }
     void setRumbleEnabled(bool enabled);
     bool getRumbleEnabled() const { return rumble_enabled_.load(); }
     void setRumbleStrengthPercent(int percent);
@@ -136,6 +140,7 @@ private:
     std::vector<api::CloudTitle> new_cloud_titles_;
     bool loadCloudLibraryCache(bool allow_stale = false);
     void saveCloudLibraryCache() const;
+    void saveConsoleCache() const;
     std::string last_console_error_;
     std::string last_cloud_title_error_;
     std::string last_stream_error_;
@@ -158,6 +163,7 @@ private:
     int stream_width_ = 1280;
     int stream_height_ = 720;
     std::string base_url_;
+    std::string preferred_game_language_ = "en-US";
 };
 
 } // namespace lunar::app

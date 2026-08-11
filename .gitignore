@@ -1,5 +1,6 @@
 # Build output
 build/
+tools/ps_media_replay/*.mp4
 
 # IDE
 .idea/
@@ -30,6 +31,10 @@ auth.json
 credentials.json
 *.token.json
 xcloud_library_cache.json
+ps_credentials.json
+ps_token.json
+ps_registration.json
+psn_*.json
 
 # Logs
 debug.log

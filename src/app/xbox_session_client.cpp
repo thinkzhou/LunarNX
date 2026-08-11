@@ -53,6 +53,7 @@ ProvisionedSession XboxSessionClient::createAndWait(
     request.width = profile.width;
     request.height = profile.height;
     request.os_name = profile.os_name;
+    request.locale = profile.locale;
     result.session_id = api_->createSession(request, cancel);
 
     if (cancel && cancel()) {

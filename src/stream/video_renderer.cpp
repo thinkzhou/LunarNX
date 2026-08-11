@@ -1343,7 +1343,8 @@ bool VideoRenderer::initialize(const char*,int w,int h){
     fprintf(stderr,"[render] image slot alloc fail\n");return false;
   }
   s->frame_w=w;s->frame_h=h;
-  s->resolution_transition.configure(w,h);
+  s->resolution_transition.configure(
+      w,h,hold_non_target_startup_frames_);
   s->target_w = brls::Application::windowWidth > 0
       ? static_cast<int>(brls::Application::windowWidth)
       : static_cast<int>(brls::Application::ORIGINAL_WINDOW_WIDTH);

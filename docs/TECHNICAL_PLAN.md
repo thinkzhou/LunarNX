@@ -1,5 +1,11 @@
 # LunarNX — 技术方案文档 (v0.1 实现后更新)
 
+> Xbox + PlayStation 双平台扩展的当前设计见
+> [xbox_playstation_dual_streaming_design.md](xbox_playstation_dual_streaming_design.md)。
+>
+> PlayStation 页面、LAN Pair、PSN Remote、身份关联和连接状态机的详细契约见
+> [PlayStation Page and Launch Flow Design](superpowers/specs/2026-07-31-playstation-page-and-launch-flow-design.md)。
+
 > Nintendo Switch (Atmosphère) 上运行的 Xbox Remote Play 串流客户端
 >
 > 本文档记录 LunarNX 的技术架构和实现细节，随代码演进持续更新。
@@ -35,7 +41,17 @@
 | 稳定性 | ✅ 完成 | Keepalive 轮询，指数退避自动重连 (max 5 次)，Token 自动刷新 |
 | 构建系统 | ✅ 完成 | Makefile.switch + CMake (desktop) 双目标 |
 
-### 待实现 (v0.2+)
+### PlayStation 当前边界 (v0.2 开发中)
+
+- ✅ PSN OAuth 登录、refresh token 恢复和 PS5 device list 已在 Ryubing 验证；
+- ✅ HTTP 401 会强制刷新 token 并重试一次；
+- 🚧 LAN Pair 凭据改为 server MAC 主键，正在修复持久化和主机注入；
+- 🚧 PSN Remote 正在对齐 chiaki-ng：control hole 后由 ChiakiSession 完成动态 registration 和 data hole；
+- 📝 真机 `native_switch` 的可靠性策略仍待对齐 Akira：当前不会继承 Ryubing 专用的 4 次
+  holepunch 重试、退避与 relay 兼容逻辑；模拟器链路跑通后需单独审计原生重试条件、
+  port guessing 默认值和 PS5 唤醒时序，且真机始终不得经过 Mac relay；
+- 🚧 PlayStation 页面将重做为 Account / My Consoles / Local Network，并使用 Pair、Connect、Wake & Connect 的真实状态；
+- ⛔ 当前 PSN 目录成功不代表 NAT 打洞、媒体、输入或真机兼容已经完成。
 
 - [ ] xCloud 支持
 - [ ] 键盘输入 (Swkbd / USB HID)

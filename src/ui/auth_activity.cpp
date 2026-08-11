@@ -5,7 +5,9 @@
 #include "../diagnostics.h"
 #include <cJSON.h>
 #include "../ui/main_activity.h"
+#include "stream_settings_activity.h"
 #include "qr_code.h"
+#include "qr_code_view.h"
 #include "ui_style.h"
 #include <algorithm>
 #include <cstdio>
@@ -17,6 +19,20 @@
 
 namespace lunar::ui {
 
+namespace {
+
+void openXboxHome(const std::shared_ptr<app::StreamController>& ctrl) {
+    auto open = [ctrl]() {
+        brls::Application::pushActivity(
+            new MainActivity(ctrl), brls::TransitionAnimation::NONE);
+    };
+    if (!brls::Application::popActivity(brls::TransitionAnimation::NONE, open)) {
+        open();
+    }
+}
+
+} // namespace
+
 #ifndef LUNARNX_NETWORK_DIAG
 #define LUNARNX_NETWORK_DIAG 0
 #endif
@@ -24,63 +40,6 @@ namespace lunar::ui {
 #if LUNARNX_NETWORK_DIAG
 namespace {
 #endif
-
-class QrCodeView : public brls::View {
-public:
-    QrCodeView() {
-        this->setDimensions(240, 240);
-    }
-
-    void setQrCode(QrCode qr) {
-        qr_ = std::move(qr);
-        this->setVisibility(qr_.empty() ? brls::Visibility::GONE : brls::Visibility::VISIBLE);
-        this->invalidate();
-    }
-
-    void clearQrCode() {
-        qr_ = {};
-        this->setVisibility(brls::Visibility::GONE);
-        this->invalidate();
-    }
-
-    void draw(NVGcontext* vg, float x, float y, float width, float height,
-              brls::Style style, brls::FrameContext* ctx) override {
-        (void)style;
-        (void)ctx;
-        if (qr_.empty()) return;
-
-        float side = std::min(width, height);
-        int total_cells = qr_.size + 8;
-        float cell = static_cast<float>(static_cast<int>(side / total_cells));
-        if (cell < 2.0f) return;
-
-        float actual = cell * total_cells;
-        float origin_x = x + (width - actual) * 0.5f;
-        float origin_y = y + (height - actual) * 0.5f;
-
-        nvgBeginPath(vg);
-        nvgRect(vg, origin_x, origin_y, actual, actual);
-        nvgFillColor(vg, nvgRGBA(255, 255, 255, 255));
-        nvgFill(vg);
-
-        nvgBeginPath(vg);
-        for (int yy = 0; yy < qr_.size; ++yy) {
-            for (int xx = 0; xx < qr_.size; ++xx) {
-                if (!qr_.at(xx, yy)) continue;
-                nvgRect(vg,
-                        origin_x + (xx + 4) * cell,
-                        origin_y + (yy + 4) * cell,
-                        cell,
-                        cell);
-            }
-        }
-        nvgFillColor(vg, nvgRGBA(0, 0, 0, 255));
-        nvgFill(vg);
-    }
-
-private:
-    QrCode qr_;
-};
 
 #if LUNARNX_NETWORK_DIAG
 
@@ -140,7 +99,8 @@ static stream::VideoBackend parseVideoBackendConfig(const char* value) {
     return stream::VideoBackend::HardwareZeroCopy;
 }
 
-AuthActivity::AuthActivity() = default;
+AuthActivity::AuthActivity(std::shared_ptr<app::StreamController> ctrl)
+    : ctrl_(std::move(ctrl)) {}
 
 brls::View* AuthActivity::createContentView() {
     const auto& p = uiPalette();
@@ -359,14 +319,17 @@ brls::View* AuthActivity::createContentView() {
     return root;
 }
 
-std::shared_ptr<app::StreamController> AuthActivity::controller() {
-    if (!ctrl_) {
-        ctrl_ = std::make_shared<app::StreamController>();
+std::shared_ptr<app::StreamController> AuthActivity::createConfiguredController() {
+    auto ctrl = std::make_shared<app::StreamController>();
+    const auto stream_settings = loadStreamSettings();
+    ctrl->setDefaultVideoBackend(stream_settings.video_backend);
+    ctrl->setRumbleEnabled(stream_settings.vibration_enabled);
+    ctrl->setRumbleStrengthPercent(stream_settings.rumble_strength_percent);
 
-        // Check config.json for mock Xbox base URL (for local testing)
-        std::string config_path = lunar::get_config_path();
-        FILE* f = fopen(config_path.c_str(), "rb");
-        if (f) {
+    // Check config.json for mock Xbox base URL (for local testing).
+    std::string config_path = lunar::get_config_path();
+    FILE* f = fopen(config_path.c_str(), "rb");
+    if (f) {
             fseek(f, 0, SEEK_END);
             long sz = ftell(f);
             fseek(f, 0, SEEK_SET);
@@ -381,17 +344,17 @@ std::shared_ptr<app::StreamController> AuthActivity::controller() {
                     auto video_backend = parseVideoBackendConfig(backend->valuestring);
                     lunar::diagnosticLog("auth-ui", "config video_backend=%s",
                                          stream::videoBackendName(video_backend));
-                    ctrl_->setDefaultVideoBackend(video_backend);
+                    ctrl->setDefaultVideoBackend(video_backend);
                 }
 
                 cJSON* vibration = cJSON_GetObjectItem(root, "vibration");
                 if (vibration && cJSON_IsBool(vibration)) {
-                    ctrl_->setRumbleEnabled(cJSON_IsTrue(vibration));
+                    ctrl->setRumbleEnabled(cJSON_IsTrue(vibration));
                 }
                 cJSON* rumble_strength =
                     cJSON_GetObjectItem(root, "rumble_strength_percent");
                 if (rumble_strength && cJSON_IsNumber(rumble_strength)) {
-                    ctrl_->setRumbleStrengthPercent(rumble_strength->valueint);
+                    ctrl->setRumbleStrengthPercent(rumble_strength->valueint);
                 }
 
                 cJSON* base = cJSON_GetObjectItem(root, "base_url");
@@ -399,28 +362,32 @@ std::shared_ptr<app::StreamController> AuthActivity::controller() {
                     strlen(base->valuestring) > 0) {
                     std::string url(base->valuestring);
                     lunar::diagnosticLog("auth-ui", "config base_url=%s", url.c_str());
-                    const bool mock_ok = ctrl_->bypassAuthForMock(url);
+                    const bool mock_ok = ctrl->bypassAuthForMock(url);
                     lunar::diagnosticLog("auth-ui", "bypassAuthForMock ok=%s mock=%s",
                                          mock_ok ? "true" : "false",
-                                         ctrl_->isMockMode() ? "true" : "false");
+                                         ctrl->isMockMode() ? "true" : "false");
                 }
 
                 cJSON* region_ip = cJSON_GetObjectItem(root, "force_region_ip");
                 if (region_ip && cJSON_IsString(region_ip) && region_ip->valuestring && region_ip->valuestring[0]) {
-                    ctrl_->setForceRegionIp(region_ip->valuestring);
+                    ctrl->setForceRegionIp(region_ip->valuestring);
                     lunar::diagnosticLog("auth-ui", "config force_region_ip=%s", region_ip->valuestring);
                 } else if (region_ip && cJSON_IsString(region_ip) && region_ip->valuestring && !region_ip->valuestring[0]) {
                     // Explicit empty = Auto/Native
-                    ctrl_->setForceRegionIp("");
+                    ctrl->setForceRegionIp("");
                     lunar::diagnosticLog("auth-ui", "config force_region_ip=(auto/native)");
                 } else {
-                    ctrl_->setForceRegionIp("4.2.2.2");
+                    ctrl->setForceRegionIp("4.2.2.2");
                     lunar::diagnosticLog("auth-ui", "config force_region_ip default US1 4.2.2.2");
                 }
                 cJSON_Delete(root);
             }
-        }
     }
+    return ctrl;
+}
+
+std::shared_ptr<app::StreamController> AuthActivity::controller() {
+    if (!ctrl_) ctrl_ = createConfiguredController();
     return ctrl_;
 }
 
@@ -437,8 +404,7 @@ bool AuthActivity::resumeSavedSessionIfPresent() {
         auto alive = alive_;
         brls::sync([alive, ctrl]() {
             if (!alive->load()) return;
-            brls::Application::pushActivity(
-                new MainActivity(ctrl), brls::TransitionAnimation::NONE);
+            openXboxHome(ctrl);
         });
         return true;
     }
@@ -451,8 +417,7 @@ bool AuthActivity::resumeSavedSessionIfPresent() {
             auto alive = alive_;
             brls::sync([alive, ctrl]() {
                 if (!alive->load()) return;
-                brls::Application::pushActivity(
-                    new MainActivity(ctrl), brls::TransitionAnimation::NONE);
+                openXboxHome(ctrl);
             });
             return true;
         }
@@ -479,8 +444,7 @@ bool AuthActivity::resumeSavedSessionIfPresent() {
     auto alive = alive_;
     brls::sync([alive, ctrl]() {
         if (!alive->load()) return;
-        brls::Application::pushActivity(
-            new MainActivity(ctrl), brls::TransitionAnimation::NONE);
+        openXboxHome(ctrl);
     });
     return true;
 }
@@ -653,8 +617,7 @@ void AuthActivity::startPollingThread() {
                 polling->store(false);
                 brls::sync([alive, ctrl]() {
                     if (!alive->load()) return;
-                    brls::Application::pushActivity(
-                        new MainActivity(ctrl), brls::TransitionAnimation::NONE);
+                    openXboxHome(ctrl);
                 });
                 return;
             }

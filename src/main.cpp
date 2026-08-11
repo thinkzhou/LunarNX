@@ -3,9 +3,12 @@
 #include <borealis.hpp>
 #include <cstdlib>
 #include "diagnostics.h"
-#include "ui/auth_activity.h"
+#include "ui/platform_activity.h"
 #include "ui/i18n.h"
 #include "ui/ui_style.h"
+#if LUNARNX_PS_MOCK_AUTORUN
+#include "tools/ps_mock_lifecycle_activity.h"
+#endif
 
 namespace {
 
@@ -45,7 +48,7 @@ void preferSwitchCore(int ordinal) {
 } // namespace
 
 int main(int argc, char* argv[]) {
-    lunar::diagnosticLog("main", "begin argc=%d", argc);
+    lunar::diagnosticLog("main", "begin argc=%d version=%s", argc, LUNARNX_VERSION);
 
     // Keep the Switch startup path aligned with Moonlight-Switch.
     appletInitializeGamePlayRecording();
@@ -75,9 +78,13 @@ int main(int argc, char* argv[]) {
     brls::Application::setFPSStatus(false);
     lunar::diagnosticLog("main", "createWindow done");
 
-    lunar::diagnosticLog("main", "push AuthActivity begin");
-    brls::Application::pushActivity(new lunar::ui::AuthActivity());
-    lunar::diagnosticLog("main", "push AuthActivity done");
+    lunar::diagnosticLog("main", "push root activity begin");
+#if LUNARNX_PS_MOCK_AUTORUN
+    brls::Application::pushActivity(new lunar::tools::PsMockLifecycleActivity());
+#else
+    brls::Application::pushActivity(new lunar::ui::PlatformActivity());
+#endif
+    lunar::diagnosticLog("main", "push root activity done");
 
     lunar::diagnosticLog("main", "mainLoop begin");
     while (brls::Application::mainLoop()) {}

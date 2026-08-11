@@ -190,6 +190,9 @@ void ConsoleGlyphView::draw(NVGcontext* vg, float x, float y,
     const float alpha = online_ ? 1.0f : 0.52f;
     const bool series_s = console_type_.find("SeriesS") != std::string::npos;
     const bool series_x = console_type_.find("SeriesX") != std::string::npos;
+    const bool is_ps4 = console_type_.find("PS4") != std::string::npos;
+    const bool is_ps5 = console_type_.find("PS5") != std::string::npos;
+    const bool is_ps  = is_ps4 || is_ps5;
 
     nvgSave(vg);
     nvgGlobalAlpha(vg, alpha);
@@ -225,6 +228,46 @@ void ConsoleGlyphView::draw(NVGcontext* vg, float x, float y,
         nvgRoundedRect(vg, tx + 5, ty + 5, tower_w - 10, 8, 4);
         nvgFillColor(vg, p.accent);
         nvgFill(vg);
+    } else if (is_ps) {
+        // PlayStation glyph: tilted square with PS colors
+        const float cx = x + width * 0.5f;
+        const float cy = y + height * 0.5f;
+        const float ps_w = 52;
+        const float ps_h = 52;
+        const float ps_x = cx - ps_w * 0.5f;
+        const float ps_y = cy - ps_h * 0.5f;
+
+        nvgBeginPath(vg);
+        nvgRoundedRect(vg, ps_x, ps_y, ps_w, ps_h, 8);
+        nvgFillColor(vg, nvgRGB(0, 67, 156));
+        nvgFill(vg);
+
+        // "PS" text
+        nvgFontSize(vg, 22);
+        nvgFontFace(vg, "sans-bold");
+        nvgTextAlign(vg, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+        nvgFillColor(vg, nvgRGB(255, 255, 255));
+        nvgText(vg, cx, cy, "PS", nullptr);
+
+        if (is_ps5) {
+            // Small "5" badge
+            nvgBeginPath(vg);
+            nvgCircle(vg, ps_x + ps_w - 10, ps_y + 10, 10);
+            nvgFillColor(vg, nvgRGB(255, 255, 255));
+            nvgFill(vg);
+            nvgFontSize(vg, 12);
+            nvgFillColor(vg, nvgRGB(0, 67, 156));
+            nvgText(vg, ps_x + ps_w - 10, ps_y + 11, "5", nullptr);
+        } else {
+            // Small "4" badge
+            nvgBeginPath(vg);
+            nvgCircle(vg, ps_x + ps_w - 10, ps_y + 10, 10);
+            nvgFillColor(vg, nvgRGB(255, 255, 255));
+            nvgFill(vg);
+            nvgFontSize(vg, 12);
+            nvgFillColor(vg, nvgRGB(0, 67, 156));
+            nvgText(vg, ps_x + ps_w - 10, ps_y + 11, "4", nullptr);
+        }
     } else {
         nvgBeginPath(vg);
         nvgRoundedRect(vg, x + 25, y + 24, width - 50, height - 48, 8);

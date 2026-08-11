@@ -16,10 +16,16 @@ license; the LunarNX MIT license does not replace those terms.
 | Mbed TLS | <https://github.com/Mbed-TLS/mbedtls> | Apache-2.0 or GPL-2.0-or-later, depending on version |
 | libsrtp | <https://github.com/cisco/libsrtp> | BSD-3-Clause |
 | cJSON | <https://github.com/DaveGamble/cJSON> | MIT |
+| QR Code generator library | <https://github.com/nayuki/QR-Code-generator> | MIT |
 | Opus | <https://opus-codec.org/> | BSD-3-Clause |
-| curl | <https://curl.se/> | curl license |
+| curl 8.11.x | <https://curl.se/> | curl license |
 | zlib | <https://zlib.net/> | zlib |
 | zstd | <https://github.com/facebook/zstd> | BSD-3-Clause/GPL-2.0-only dual license |
+| chiaki-ng 1.10 | <https://github.com/chiaki-ng/chiaki-ng> | AGPL-3.0 |
+| gf-complete | (chiaki dependency) | BSD-3-Clause |
+| jerasure | (chiaki dependency) | BSD-3-Clause |
+| protobuf-nanopb | (chiaki dependency) | zlib |
+| mbedTLS 3.4.0 | <https://github.com/Mbed-TLS/mbedtls> | Apache-2.0 or GPL-2.0-or-later |
 
 The exact source revisions for Borealis and legacy libpeer are pinned in
 `scripts/setup_dependencies.sh`. The FFmpeg revision, downloaded patches, and

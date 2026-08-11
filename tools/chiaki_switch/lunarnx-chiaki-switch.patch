@@ -1,0 +1,1338 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 2e175c0b..50b46d6e 100755
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -71,6 +71,9 @@ if(CHIAKI_IS_SWITCH)
+ 	# force mbedtls as crypto lib
+ 	set(CHIAKI_LIB_ENABLE_MBEDTLS ON)
+ 	add_definitions(-D__SWITCH__)
++	if(CHIAKI_SWITCH_MBEDTLS_INCLUDE_DIR)
++		include_directories(BEFORE "${CHIAKI_SWITCH_MBEDTLS_INCLUDE_DIR}")
++	endif()
+ endif()
+ 
+ if(CHIAKI_USE_SYSTEM_JERASURE)
+@@ -88,7 +91,25 @@ if(CHIAKI_ENABLE_GUI)
+ 	pkg_check_modules(LIBPLACEBO REQUIRED libplacebo>=7.349.0 IMPORTED_TARGET)
+ endif()
+ 
+-if(CHIAKI_USE_SYSTEM_CURL)
++if(CHIAKI_IS_SWITCH AND CHIAKI_USE_SYSTEM_CURL)
++	# The devkitPro pkg-config wrapper describes its bundled curl 7.69, even
++	# when LunarNX supplies the WebSocket-enabled Moonlight curl 8 archive.
++	# Use the explicitly selected Switch archive instead of mixing its path
++	# with protocol metadata from the unrelated devkitPro curl package.
++	if(NOT CURL_LIBRARY)
++		find_library(CURL_LIBRARY curl PATHS "${PORTLIBS}/lib" REQUIRED)
++	endif()
++	if(NOT CURL_INCLUDE_DIR)
++		find_path(CURL_INCLUDE_DIR curl/curl.h PATHS "${PORTLIBS}/include" REQUIRED)
++	endif()
++	if(NOT TARGET CURL::libcurl)
++		add_library(CURL::libcurl UNKNOWN IMPORTED)
++		set_target_properties(CURL::libcurl PROPERTIES
++			IMPORTED_LOCATION "${CURL_LIBRARY}"
++			INTERFACE_INCLUDE_DIRECTORIES "${CURL_INCLUDE_DIR}")
++	endif()
++	set(CHIAKI_USE_SYSTEM_CURL ON)
++elseif(CHIAKI_USE_SYSTEM_CURL)
+ 	if (CHIAKI_USE_SYSTEM_CURL STREQUAL AUTO)
+ 		find_package(CURL COMPONENTS HTTP HTTPS WS WSS QUIET)
+ 		set(CHIAKI_USE_SYSTEM_CURL ${CURL_FOUND})
+diff --git a/lib/include/chiaki/ecdh.h b/lib/include/chiaki/ecdh.h
+index 018457fa..472cbaa8 100644
+--- a/lib/include/chiaki/ecdh.h
++++ b/lib/include/chiaki/ecdh.h
+@@ -15,6 +15,7 @@ extern "C" {
+ #ifdef CHIAKI_LIB_ENABLE_MBEDTLS
+ #include "mbedtls/ecdh.h"
+ #include "mbedtls/ctr_drbg.h"
++#include "mbedtls/version.h"
+ #endif
+ 
+ 
+@@ -30,6 +31,10 @@ typedef struct chiaki_ecdh_t
+ 	mbedtls_ecdh_context ctx;
+ 	// deterministic random bit generator
+ 	mbedtls_ctr_drbg_context drbg;
++#if MBEDTLS_VERSION_MAJOR >= 3
++	uint8_t public_key[MBEDTLS_ECP_MAX_PT_LEN];
++	size_t public_key_size;
++#endif
+ #else
+ 	struct ec_group_st *group;
+ 	struct ec_key_st *key_local;
+diff --git a/lib/include/chiaki/remote/holepunch.h b/lib/include/chiaki/remote/holepunch.h
+index 407d5d87..4341846b 100644
+--- a/lib/include/chiaki/remote/holepunch.h
++++ b/lib/include/chiaki/remote/holepunch.h
+@@ -193,6 +193,12 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_holepunch_generate_client_device_uid(
+ CHIAKI_EXPORT ChiakiHolepunchSession chiaki_holepunch_session_init(
+     const char* psn_oauth2_token, ChiakiLog *log);
+ 
++/** Enable the development UDP relay used by Ryubing. Must be called before
++ * creating the first offer. The native socket path remains active otherwise. */
++CHIAKI_EXPORT ChiakiErrorCode chiaki_holepunch_session_set_relay(
++    ChiakiHolepunchSession session, const char *host, uint16_t port,
++    const char *secret);
++
+ /**
+  * This forces port guessing to be used when port increment is 0. The session will advertise sequential port guesses as STUN
+  * candidates and open multiple sockets to maximize the chance of port overlap
+diff --git a/lib/src/ecdh.c b/lib/src/ecdh.c
+index 3277b606..aa3ed9a8 100644
+--- a/lib/src/ecdh.c
++++ b/lib/src/ecdh.c
+@@ -45,10 +45,17 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_init(ChiakiECDH *ecdh)
+ 		(const unsigned char *) pers, sizeof pers));
+ 
+ 	// build MBEDTLS_ECP_DP_SECP256K1 group
++#if MBEDTLS_VERSION_MAJOR >= 3
++	CHECK(mbedtls_ecdh_setup(&ecdh->ctx, MBEDTLS_ECP_DP_SECP256K1));
++	CHECK(mbedtls_ecdh_make_public(&ecdh->ctx, &ecdh->public_key_size,
++		ecdh->public_key, sizeof(ecdh->public_key),
++		mbedtls_ctr_drbg_random, &ecdh->drbg));
++#else
+ 	CHECK(mbedtls_ecp_group_load(&ecdh->ctx.grp, MBEDTLS_ECP_DP_SECP256K1));
+ 	// build key
+ 	CHECK(mbedtls_ecdh_gen_public(&ecdh->ctx.grp, &ecdh->ctx.d,
+ 		&ecdh->ctx.Q, mbedtls_ctr_drbg_random, &ecdh->drbg));
++#endif
+ 
+ 	// relese entropy ptr
+ 	mbedtls_entropy_free(&entropy);
+@@ -86,6 +93,24 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_set_local_key(ChiakiECDH *ecdh, const
+ 	// Load keys from buffers (i.e: config file)
+ 	// TODO test
+ 
++#if MBEDTLS_VERSION_MAJOR >= 3
++	mbedtls_ecp_keypair key;
++	mbedtls_ecp_keypair_init(&key);
++	int r = mbedtls_ecp_group_load(&key.MBEDTLS_PRIVATE(grp), MBEDTLS_ECP_DP_SECP256K1);
++	if(r == 0)
++		r = mbedtls_ecp_point_read_binary(&key.MBEDTLS_PRIVATE(grp),
++			&key.MBEDTLS_PRIVATE(Q), public_key, public_key_size);
++	if(r == 0)
++		r = mbedtls_mpi_read_binary(&key.MBEDTLS_PRIVATE(d), private_key, private_key_size);
++	if(r == 0)
++		r = mbedtls_ecdh_get_params(&ecdh->ctx, &key, MBEDTLS_ECDH_OURS);
++	mbedtls_ecp_keypair_free(&key);
++	if(r != 0 || public_key_size > sizeof(ecdh->public_key))
++		return CHIAKI_ERR_UNKNOWN;
++	memcpy(ecdh->public_key, public_key, public_key_size);
++	ecdh->public_key_size = public_key_size;
++	return CHIAKI_ERR_SUCCESS;
++#else
+ 	// public
+ 	int r = 0;
+ 	r = mbedtls_ecp_point_read_binary(&ecdh->ctx.grp, &ecdh->ctx.Q, public_key, public_key_size);
+@@ -103,6 +128,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_set_local_key(ChiakiECDH *ecdh, const
+ 		return CHIAKI_ERR_UNKNOWN;
+ 
+ 	return CHIAKI_ERR_SUCCESS;
++#endif
+ #else
+ 	ChiakiErrorCode err = CHIAKI_ERR_SUCCESS;
+ 
+@@ -155,8 +181,15 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_get_local_pub_key(ChiakiECDH *ecdh, ui
+ 	}} while(0)
+ 	// extract pub key to build dh shared secret
+ 	// this key is sent to the remote server
++#if MBEDTLS_VERSION_MAJOR >= 3
++	if(*key_out_size < ecdh->public_key_size)
++		goto error;
++	memcpy(key_out, ecdh->public_key, ecdh->public_key_size);
++	*key_out_size = ecdh->public_key_size;
++#else
+ 	GOTO_ERROR(mbedtls_ecp_point_write_binary( &ecdh->ctx.grp, &ecdh->ctx.Q,
+ 		MBEDTLS_ECP_PF_UNCOMPRESSED, key_out_size, key_out, *key_out_size ));
++#endif
+ 
+ 	// https://tls.mbed.org/module-level-design-hashing
+ 	// HMAC
+@@ -199,6 +232,15 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_derive_secret(ChiakiECDH *ecdh, uint8_
+ 		goto error;} \
+ 	} while(0)
+ 
++#if MBEDTLS_VERSION_MAJOR >= 3
++	size_t secret_size = 0;
++	GOTO_ERROR(mbedtls_ecdh_read_public(&ecdh->ctx, remote_key, remote_key_size));
++	GOTO_ERROR(mbedtls_ecdh_calc_secret(&ecdh->ctx, &secret_size,
++		secret_out, CHIAKI_ECDH_SECRET_SIZE,
++		mbedtls_ctr_drbg_random, &ecdh->drbg));
++	if(secret_size != CHIAKI_ECDH_SECRET_SIZE)
++		goto error;
++#else
+ 	GOTO_ERROR(mbedtls_mpi_lset(&ecdh->ctx.Qp.Z, 1));
+ 	// load Qp point form remote PK
+ 	GOTO_ERROR(mbedtls_ecp_point_read_binary(&ecdh->ctx.grp,
+@@ -212,6 +254,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_ecdh_derive_secret(ChiakiECDH *ecdh, uint8_
+ 	// export shared secret to data buffer
+ 	GOTO_ERROR(mbedtls_mpi_write_binary(&ecdh->ctx.z,
+ 		secret_out, CHIAKI_ECDH_SECRET_SIZE));
++#endif
+ 
+ 	return CHIAKI_ERR_SUCCESS;
+ error:
+diff --git a/lib/src/gkcrypt.c b/lib/src/gkcrypt.c
+index 409a7aa2..bcdbfff2 100644
+--- a/lib/src/gkcrypt.c
++++ b/lib/src/gkcrypt.c
+@@ -386,12 +386,6 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_gkcrypt_gmac(ChiakiGKCrypt *gkcrypt, uint64
+ 		return CHIAKI_ERR_UNKNOWN;
+ 	}
+ 
+-	// encrypt without additional data
+-	if(mbedtls_gcm_starts(&actx, MBEDTLS_GCM_ENCRYPT, iv, CHIAKI_GKCRYPT_BLOCK_SIZE, NULL, 0) != 0)
+-	{
+-		mbedtls_gcm_free(&actx);
+-		return CHIAKI_ERR_UNKNOWN;
+-	}
+ 	// set "additional data" only whitout input nor output
+ 	// to get the same result as:
+ 	// EVP_EncryptUpdate(ctx, NULL, &len, buf, (int)buf_size)
+diff --git a/lib/src/remote/holepunch.c b/lib/src/remote/holepunch.c
+index 9a5bc695..a0571561 100644
+--- a/lib/src/remote/holepunch.c
++++ b/lib/src/remote/holepunch.c
+@@ -48,9 +48,32 @@
+ #include <netdb.h>
+ #include <ifaddrs.h>
+ #include <net/if.h>
++#include <poll.h>
+ #endif
+ 
+ #include <curl/curl.h>
++#ifdef __SWITCH__
++#include <stdbool.h>
++extern CURL *lunarnx_chiaki_curl_easy_init(void);
++extern CURLcode lunarnx_chiaki_curl_easy_perform(CURL *curl);
++extern void lunarnx_chiaki_curl_easy_cleanup(CURL *curl);
++extern CURLcode lunarnx_chiaki_curl_ws_send(CURL *curl, const void *buffer,
++    size_t buflen, size_t *sent, curl_off_t fragsize, unsigned int flags);
++extern CURLcode lunarnx_chiaki_curl_ws_recv(CURL *curl, void *buffer,
++    size_t buflen, size_t *recv, const struct curl_ws_frame **meta);
++extern bool lunarnx_chiaki_ryubing_compat_enabled(void);
++#define curl_easy_init lunarnx_chiaki_curl_easy_init
++#define curl_easy_perform lunarnx_chiaki_curl_easy_perform
++#define curl_easy_cleanup lunarnx_chiaki_curl_easy_cleanup
++#define curl_ws_send lunarnx_chiaki_curl_ws_send
++#define curl_ws_recv lunarnx_chiaki_curl_ws_recv
++#else
++#define lunarnx_chiaki_curl_easy_init curl_easy_init
++#define lunarnx_chiaki_curl_easy_perform curl_easy_perform
++#define lunarnx_chiaki_curl_easy_cleanup curl_easy_cleanup
++#define lunarnx_chiaki_curl_ws_send curl_ws_send
++#define lunarnx_chiaki_curl_ws_recv curl_ws_recv
++#endif
+ #if !defined(__SWITCH__) && !defined(__ANDROID__)
+ #include <event2/event.h>
+ #endif
+@@ -60,6 +83,12 @@
+ #include <miniupnpc/miniupnpc.h>
+ #include <miniupnpc/upnpcommands.h>
+ #include <miniupnpc/upnperrors.h>
++#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
++#include <mbedtls/md.h>
++#else
++#include <openssl/evp.h>
++#include <openssl/hmac.h>
++#endif
+ 
+ #include <chiaki/remote/holepunch.h>
+ #include <chiaki/stoppipe.h>
+@@ -371,6 +400,17 @@ typedef struct session_t
+     chiaki_socket_t ctrl_sock;
+     chiaki_socket_t data_sock;
+ 
++    bool relay_enabled;
++    char relay_host[INET_ADDRSTRLEN];
++    uint16_t relay_port;
++    char relay_secret[129];
++    chiaki_socket_t relay_control_sock;
++    char relay_nonce[65];
++    char relay_connection_id[33];
++    char relay_mapped_host[2][INET_ADDRSTRLEN];
++    uint16_t relay_mapped_port[2];
++    uint16_t relay_tunnel_port[2];
++
+     ChiakiLog *log;
+ } Session;
+ 
+@@ -405,6 +445,16 @@ static ChiakiErrorCode decode_customdata1(ChiakiLog *log, const char *customdata
+ static ChiakiErrorCode check_candidates(
+     Session *session, Candidate *local_candidates, Candidate *candidates_received, size_t num_candidates, chiaki_socket_t *out,
+     Candidate *out_candidate);
++static ChiakiErrorCode relay_open_channel(Session *session,
++    ChiakiHolepunchPortType port_type);
++static ChiakiErrorCode relay_set_peers(Session *session,
++    ChiakiHolepunchPortType port_type, Candidate *candidates, size_t count);
++static ChiakiErrorCode relay_get_selected_peer(Session *session,
++    ChiakiHolepunchPortType port_type, Candidate *candidates, size_t count,
++    Candidate *selected_candidate);
++static ChiakiErrorCode relay_post_session_message(Session *session,
++    const char *body);
++static void relay_close(Session *session);
+ 
+ static json_object* session_message_get_payload(ChiakiLog *log, json_object *session_message);
+ // static SessionMessageAction get_session_message_action(json_object *payload);
+@@ -758,6 +808,19 @@ CHIAKI_EXPORT Session* chiaki_holepunch_session_init(
+     memset(&session->custom_data1, 0, sizeof(session->custom_data1));
+     session->ctrl_sock = CHIAKI_INVALID_SOCKET;
+     session->data_sock = CHIAKI_INVALID_SOCKET;
++    session->relay_enabled = false;
++    session->relay_host[0] = '\0';
++    session->relay_port = 0;
++    session->relay_secret[0] = '\0';
++    session->relay_control_sock = CHIAKI_INVALID_SOCKET;
++    session->relay_nonce[0] = '\0';
++    uint8_t relay_connection_id[16];
++    chiaki_random_bytes_crypt(relay_connection_id, sizeof(relay_connection_id));
++    bytes_to_hex(relay_connection_id, sizeof(relay_connection_id),
++        session->relay_connection_id, sizeof(session->relay_connection_id));
++    memset(session->relay_mapped_host, 0, sizeof(session->relay_mapped_host));
++    memset(session->relay_mapped_port, 0, sizeof(session->relay_mapped_port));
++    memset(session->relay_tunnel_port, 0, sizeof(session->relay_tunnel_port));
+     session->ipv4_sock = CHIAKI_INVALID_SOCKET;
+     session->ipv6_sock = CHIAKI_INVALID_SOCKET;
+     session->sid_console = 0;
+@@ -813,6 +876,23 @@ CHIAKI_EXPORT Session* chiaki_holepunch_session_init(
+     return session;
+ }
+ 
++CHIAKI_EXPORT ChiakiErrorCode chiaki_holepunch_session_set_relay(
++    Session *session, const char *host, uint16_t port, const char *secret)
++{
++    if(!session || !host || !secret || port == 0
++        || strlen(host) >= sizeof(session->relay_host)
++        || strlen(secret) < 12 || strlen(secret) >= sizeof(session->relay_secret))
++        return CHIAKI_ERR_INVALID_DATA;
++    struct in_addr address;
++    if(inet_pton(AF_INET, host, &address) != 1)
++        return CHIAKI_ERR_INVALID_DATA;
++    memcpy(session->relay_host, host, strlen(host) + 1);
++    memcpy(session->relay_secret, secret, strlen(secret) + 1);
++    session->relay_port = port;
++    session->relay_enabled = true;
++    return CHIAKI_ERR_SUCCESS;
++}
++
+ #define UPNP_DISCOVER_TIMEOUT_MS 7000
+ 
+ static void *upnp_discover_thread_func(void *arg)
+@@ -1535,7 +1615,9 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_holepunch_session_punch_hole(Session* sessi
+     const int our_offer_req_id = session->local_req_id;
+     session->local_req_id++;
+     session->our_offer_msg->req_id = our_offer_req_id;
+-    send_offer(session);
++    err = send_offer(session);
++    if(err != CHIAKI_ERR_SUCCESS)
++        goto cleanup;
+ 
+     // Wait for ACK of OFFER, ignore other OFFERs, simply ACK them
+     err = wait_for_session_message_ack(
+@@ -1564,7 +1646,25 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_holepunch_session_punch_hole(Session* sessi
+         print_candidate(session->log, &console_req->candidates[i]);
+     }
+     Candidate selected_candidate;
+-    err = check_candidates(session, session->local_candidates, console_req->candidates, console_req->num_candidates, &sock, &selected_candidate);
++    Candidate relay_candidate;
++    Candidate *candidates_to_check = console_req->candidates;
++    size_t candidates_to_check_count = console_req->num_candidates;
++    if(session->relay_enabled)
++    {
++        err = relay_set_peers(session, port_type, console_req->candidates,
++            console_req->num_candidates);
++        if(err != CHIAKI_ERR_SUCCESS)
++            goto cleanup;
++        memset(&relay_candidate, 0, sizeof(relay_candidate));
++        memcpy(relay_candidate.addr, session->relay_host, strlen(session->relay_host) + 1);
++        relay_candidate.port = session->relay_tunnel_port[
++            port_type == CHIAKI_HOLEPUNCH_PORT_TYPE_CTRL ? 0 : 1];
++        relay_candidate.type = CANDIDATE_TYPE_LOCAL;
++        candidates_to_check = &relay_candidate;
++        candidates_to_check_count = 1;
++    }
++    err = check_candidates(session, session->local_candidates,
++        candidates_to_check, candidates_to_check_count, &sock, &selected_candidate);
+     if (err != CHIAKI_ERR_SUCCESS)
+     {
+         CHIAKI_LOGE(
+@@ -1572,6 +1672,18 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_holepunch_session_punch_hole(Session* sessi
+             port_type == CHIAKI_HOLEPUNCH_PORT_TYPE_CTRL ? "control" : "data");
+         goto cleanup;
+     }
++    if(session->relay_enabled)
++    {
++        err = relay_get_selected_peer(session, port_type, console_req->candidates,
++            console_req->num_candidates, &selected_candidate);
++        if(err != CHIAKI_ERR_SUCCESS)
++            goto cleanup;
++        int relay_index = port_type == CHIAKI_HOLEPUNCH_PORT_TYPE_CTRL ? 0 : 1;
++        memcpy(selected_candidate.addr_mapped,
++            session->relay_mapped_host[relay_index],
++            strlen(session->relay_mapped_host[relay_index]) + 1);
++        selected_candidate.port_mapped = session->relay_mapped_port[relay_index];
++    }
+     chiaki_mutex_lock(&session->stop_mutex);
+     if(session->main_should_stop)
+     {
+@@ -1731,8 +1843,479 @@ CHIAKI_EXPORT void chiaki_holepunch_session_set_port_guessing_socks(Session* ses
+         session->port_guessing_socks = count;
+ }
+ 
++#if !defined(_WIN32)
++#define RELAY_CONTROL_VERSION 3
++// Ryubing returns zero bytes for larger recv lengths even when a small UDP datagram is queued.
++#define RELAY_CONTROL_MAX_DATAGRAM (4 * 1024)
++#define RELAY_CONTROL_RETRY_COUNT 6
++#define RELAY_CONTROL_RETRY_TIMEOUT_MS 1000
++#define RELAY_CONTROL_HTTP_TIMEOUT_MS 20000
++
++static const char relay_hmac_label[] = "LUNARNX-PS-UDP-RELAY-V3";
++
++static bool relay_valid_hex(const char *value, size_t chars)
++{
++    if(!value || strlen(value) != chars || chars > 64 || (chars & 1) != 0)
++        return false;
++    uint8_t bytes[32];
++    return hex_to_bytes(value, bytes, chars / 2) == CHIAKI_ERR_SUCCESS;
++}
++
++static bool relay_constant_time_equal(const char *left, const char *right, size_t size)
++{
++    if(!left || !right || strlen(left) != size || strlen(right) != size)
++        return false;
++    uint8_t difference = 0;
++    for(size_t i = 0; i < size; i++)
++        difference |= (uint8_t)left[i] ^ (uint8_t)right[i];
++    return difference == 0;
++}
++
++static bool relay_compute_hmac(Session *session, const char *direction,
++    const char *request_id, const char *nonce, const char *payload, char output[65])
++{
++#ifdef CHIAKI_LIB_ENABLE_MBEDTLS
++    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
++    if(!info)
++        return false;
++    mbedtls_md_context_t context;
++    mbedtls_md_init(&context);
++    bool success = mbedtls_md_setup(&context, info, 1) == 0
++        && mbedtls_md_hmac_starts(&context,
++            (const uint8_t *)session->relay_secret, strlen(session->relay_secret)) == 0;
++    const char *parts[] = {relay_hmac_label, direction, request_id, nonce, payload};
++    const uint8_t separator = 0;
++    for(size_t i = 0; success && i < sizeof(parts) / sizeof(parts[0]); i++)
++    {
++        success = mbedtls_md_hmac_update(&context,
++            (const uint8_t *)parts[i], strlen(parts[i])) == 0;
++        if(success && i + 1 < sizeof(parts) / sizeof(parts[0]))
++            success = mbedtls_md_hmac_update(&context, &separator, 1) == 0;
++    }
++    uint8_t digest[32];
++    if(success)
++        success = mbedtls_md_hmac_finish(&context, digest) == 0;
++    mbedtls_md_free(&context);
++    if(success)
++        bytes_to_hex(digest, sizeof(digest), output, 65);
++    return success;
++#else
++    const char *parts[] = {relay_hmac_label, direction, request_id, nonce, payload};
++    size_t message_size = sizeof(parts) / sizeof(parts[0]) - 1;
++    for(size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++)
++        message_size += strlen(parts[i]);
++    uint8_t *message = malloc(message_size);
++    if(!message)
++        return false;
++    size_t offset = 0;
++    for(size_t i = 0; i < sizeof(parts) / sizeof(parts[0]); i++)
++    {
++        size_t part_size = strlen(parts[i]);
++        memcpy(message + offset, parts[i], part_size);
++        offset += part_size;
++        if(i + 1 < sizeof(parts) / sizeof(parts[0]))
++            message[offset++] = 0;
++    }
++    uint8_t digest[EVP_MAX_MD_SIZE];
++    unsigned int digest_size = 0;
++    bool success = HMAC(EVP_sha256(), session->relay_secret,
++        (int)strlen(session->relay_secret), message, message_size,
++        digest, &digest_size) != NULL && digest_size == 32;
++    free(message);
++    if(success)
++        bytes_to_hex(digest, digest_size, output, 65);
++    return success;
++#endif
++}
++
++static json_object *relay_exchange(Session *session, json_object *request, bool challenge)
++{
++    const char *payload = json_object_to_json_string_ext(request, JSON_C_TO_STRING_PLAIN);
++    json_object *cmd_value = NULL;
++    const char *cmd = json_object_object_get_ex(request, "cmd", &cmd_value)
++        ? json_object_get_string(cmd_value) : "unknown";
++    uint8_t request_id_bytes[16];
++    if(chiaki_random_bytes_crypt(request_id_bytes, sizeof(request_id_bytes)) != CHIAKI_ERR_SUCCESS)
++        return NULL;
++    char request_id[sizeof(request_id_bytes) * 2 + 1];
++    bytes_to_hex(request_id_bytes, sizeof(request_id_bytes), request_id, sizeof(request_id));
++
++    json_object *envelope = json_object_new_object();
++    if(!envelope)
++        return NULL;
++    json_object_object_add(envelope, "version", json_object_new_int(RELAY_CONTROL_VERSION));
++    json_object_object_add(envelope, "request_id", json_object_new_string(request_id));
++    json_object_object_add(envelope, "payload", json_object_new_string(payload));
++    if(!challenge)
++    {
++        char digest[65];
++        if(!relay_compute_hmac(session, "request", request_id,
++            session->relay_nonce, payload, digest))
++        {
++            json_object_put(envelope);
++            return NULL;
++        }
++        json_object_object_add(envelope, "nonce", json_object_new_string(session->relay_nonce));
++        json_object_object_add(envelope, "hmac", json_object_new_string(digest));
++    }
++    const char *packet = json_object_to_json_string_ext(envelope, JSON_C_TO_STRING_PLAIN);
++    size_t packet_size = strlen(packet);
++    if(packet_size == 0 || packet_size > RELAY_CONTROL_MAX_DATAGRAM)
++    {
++        json_object_put(envelope);
++        return NULL;
++    }
++    char *response_data = malloc(RELAY_CONTROL_MAX_DATAGRAM + 1);
++    if(!response_data)
++    {
++        json_object_put(envelope);
++        return NULL;
++    }
++
++    json_object *response = NULL;
++    CHIAKI_LOGV(session->log, "UDP relay sending %s request (%u-byte datagram)",
++        cmd, (unsigned int)packet_size);
++    bool http_request = strcmp(cmd, "session_message") == 0;
++    int max_attempts = http_request ? 2 : RELAY_CONTROL_RETRY_COUNT;
++    uint64_t response_timeout = http_request
++        ? RELAY_CONTROL_HTTP_TIMEOUT_MS : RELAY_CONTROL_RETRY_TIMEOUT_MS;
++    for(int attempt = 1; attempt <= max_attempts && !response; attempt++)
++    {
++        CHIAKI_SSIZET_TYPE sent = send(session->relay_control_sock, packet, packet_size, 0);
++        if(sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
++        {
++            struct pollfd write_event = {.fd = session->relay_control_sock, .events = POLLOUT};
++            poll(&write_event, 1, 100);
++            sent = send(session->relay_control_sock, packet, packet_size, 0);
++        }
++        if(sent != (CHIAKI_SSIZET_TYPE)packet_size)
++        {
++            CHIAKI_LOGW(session->log, "UDP relay %s send attempt %d failed: " CHIAKI_SOCKET_ERROR_FMT,
++                cmd, attempt, CHIAKI_SOCKET_ERROR_VALUE);
++            continue;
++        }
++
++        uint64_t deadline = chiaki_time_now_monotonic_ms() + response_timeout;
++        while(chiaki_time_now_monotonic_ms() < deadline && !response)
++        {
++            uint64_t remaining = deadline - chiaki_time_now_monotonic_ms();
++            struct pollfd read_event = {.fd = session->relay_control_sock, .events = POLLIN};
++            int ready = poll(&read_event, 1, (int)remaining);
++            if(ready < 0 && errno == EINTR)
++                continue;
++            if(ready <= 0)
++                break;
++            CHIAKI_SSIZET_TYPE received = recv(session->relay_control_sock, response_data,
++                RELAY_CONTROL_MAX_DATAGRAM, MSG_DONTWAIT);
++            if(received <= 0)
++                continue;
++            response_data[received] = '\0';
++            json_object *response_envelope = json_tokener_parse(response_data);
++            json_object *version_value = NULL, *id_value = NULL, *nonce_value = NULL;
++            json_object *payload_value = NULL, *hmac_value = NULL;
++            bool parsed = response_envelope != NULL;
++            bool version_valid = parsed
++                && json_object_object_get_ex(response_envelope, "version", &version_value)
++                && json_object_get_int(version_value) == RELAY_CONTROL_VERSION;
++            bool request_id_valid = parsed
++                && json_object_object_get_ex(response_envelope, "request_id", &id_value)
++                && strcmp(json_object_get_string(id_value), request_id) == 0;
++            bool fields_present = parsed
++                && json_object_object_get_ex(response_envelope, "nonce", &nonce_value)
++                && json_object_object_get_ex(response_envelope, "payload", &payload_value)
++                && json_object_object_get_ex(response_envelope, "hmac", &hmac_value);
++            bool valid = parsed && version_valid && request_id_valid && fields_present;
++            const char *response_nonce = valid ? json_object_get_string(nonce_value) : NULL;
++            const char *response_payload = valid ? json_object_get_string(payload_value) : NULL;
++            const char *response_hmac = valid ? json_object_get_string(hmac_value) : NULL;
++            bool nonce_valid = valid && relay_valid_hex(response_nonce, 64)
++                && (challenge || strcmp(response_nonce, session->relay_nonce) == 0);
++            char expected_hmac[65];
++            bool hmac_valid = nonce_valid
++                && relay_compute_hmac(session, "response", request_id,
++                response_nonce, response_payload, expected_hmac)
++                && relay_constant_time_equal(response_hmac, expected_hmac, 64);
++            valid = valid && nonce_valid && hmac_valid;
++            if(valid)
++            {
++                response = json_tokener_parse(response_payload);
++                if(response && challenge)
++                    memcpy(session->relay_nonce, response_nonce, 65);
++            }
++            if(response_envelope)
++                json_object_put(response_envelope);
++        }
++        if(!response && attempt < max_attempts)
++            CHIAKI_LOGW(session->log, "UDP relay %s response timeout; retrying request_id=%s attempt=%d",
++                cmd, request_id, attempt + 1);
++    }
++    free(response_data);
++    json_object_put(envelope);
++    if(!response)
++    {
++        CHIAKI_LOGE(session->log, "UDP relay %s request timed out after %d attempts",
++            cmd, max_attempts);
++        return NULL;
++    }
++    json_object *ok = NULL;
++    if(!json_object_object_get_ex(response, "ok", &ok) || !json_object_get_boolean(ok))
++    {
++        json_object *error = NULL;
++        CHIAKI_LOGE(session->log, "UDP relay request failed: %s",
++            json_object_object_get_ex(response, "error", &error)
++                ? json_object_get_string(error) : "invalid response");
++        json_object_put(response);
++        return NULL;
++    }
++    CHIAKI_LOGV(session->log, "UDP relay received authenticated %s response", cmd);
++    return response;
++}
++
++static json_object *relay_request(Session *session, json_object *request)
++{
++    return relay_exchange(session, request, false);
++}
++
++static ChiakiErrorCode relay_post_session_message(Session *session,
++    const char *body)
++{
++    size_t body_size = strlen(body);
++    size_t encoded_size = 4 * ((body_size + 2) / 3) + 1;
++    char *encoded = malloc(encoded_size);
++    if(!encoded)
++        return CHIAKI_ERR_MEMORY;
++    ChiakiErrorCode err = chiaki_base64_encode(
++        (const uint8_t *)body, body_size, encoded, encoded_size);
++    if(err != CHIAKI_ERR_SUCCESS)
++    {
++        free(encoded);
++        return err;
++    }
++    json_object *request = json_object_new_object();
++    json_object_object_add(request, "cmd", json_object_new_string("session_message"));
++    json_object_object_add(request, "session_id",
++        json_object_new_string(session->session_id));
++    json_object_object_add(request, "body_base64", json_object_new_string(encoded));
++    free(encoded);
++    json_object *response = relay_request(session, request);
++    json_object_put(request);
++    if(!response)
++        return CHIAKI_ERR_NETWORK;
++    json_object *status_value = NULL, *elapsed_value = NULL;
++    int status = json_object_object_get_ex(response, "status", &status_value)
++        ? json_object_get_int(status_value) : 0;
++    double elapsed_ms = json_object_object_get_ex(response, "elapsed_ms", &elapsed_value)
++        ? json_object_get_double(elapsed_value) : 0.0;
++    json_object_put(response);
++    if(status < 200 || status >= 300)
++        return CHIAKI_ERR_HTTP_NONOK;
++    CHIAKI_LOGI(session->log,
++        "Ryubing PSN session message proxy completed status=%d elapsed_ms=%.1f",
++        status, elapsed_ms);
++    return CHIAKI_ERR_SUCCESS;
++}
++
++static ChiakiErrorCode relay_connect(Session *session)
++{
++    if(!CHIAKI_SOCKET_IS_INVALID(session->relay_control_sock))
++        return CHIAKI_ERR_SUCCESS;
++    chiaki_socket_t sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++    if(CHIAKI_SOCKET_IS_INVALID(sock))
++        return CHIAKI_ERR_NETWORK;
++    if(chiaki_socket_set_nonblock(sock, true) != CHIAKI_ERR_SUCCESS)
++    {
++        CHIAKI_SOCKET_CLOSE(sock);
++        return CHIAKI_ERR_NETWORK;
++    }
++    struct sockaddr_in address = {0};
++    address.sin_family = AF_INET;
++    address.sin_port = htons(session->relay_port);
++    if(inet_pton(AF_INET, session->relay_host, &address.sin_addr) != 1
++        || connect(sock, (struct sockaddr *)&address, sizeof(address)) < 0)
++    {
++        CHIAKI_SOCKET_CLOSE(sock);
++        return CHIAKI_ERR_NETWORK;
++    }
++    session->relay_control_sock = sock;
++    json_object *challenge = json_object_new_object();
++    json_object_object_add(challenge, "cmd", json_object_new_string("challenge"));
++    json_object *response = relay_exchange(session, challenge, true);
++    json_object_put(challenge);
++    if(!response)
++    {
++        relay_close(session);
++        return CHIAKI_ERR_NETWORK;
++    }
++    json_object_put(response);
++    CHIAKI_LOGI(session->log, "Connected to Ryubing UDP relay control at %s:%u",
++        session->relay_host, session->relay_port);
++    return CHIAKI_ERR_SUCCESS;
++}
++
++static const char *relay_channel_name(ChiakiHolepunchPortType type)
++{
++    return type == CHIAKI_HOLEPUNCH_PORT_TYPE_CTRL ? "ctrl" : "data";
++}
++
++static ChiakiErrorCode relay_open_channel(Session *session,
++    ChiakiHolepunchPortType port_type)
++{
++    ChiakiErrorCode err = relay_connect(session);
++    if(err != CHIAKI_ERR_SUCCESS)
++        return err;
++    json_object *request = json_object_new_object();
++    json_object_object_add(request, "cmd", json_object_new_string("open"));
++    json_object_object_add(request, "connection_id",
++        json_object_new_string(session->relay_connection_id));
++    json_object_object_add(request, "channel", json_object_new_string(relay_channel_name(port_type)));
++    json_object *response = relay_request(session, request);
++    json_object_put(request);
++    if(!response)
++        return CHIAKI_ERR_NETWORK;
++    json_object *host = NULL, *mapped_port = NULL, *tunnel_port = NULL;
++    bool valid = json_object_object_get_ex(response, "mapped_host", &host)
++        && json_object_object_get_ex(response, "mapped_port", &mapped_port)
++        && json_object_object_get_ex(response, "tunnel_port", &tunnel_port);
++    int index = port_type == CHIAKI_HOLEPUNCH_PORT_TYPE_CTRL ? 0 : 1;
++    const char *host_text = valid ? json_object_get_string(host) : NULL;
++    int mapped = valid ? json_object_get_int(mapped_port) : 0;
++    int tunnel = valid ? json_object_get_int(tunnel_port) : 0;
++    if(!host_text || strlen(host_text) >= sizeof(session->relay_mapped_host[index])
++        || mapped <= 0 || mapped > UINT16_MAX || tunnel <= 0 || tunnel > UINT16_MAX)
++        valid = false;
++    if(valid)
++    {
++        memcpy(session->relay_mapped_host[index], host_text, strlen(host_text) + 1);
++        session->relay_mapped_port[index] = (uint16_t)mapped;
++        session->relay_tunnel_port[index] = (uint16_t)tunnel;
++        CHIAKI_LOGI(session->log, "UDP relay %s mapped at %s:%u tunnel=%s:%u",
++            relay_channel_name(port_type), host_text, mapped,
++            session->relay_host, tunnel);
++    }
++    json_object_put(response);
++    return valid ? CHIAKI_ERR_SUCCESS : CHIAKI_ERR_INVALID_DATA;
++}
++
++static ChiakiErrorCode relay_set_peers(Session *session,
++    ChiakiHolepunchPortType port_type, Candidate *candidates, size_t count)
++{
++    json_object *request = json_object_new_object();
++    json_object_object_add(request, "cmd", json_object_new_string("peers"));
++    json_object_object_add(request, "connection_id",
++        json_object_new_string(session->relay_connection_id));
++    json_object_object_add(request, "channel", json_object_new_string(relay_channel_name(port_type)));
++    json_object *peers = json_object_new_array();
++    for(size_t i = 0; i < count; i++)
++    {
++        struct in_addr address;
++        if(inet_pton(AF_INET, candidates[i].addr, &address) != 1 || candidates[i].port == 0)
++            continue;
++        json_object *peer = json_object_new_object();
++        json_object_object_add(peer, "host", json_object_new_string(candidates[i].addr));
++        json_object_object_add(peer, "port", json_object_new_int(candidates[i].port));
++        json_object_array_add(peers, peer);
++    }
++    json_object_object_add(request, "peers", peers);
++    json_object *response = relay_request(session, request);
++    json_object_put(request);
++    if(!response)
++        return CHIAKI_ERR_NETWORK;
++    json_object_put(response);
++    return CHIAKI_ERR_SUCCESS;
++}
++
++static ChiakiErrorCode relay_get_selected_peer(Session *session,
++    ChiakiHolepunchPortType port_type, Candidate *candidates, size_t count,
++    Candidate *selected_candidate)
++{
++    json_object *request = json_object_new_object();
++    json_object_object_add(request, "cmd", json_object_new_string("status"));
++    json_object_object_add(request, "connection_id",
++        json_object_new_string(session->relay_connection_id));
++    json_object *response = relay_request(session, request);
++    json_object_put(request);
++    if(!response)
++        return CHIAKI_ERR_NETWORK;
++    json_object *channels = NULL, *channel = NULL, *selected = NULL;
++    const char *selected_text = NULL;
++    if(json_object_object_get_ex(response, "channels", &channels)
++        && json_object_object_get_ex(channels, relay_channel_name(port_type), &channel)
++        && json_object_object_get_ex(channel, "selected_peer", &selected))
++        selected_text = json_object_get_string(selected);
++    bool valid = selected_text != NULL;
++    if(valid)
++    {
++        const char *colon = strrchr(selected_text, ':');
++        size_t host_size = colon ? (size_t)(colon - selected_text) : 0;
++        int port = colon ? atoi(colon + 1) : 0;
++        valid = host_size > 0 && host_size < sizeof(selected_candidate->addr)
++            && port > 0 && port <= UINT16_MAX;
++        if(valid)
++        {
++            bool exact_candidate = false;
++            for(size_t i = 0; i < count; i++)
++            {
++                if(candidates[i].port != (uint16_t)port
++                    || strlen(candidates[i].addr) != host_size
++                    || strncmp(candidates[i].addr, selected_text, host_size) != 0)
++                    continue;
++                memcpy(selected_candidate, &candidates[i], sizeof(*selected_candidate));
++                exact_candidate = true;
++                break;
++            }
++            if(!exact_candidate)
++            {
++                memset(selected_candidate, 0, sizeof(*selected_candidate));
++                memcpy(selected_candidate->addr, selected_text, host_size);
++                selected_candidate->port = (uint16_t)port;
++                selected_candidate->type = CANDIDATE_TYPE_DERIVED;
++            }
++            CHIAKI_LOGI(session->log, "UDP relay %s selected %s candidate %s:%u type=%d",
++                relay_channel_name(port_type), exact_candidate ? "offered" : "derived",
++                selected_candidate->addr, selected_candidate->port,
++                selected_candidate->type);
++        }
++    }
++    json_object_put(response);
++    return valid ? CHIAKI_ERR_SUCCESS : CHIAKI_ERR_INVALID_DATA;
++}
++
++static void relay_close(Session *session)
++{
++    if(!CHIAKI_SOCKET_IS_INVALID(session->relay_control_sock))
++    {
++        if(session->relay_nonce[0] != '\0')
++        {
++            json_object *request = json_object_new_object();
++            json_object_object_add(request, "cmd",
++                json_object_new_string("close_connection"));
++            json_object_object_add(request, "connection_id",
++                json_object_new_string(session->relay_connection_id));
++            json_object *response = relay_request(session, request);
++            if(response)
++                json_object_put(response);
++            json_object_put(request);
++        }
++        CHIAKI_SOCKET_CLOSE(session->relay_control_sock);
++        session->relay_control_sock = CHIAKI_INVALID_SOCKET;
++    }
++}
++#else
++static ChiakiErrorCode relay_open_channel(Session *session, ChiakiHolepunchPortType type)
++{ (void)session; (void)type; return CHIAKI_ERR_UNKNOWN; }
++static ChiakiErrorCode relay_set_peers(Session *session, ChiakiHolepunchPortType type, Candidate *c, size_t n)
++{ (void)session; (void)type; (void)c; (void)n; return CHIAKI_ERR_UNKNOWN; }
++static ChiakiErrorCode relay_get_selected_peer(Session *session, ChiakiHolepunchPortType type,
++    Candidate *candidates, size_t count, Candidate *selected_candidate)
++{ (void)session; (void)type; (void)candidates; (void)count; (void)selected_candidate; return CHIAKI_ERR_UNKNOWN; }
++static ChiakiErrorCode relay_post_session_message(Session *session, const char *body)
++{ (void)session; (void)body; return CHIAKI_ERR_UNKNOWN; }
++static void relay_close(Session *session) { (void)session; }
++#endif
++
+ CHIAKI_EXPORT void chiaki_holepunch_session_fini(Session* session)
+ {
++    relay_close(session);
+     if(session->ws_open)
+     {
+         ChiakiErrorCode err = deleteSession(session);
+@@ -2089,9 +2672,11 @@ static void* websocket_thread_func(void *user) {
+     CURLcode res = curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+     if(res != CURLE_OK)
+         CHIAKI_LOGW(session->log, "websocket_thread_func: CURL setopt CURLOPT_HTTPHEADER failed with CURL error %s", curl_easy_strerror(res));
++#ifndef __SWITCH__
+     res = curl_easy_setopt(curl, CURLOPT_SHARE, session->curl_share);
+     if(res != CURLE_OK)
+         CHIAKI_LOGW(session->log, "websocket_thread_func: CURL setopt CURLOPT_SHAREfailed with CURL error %s", curl_easy_strerror(res));
++#endif
+     res = curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+     if(res != CURLE_OK)
+         CHIAKI_LOGW(session->log, "websocket_thread_func: CURL setopt CURLOPT_FAILONERROR failed with CURL error %s", curl_easy_strerror(res));
+@@ -2142,7 +2727,10 @@ static void* websocket_thread_func(void *user) {
+     FD_SET(sockfd, &fds);
+ 
+     // Need to send a ping every 5secs
+-    uint64_t timeout = WEBSOCKET_PING_INTERVAL_SEC * 1000;
++    uint64_t timeout = session->relay_enabled
++        ? 1000 : WEBSOCKET_PING_INTERVAL_SEC * 1000;
++    const uint64_t relay_pong_timeout_us = session->relay_enabled
++        ? 30LL * SECOND_US : 5LL * SECOND_US;
+     uint64_t now = 0;
+     uint64_t last_ping_sent = 0;
+ 
+@@ -2173,13 +2761,13 @@ static void* websocket_thread_func(void *user) {
+ 
+         now = chiaki_time_now_monotonic_us();
+ 
+-        if (expecting_pong && now - last_ping_sent > 5LL * SECOND_US)
++        if (expecting_pong && now - last_ping_sent > relay_pong_timeout_us)
+         {
+             CHIAKI_LOGE(session->log, "websocket_thread_func: Did not receive PONG in time.");
+             goto cleanup_json;
+         }
+ 
+-        if (now - last_ping_sent > 5LL * SECOND_US)
++        if (!expecting_pong && now - last_ping_sent > 5LL * SECOND_US)
+         {
+             res = curl_ws_send(curl, buf, 0, &wlen, 0, CURLWS_PING);
+             if (res != CURLE_OK)
+@@ -2526,6 +3114,29 @@ CHIAKI_EXPORT ChiakiErrorCode holepunch_session_create_offer(Session *session)
+     bool have_addr = false;
+     Candidate *candidate_remote = &msg.conn_request->candidates[1];
+     candidate_remote->type = CANDIDATE_TYPE_STATIC;
++    if(session->relay_enabled)
++    {
++        ChiakiHolepunchPortType relay_type = session->local_port_ctrl == local_port
++            ? CHIAKI_HOLEPUNCH_PORT_TYPE_CTRL : CHIAKI_HOLEPUNCH_PORT_TYPE_DATA;
++        err = relay_open_channel(session, relay_type);
++        if(err != CHIAKI_ERR_SUCCESS)
++            goto cleanup;
++        int relay_index = relay_type == CHIAKI_HOLEPUNCH_PORT_TYPE_CTRL ? 0 : 1;
++        Candidate *candidate_stun = &msg.conn_request->candidates[0];
++        candidate_stun->type = CANDIDATE_TYPE_STUN;
++        memcpy(candidate_stun->addr, session->relay_mapped_host[relay_index],
++            strlen(session->relay_mapped_host[relay_index]) + 1);
++        candidate_stun->port = session->relay_mapped_port[relay_index];
++        memcpy(candidate_stun->addr_mapped, "0.0.0.0", 8);
++        candidate_stun->port_mapped = 0;
++        memcpy(candidate_remote, candidate_stun, sizeof(*candidate_remote));
++        candidate_remote->type = CANDIDATE_TYPE_STATIC;
++        memcpy(candidate_local->addr, session->relay_host, strlen(session->relay_host) + 1);
++        candidate_local->port = session->relay_tunnel_port[relay_index];
++        msg.conn_request->num_candidates = 1;
++        have_addr = true;
++        goto relay_offer_ready;
++    }
+     switch(session->gw_status)
+     {
+         case GATEWAY_STATUS_UNKNOWN:
+@@ -2786,6 +3397,7 @@ CHIAKI_EXPORT ChiakiErrorCode holepunch_session_create_offer(Session *session)
+         candidate_remote = &msg.conn_request->candidates[0];
+         candidate_local = &msg.conn_request->candidates[1];
+     }
++relay_offer_ready:
+     if (!have_addr) {
+         CHIAKI_LOGE(session->log, "holepunch_session_create_offer: Could not get remote address");
+         err = CHIAKI_ERR_UNKNOWN;
+@@ -2809,7 +3421,8 @@ CHIAKI_EXPORT ChiakiErrorCode holepunch_session_create_offer(Session *session)
+         }
+     }
+     memcpy(candidate_remote->addr_mapped, "0.0.0.0", 8);
+-    candidate_remote->port = local_port;
++    if(!session->relay_enabled)
++        candidate_remote->port = local_port;
+     candidate_remote->port_mapped = 0;
+     session->local_candidates = calloc(2, sizeof(Candidate));
+     if(!session->local_candidates)
+@@ -3281,6 +3894,8 @@ static ChiakiErrorCode http_send_session_message(Session *session, SessionMessag
+         session->console_type == CHIAKI_HOLEPUNCH_CONSOLE_TYPE_PS4 ? "PS4" : "PS5"
+     );
+     CHIAKI_LOGV(session->log, "Message to send: %s", msg_buf);
++    if(session->relay_enabled)
++        return relay_post_session_message(session, msg_buf);
+     CURL *curl = curl_easy_init();
+     if(!curl)
+     {
+@@ -3319,7 +3934,19 @@ static ChiakiErrorCode http_send_session_message(Session *session, SessionMessag
+     if(res != CURLE_OK)
+         CHIAKI_LOGW(session->log, "http_send_session_message: CURL setopt CURLOPT_WRITEDATA failed with CURL error %s", curl_easy_strerror(res));
+ 
+-    res = curl_easy_perform(curl);
++#ifdef __SWITCH__
++    int send_attempts = lunarnx_chiaki_ryubing_compat_enabled() ? 2 : 1;
++#else
++    int send_attempts = 1;
++#endif
++    for(int attempt = 0; attempt < send_attempts; attempt++)
++    {
++        res = curl_easy_perform(curl);
++        if(res != CURLE_OPERATION_TIMEDOUT || attempt + 1 >= send_attempts)
++            break;
++        CHIAKI_LOGW(session->log,
++            "Retrying timed out holepunch session message with the same request ID");
++    }
+     curl_slist_free_all(headers);
+     if (res != CURLE_OK)
+     {
+@@ -3840,7 +4467,7 @@ static ChiakiErrorCode check_candidates(
+     memset(&hints, 0, sizeof(hints));
+     hints.ai_socktype = SOCK_DGRAM;
+     hints.ai_family = AF_UNSPEC;
+-    struct addrinfo *addr_remote;
++    struct addrinfo *addr_remote = NULL;
+     int socks_count = 0;
+     int socks_capacity = 0;
+     chiaki_socket_t *socks = NULL;
+@@ -3942,15 +4569,31 @@ static ChiakiErrorCode check_candidates(
+         responses_received[i] = 0;
+ 
+         sprintf(service_remote, "%d", candidate->port);
+-
+-        if (getaddrinfo(candidate->addr, service_remote, &hints, &addr_remote) != 0)
++        addr_remote = NULL;
++        bool address_resolved = false;
++#ifdef __SWITCH__
++        struct sockaddr_in *numeric_addr = (struct sockaddr_in *)&addrs[i];
++        memset(numeric_addr, 0, sizeof(*numeric_addr));
++        numeric_addr->sin_family = AF_INET;
++        numeric_addr->sin_port = htons(candidate->port);
++        if(inet_pton(AF_INET, candidate->addr, &numeric_addr->sin_addr) == 1)
++        {
++            lens[i] = sizeof(*numeric_addr);
++            address_resolved = true;
++        }
++#endif
++        if(!address_resolved
++            && getaddrinfo(candidate->addr, service_remote, &hints, &addr_remote) != 0)
+         {
+             CHIAKI_LOGE(session->log, "check_candidates: getaddrinfo failed for %s:%d with error " CHIAKI_SOCKET_ERROR_FMT, candidate->addr, candidate->port, CHIAKI_SOCKET_ERROR_VALUE);
+             err = CHIAKI_ERR_UNKNOWN;
+             continue;
+         }
+-        memcpy((struct sockaddr *)&addrs[i], addr_remote->ai_addr, addr_remote->ai_addrlen);
+-        lens[i] = addr_remote->ai_addrlen;
++        if(addr_remote)
++        {
++            memcpy((struct sockaddr *)&addrs[i], addr_remote->ai_addr, addr_remote->ai_addrlen);
++            lens[i] = addr_remote->ai_addrlen;
++        }
+         bool sent = false;
+         switch(((struct sockaddr *)&addrs[i])->sa_family)
+         {
+@@ -3961,7 +4604,8 @@ static ChiakiErrorCode check_candidates(
+                     {
+                         CHIAKI_LOGW(session->log, "check_candidates: Sending request failed for %s:%d (type %d) with error: " CHIAKI_SOCKET_ERROR_FMT, candidate->addr, candidate->port, candidate->type, CHIAKI_SOCKET_ERROR_VALUE);
+                         err = CHIAKI_ERR_NETWORK;
+-                        freeaddrinfo(addr_remote);
++                        if(addr_remote)
++                            freeaddrinfo(addr_remote);
+                         continue;
+                     }
+                 }
+@@ -3992,7 +4636,8 @@ static ChiakiErrorCode check_candidates(
+                     {
+                         CHIAKI_LOGW(session->log, "check_candidates: Sending request failed for %s:%d (type %d) with error: " CHIAKI_SOCKET_ERROR_FMT, candidate->addr, candidate->port, candidate->type, CHIAKI_SOCKET_ERROR_VALUE);
+                         err = CHIAKI_ERR_NETWORK;
+-                        freeaddrinfo(addr_remote);
++                        if(addr_remote)
++                            freeaddrinfo(addr_remote);
+                         continue;
+                     }
+                 }
+@@ -4001,7 +4646,8 @@ static ChiakiErrorCode check_candidates(
+                 CHIAKI_LOGW(session->log, "Unsupported address family, skipping...");
+         }
+         failed = false;
+-        freeaddrinfo(addr_remote);
++        if(addr_remote)
++            freeaddrinfo(addr_remote);
+     }
+     if(failed)
+     {
+@@ -4538,14 +5184,25 @@ static ChiakiErrorCode check_candidates(
+         }
+     }
+ 
+-    err = receive_request_send_response_ps(session, out, selected_candidate, WAIT_RESPONSE_TIMEOUT_SEC);
+-    if(err == CHIAKI_ERR_TIMEOUT)
++    if(session->relay_enabled)
++    {
++        // The relay has already observed and forwarded the PS response. A
++        // second PS request is not guaranteed through a NAT bridge and is not
++        // required once the relay candidate is selected.
++        CHIAKI_LOGV(session->log,
++            "check_candidates: relay candidate selected; skipping follow-up PS request");
++    }
++    else
+     {
+-        if(!responded)
++        err = receive_request_send_response_ps(session, out, selected_candidate, WAIT_RESPONSE_TIMEOUT_SEC);
++        if(err == CHIAKI_ERR_TIMEOUT)
++        {
++            if(!responded)
++                goto cleanup_sockets;
++        }
++        else if(err != CHIAKI_ERR_SUCCESS)
+             goto cleanup_sockets;
+     }
+-    else if(err != CHIAKI_ERR_SUCCESS)
+-        goto cleanup_sockets;
+ 
+ #if !defined(__SWITCH__) && !defined(__ANDROID__)
+     for (size_t i = 0; i < poll_ctx.events_count; i++)
+@@ -4701,7 +5358,15 @@ static ChiakiErrorCode send_response_ps(Session *session, uint8_t *req, chiaki_s
+         xor_bytes(&confirm_buf[0x50], console_addr, 4);
+         xor_bytes(&confirm_buf[0x54], console_port, 2);
+ 
+-        if (send(*sock, (CHIAKI_SOCKET_BUF_TYPE) confirm_buf, sizeof(confirm_buf), 0) < 0)
++        CHIAKI_SSIZET_TYPE sent = send(*sock, (CHIAKI_SOCKET_BUF_TYPE) confirm_buf, sizeof(confirm_buf), 0);
++#ifdef __SWITCH__
++        if(sent < 0 && errno == ECONNREFUSED && lunarnx_chiaki_ryubing_compat_enabled())
++        {
++            CHIAKI_LOGW(session->log, "Retrying confirmation after stale ECONNREFUSED");
++            sent = send(*sock, (CHIAKI_SOCKET_BUF_TYPE) confirm_buf, sizeof(confirm_buf), 0);
++        }
++#endif
++        if(sent < 0)
+         {
+             CHIAKI_LOGE(session->log, "check_candidates: Sending confirmation failed for %s:%d with error: " CHIAKI_SOCKET_ERROR_FMT, candidate->addr, candidate->port, CHIAKI_SOCKET_ERROR_VALUE);
+             return CHIAKI_ERR_NETWORK;
+@@ -5214,24 +5879,25 @@ static ChiakiErrorCode wait_for_session_message_ack(
+         if(session->main_should_stop)
+         {
+             session->main_should_stop = false;
+-            session_message_free(msg);
+             chiaki_mutex_unlock(&session->stop_mutex);
++            clear_notification(session, msg->notification);
++            session_message_free(msg);
+             err = CHIAKI_ERR_CANCELED;
+             return err;
+         }
+         if (msg->req_id != req_id)
+         {
+             CHIAKI_LOGE(session->log, "wait_for_session_message_ack: Got ACK for unexpected request ID %d", msg->req_id);
++            chiaki_mutex_unlock(&session->stop_mutex);
++            clear_notification(session, msg->notification);
+             session_message_free(msg);
+             msg = NULL;
+-            chiaki_mutex_unlock(&session->stop_mutex);
+             continue;
+         }
+         finished = true;
+         chiaki_mutex_unlock(&session->stop_mutex);
+-        chiaki_mutex_lock(&session->notif_mutex);
++        clear_notification(session, msg->notification);
+         session_message_free(msg);
+-        chiaki_mutex_unlock(&session->notif_mutex);
+     }
+ 
+     return err;
+diff --git a/lib/src/remote/rudp.c b/lib/src/remote/rudp.c
+index d2b9c229..545cab90 100644
+--- a/lib/src/remote/rudp.c
++++ b/lib/src/remote/rudp.c
+@@ -680,4 +680,3 @@ static void print_rudp_message_type(RudpInstance *rudp, RudpPacketType type)
+             break;      
+     }
+ }
+-
+diff --git a/lib/src/remote/stun.h b/lib/src/remote/stun.h
+index 81e6d7a0..541ef191 100644
+--- a/lib/src/remote/stun.h
++++ b/lib/src/remote/stun.h
+@@ -529,10 +529,44 @@ static bool stun_get_external_address_from_server(ChiakiLog *log, StunServer *se
+     }
+ 
+     uint8_t binding_resp[256];
+-    CHIAKI_SSIZET_TYPE received = recvfrom(*sock, (CHIAKI_SOCKET_BUF_TYPE)binding_resp, sizeof(binding_resp), 0, NULL, NULL);
+-    if (received < 0) {
+-        CHIAKI_LOGE(log, "remote/stun.h: Failed to receive STUN response, error was " CHIAKI_SOCKET_ERROR_FMT, CHIAKI_SOCKET_ERROR_VALUE);
+-        return false;
++    struct sockaddr_storage source_addr;
++    CHIAKI_SSIZET_TYPE received;
++    uint64_t receive_deadline = chiaki_time_now_monotonic_us()
++        + STUN_REPLY_TIMEOUT_SEC * 1000000ULL;
++    while(true)
++    {
++        socklen_t source_addr_len = sizeof(source_addr);
++        received = recvfrom(
++            *sock,
++            (CHIAKI_SOCKET_BUF_TYPE)binding_resp,
++            sizeof(binding_resp),
++            0,
++            (struct sockaddr *)&source_addr,
++            &source_addr_len);
++        if (received < 0) {
++            CHIAKI_LOGE(log, "remote/stun.h: Failed to receive STUN response, error was " CHIAKI_SOCKET_ERROR_FMT, CHIAKI_SOCKET_ERROR_VALUE);
++            return false;
++        }
++
++        if(received >= STUN_HEADER_SIZE
++            && memcmp(&binding_resp[8], &binding_req[8], STUN_TRANSACTION_ID_LENGTH) != 0)
++        {
++            CHIAKI_LOGV(log, "remote/stun.h: Ignoring stale STUN response with a different transaction ID");
++            uint64_t now = chiaki_time_now_monotonic_us();
++            if(now >= receive_deadline)
++                return false;
++            uint64_t remaining_us = receive_deadline - now;
++#ifdef _WIN32
++            timeout = (int)((remaining_us + 999) / 1000);
++#else
++            timeout.tv_sec = (time_t)(remaining_us / 1000000ULL);
++            timeout.tv_usec = (suseconds_t)(remaining_us % 1000000ULL);
++#endif
++            if (setsockopt(*sock, SOL_SOCKET, SO_RCVTIMEO, (const CHIAKI_SOCKET_BUF_TYPE)&timeout, sizeof(timeout)) < 0)
++                return false;
++            continue;
++        }
++        break;
+     }
+ 
+     if(received < STUN_HEADER_SIZE)
+@@ -559,11 +593,6 @@ static bool stun_get_external_address_from_server(ChiakiLog *log, StunServer *se
+         return false;
+     }
+ 
+-    if (memcmp(&binding_resp[8], &binding_req[8], STUN_TRANSACTION_ID_LENGTH) != 0) {
+-        CHIAKI_LOGE(log, "remote/stun.h: Received STUN response with invalid transaction ID");
+-        return false;
+-    }
+-
+     //uint16_t response_attrs_length = ntohs(*(uint16_t*)(&binding_resp[2]));
+     uint16_t response_pos = STUN_HEADER_SIZE;
+     // Check we can read 4 bytes of attribute data
+diff --git a/lib/src/session.c b/lib/src/session.c
+index 41c6bbf0..3560933c 100644
+--- a/lib/src/session.c
++++ b/lib/src/session.c
+@@ -187,7 +187,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_session_init(ChiakiSession *session, Chiaki
+ 	ChiakiErrorCode err = chiaki_cond_init(&session->state_cond);
+ 	if(err != CHIAKI_ERR_SUCCESS)
+ 		goto error;
+-		
++
+ 	err = chiaki_mutex_init(&session->state_mutex, false);
+ 	if(err != CHIAKI_ERR_SUCCESS)
+ 		goto error_state_cond;
+@@ -568,19 +568,24 @@ static void *session_thread_func(void *arg)
+ 	chiaki_socket_t *data_sock = NULL;
+ 	if(session->rudp)
+ 	{
+-		ChiakiErrorCode err = holepunch_session_create_offer(session->holepunch_session);
+-		if (err != CHIAKI_ERR_SUCCESS)
++		chiaki_mutex_unlock(&session->state_mutex);
++		ChiakiErrorCode offer_err = holepunch_session_create_offer(session->holepunch_session);
++		if (offer_err != CHIAKI_ERR_SUCCESS)
+ 		{
++			chiaki_mutex_lock(&session->state_mutex);
+ 			CHIAKI_LOGE(session->log, "!! Failed to create offer msg for data connection");
+-			CHECK_STOP(quit_ctrl);
++			QUIT(quit_ctrl);
+ 		}
+ 		CHIAKI_LOGI(session->log, "Punching hole for data connection");
+ 		ChiakiEvent event_start = { 0 };
+ 		event_start.type = CHIAKI_EVENT_HOLEPUNCH;
+ 		event_start.data_holepunch.finished = false;
+ 		chiaki_session_send_event(session, &event_start);
+-		err = chiaki_holepunch_session_punch_hole(session->holepunch_session, CHIAKI_HOLEPUNCH_PORT_TYPE_DATA);
+-		if (err != CHIAKI_ERR_SUCCESS)
++		ChiakiErrorCode punch_err = CHIAKI_ERR_UNKNOWN;
++		if(offer_err == CHIAKI_ERR_SUCCESS)
++			punch_err = chiaki_holepunch_session_punch_hole(session->holepunch_session, CHIAKI_HOLEPUNCH_PORT_TYPE_DATA);
++		chiaki_mutex_lock(&session->state_mutex);
++		if (punch_err != CHIAKI_ERR_SUCCESS)
+ 		{
+ 			CHIAKI_LOGE(session->log, "!! Failed to punch hole for data connection.");
+ 			QUIT(quit_ctrl);
+@@ -644,7 +649,8 @@ ctrl_failed:
+ 		session->rtt_us = 1000;
+ 		session->dontfrag = false;
+ 	}
+-#endif
++	#endif
++
+ 	if(session->rudp)
+ 	{
+ 		ChiakiErrorCode err;
+diff --git a/lib/src/takion.c b/lib/src/takion.c
+index 38f9f5df..5734f687 100644
+--- a/lib/src/takion.c
++++ b/lib/src/takion.c
+@@ -239,7 +239,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+ 	takion->enable_dualsense = info->enable_dualsense;
+ 
+ 	CHIAKI_LOGI(takion->log, "Takion connecting (version %u)", (unsigned int)info->protocol_version);
++	#ifdef __SWITCH__
++	bool mac_dontfrag = false;
++#else
+ 	bool mac_dontfrag = true;
++#endif
+ 
+ 	ChiakiErrorCode err = chiaki_stop_pipe_init(&takion->stop_pipe);
+ 	if(err != CHIAKI_ERR_SUCCESS)
+@@ -261,9 +265,13 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+ 		int r = setsockopt(takion->sock, SOL_SOCKET, SO_RCVBUF, (const CHIAKI_SOCKET_BUF_TYPE)&rcvbuf_val, sizeof(rcvbuf_val));
+ 		if(r < 0)
+ 		{
++#ifdef __SWITCH__
++			CHIAKI_LOGW(takion->log, "Takion could not set SO_RCVBUF on Switch, continuing with default buffer");
++#else
+ 			CHIAKI_LOGE(takion->log, "Takion failed to setsockopt SO_RCVBUF: " CHIAKI_SOCKET_ERROR_FMT, CHIAKI_SOCKET_ERROR_VALUE);
+ 			ret = CHIAKI_ERR_NETWORK;
+ 			goto error_sock;
++#endif
+ 		}
+ 
+ #if defined(__APPLE__) && TARGET_OS_OSX
+@@ -303,7 +311,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+ 				ret = CHIAKI_ERR_NETWORK;
+ 				goto error_sock;
+ 			}
++#ifdef __SWITCH__
++			CHIAKI_LOGI(takion->log, "Takion skipped Don't Fragment Bit on Switch");
++#else
+ 			CHIAKI_LOGI(takion->log, "Takion enabled Don't Fragment Bit");
++#endif
+ #endif
+ 		}
+ 		else
+@@ -332,7 +344,11 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+ 				ret = CHIAKI_ERR_NETWORK;
+ 				goto error_sock;
+ 			}
++#ifdef __SWITCH__
++			CHIAKI_LOGI(takion->log, "Takion skipped Don't Fragment Bit disable on Switch");
++#else
+ 			CHIAKI_LOGI(takion->log, "Takion disabled Don't Fragment Bit");
++#endif
+ #endif
+ 		}
+ 	}
+diff --git a/lib/src/thread.c b/lib/src/thread.c
+index e4f53472..c0da22c6 100644
+--- a/lib/src/thread.c
++++ b/lib/src/thread.c
+@@ -82,8 +82,21 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_thread_create(ChiakiThread *thread, ChiakiT
+ #ifdef __SWITCH__
+ 	if(get_thread_limit() <= 1)
+ 		return CHIAKI_ERR_THREAD;
+-#endif
++	// libnx pthread default stack is small; RUDP/crypto/JSON paths in the
++	// session thread overflow it. Allocate a generous fixed stack explicitly.
++	pthread_attr_t attr;
++	if(pthread_attr_init(&attr) != 0)
++		return CHIAKI_ERR_THREAD;
++	if(pthread_attr_setstacksize(&attr, 512 * 1024) != 0)
++	{
++		pthread_attr_destroy(&attr);
++		return CHIAKI_ERR_THREAD;
++	}
++	int r = pthread_create(&thread->thread, &attr, func, arg);
++	pthread_attr_destroy(&attr);
++#else
+ 	int r = pthread_create(&thread->thread, NULL, func, arg);
++#endif
+ 	if(r != 0)
+ 		return CHIAKI_ERR_THREAD;
+ #endif

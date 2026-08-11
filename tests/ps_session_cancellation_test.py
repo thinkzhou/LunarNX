@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SESSION = (ROOT / "src/ps/ps_stream_session.cpp").read_text()
 CONTROLLER = (ROOT / "src/ps/ps_stream_controller.cpp").read_text()
+REMOTE = (ROOT / "src/ps/ps_remote_connector.cpp").read_text()
 ACTIVITY = (ROOT / "src/tools/ps_mock_lifecycle_activity.cpp").read_text()
 
 
@@ -39,5 +40,9 @@ require("mock_session_" not in request_cancel,
 require("std::thread cancel_thread" in ACTIVITY and
         "cancel_race=ok" in ACTIVITY,
         "Switch mock lifecycle probe must execute a start/cancel/stop race")
+require("cancel_requested_ = false" not in REMOTE and
+        "connect skipped: already cancelled" in REMOTE and
+        "chiaki_holepunch_main_thread_cancel(session_, true)" in REMOTE,
+        "remote connect must preserve cancellation across connector publication")
 
 print("PS session cancellation test passed")

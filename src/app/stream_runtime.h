@@ -18,6 +18,11 @@ enum class StreamState {
     Error,
 };
 
+enum class StreamPlatform {
+    Xbox,
+    PlayStation,
+};
+
 // Protocol-neutral runtime surface consumed by the in-stream UI. Protocol
 // discovery, registration and session setup intentionally remain outside this
 // boundary.
@@ -32,6 +37,7 @@ public:
     virtual int getStreamWidth() const = 0;
     virtual int getStreamHeight() const = 0;
     virtual stream::VideoBackend getDefaultVideoBackend() const = 0;
+    virtual StreamPlatform getStreamPlatform() const = 0;
 
     virtual void setInputSuppressed(bool suppressed) = 0;
     virtual void requestPlatformHomeButton() = 0;

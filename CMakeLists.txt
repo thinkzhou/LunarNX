@@ -22,6 +22,8 @@ endif()
 # Source files (shared between Switch and Desktop)
 # =============================================================================
 set(LUNARNX_SOURCES
+    lib/qrcodegen/qrcodegen.cpp
+
     # Auth
     src/auth/auth_manager.cpp
     src/auth/token_store.cpp
@@ -57,6 +59,22 @@ set(LUNARNX_SOURCES
     src/app/xbox_session_client.cpp
     src/app/xbox_stream_session.cpp
 
+    # PlayStation
+    src/ps/chiaki_log_adapter.cpp
+    src/ps/ps_credentials.cpp
+    src/ps/ps_discovery.cpp
+    src/ps/ps_registration.cpp
+    src/ps/ps_manager.cpp
+    src/ps/ps_input_mapper.cpp
+    src/ps/ps_media_bridge.cpp
+    src/ps/ps_stream_session.cpp
+    src/ps/ps_stream_controller.cpp
+    src/ps/psn_auth_manager.cpp
+    src/ps/psn_auth_utils.cpp
+    src/ps/ps_console_repository.cpp
+    src/ps/ps_console_resolver.cpp
+    src/ps/ps_remote_connector.cpp
+
     # JSON
     lib/cJSON.c
 
@@ -90,6 +108,12 @@ if(PLATFORM_SWITCH)
         src/main.cpp
         src/ui/auth_activity.cpp
         src/ui/main_activity.cpp
+        src/ui/qr_code_view.cpp
+        src/ui/platform_activity.cpp
+        src/ui/ps_activity.cpp
+        src/ui/ps_settings_activity.cpp
+        src/ui/ps_registration_activity.cpp
+        src/ui/psn_login_activity.cpp
         src/ui/stream_view.cpp
         src/ui/perf_overlay.cpp
         lib/stubs/mbedtls_timing.c
@@ -97,6 +121,11 @@ if(PLATFORM_SWITCH)
     )
 
     add_executable(LunarNX ${LUNARNX_SOURCES})
+
+    target_compile_definitions(LunarNX PRIVATE
+        CHIAKI_LIB_ENABLE_MBEDTLS
+        CHIAKI_LIB_ENABLE_OPUS=1
+    )
 
     target_include_directories(LunarNX PRIVATE
         src/

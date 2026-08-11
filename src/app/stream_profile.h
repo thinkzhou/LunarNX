@@ -21,6 +21,7 @@ struct StreamProfile {
     // for 1080p); callers can use 30000 for the 1080p HQ tier.
     int bitrate_kbps = 0;
     std::string os_name = "windows";
+    std::string locale = "en-US";
     bool prefer_ipv6 = false;
     std::string base_url;  // Override GSSV API base URL (empty = use default)
     // MSAL access token used for cloud ReadyToConnect → /connect (XStreaming "lpt").

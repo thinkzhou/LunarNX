@@ -73,8 +73,15 @@ bool startNetworkWorker(const char* name, std::function<void()> task, size_t sta
 
     lunar::diagnosticLog("network-worker", "%s attr stack begin",
                          name ? name : "network");
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    pthread_attr_setstacksize(&attr, stack_size);
+    rc = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (rc == 0) rc = pthread_attr_setstacksize(&attr, stack_size);
+    if (rc != 0) {
+        pthread_attr_destroy(&attr);
+        delete heap_task;
+        lunar::diagnosticLog("network-worker", "%s attr setup failed rc=%d",
+                             name ? name : "network", rc);
+        return false;
+    }
 
     pthread_t thread{};
     lunar::diagnosticLog("network-worker", "%s pthread create begin",

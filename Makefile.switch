@@ -4,6 +4,8 @@ PORTLIBS   = $(DEVKITPRO)/portlibs/switch
 LIBNX      = $(DEVKITPRO)/libnx
 BOREALIS   = lib/borealis
 
+.DEFAULT_GOAL := all
+
 # WebRTC provider: "legacy" (old lib/libpeer) or "upstream" (clean github_repos/libpeer)
 WEBRTC_PROVIDER ?= legacy
 
@@ -30,12 +32,14 @@ endif
 NETWORK_DIAG ?= 0
 XBOX_RESPONSE_TRACE ?= 0
 APP_DIAG ?= 0
-DROP_DIAG ?= 1
+DROP_DIAG ?= 0
+PS_MOCK_REPLAY ?= 0
 IPV6 ?= 0
-CURL_PROVIDER ?= wiliwili
+CURL_PROVIDER ?= moonlight
 CURL_VERIFY ?= 0
 CURL_VERBOSE ?= 0
 CURL_TIMEOUT_MS ?= 120000
+APP_VERSION ?= 0.1.0
 EXTRA_DFLAGS ?=
 
 ifeq ($(IPV6),0)
@@ -83,19 +87,23 @@ DFLAGS = -D__SWITCH__ -DHAVE_LIBNX -DSWITCH -DSTBI_NO_THREAD_LOCALS \
          -DLUNARNX_XBOX_RESPONSE_TRACE=$(XBOX_RESPONSE_TRACE) \
          -DLUNARNX_DIAGNOSTIC_LOG=$(APP_DIAG) \
          -DLUNARNX_DROP_DIAGNOSTIC_LOG=$(DROP_DIAG) \
+         -DLUNARNX_PS_MOCK_REPLAY=$(PS_MOCK_REPLAY) \
          -DLUNARNX_CURL_VERIFY_SSL=$(CURL_VERIFY) \
          -DLUNARNX_CURL_VERBOSE=$(CURL_VERBOSE) \
          -DLUNARNX_CURL_TIMEOUT_MS=$(CURL_TIMEOUT_MS) \
-         -DLUNARNX_CURL_PROVIDER=\"$(CURL_PROVIDER)\" $(CURL_DFLAGS) $(EXTRA_DFLAGS)
+         -DLUNARNX_CURL_PROVIDER=\"$(CURL_PROVIDER)\" $(CURL_DFLAGS) $(EXTRA_DFLAGS) \
+	         -DINET6_ADDRSTRLEN=46 -DCHIAKI_LIB_ENABLE_LIBNX_CRYPTO -DCHIAKI_LIB_ENABLE_OPUS=1 -DLUNARNX_VERSION=\"$(APP_VERSION)\"
 COMMON_FLAGS = $(ARCH) -ffunction-sections -fdata-sections $(DFLAGS) -O2 -Wall -ftls-model=local-exec
 CFLAGS  = $(COMMON_FLAGS) \
           -Wno-implicit-function-declaration -Wno-builtin-declaration-mismatch
 CXXFLAGS = $(COMMON_FLAGS) -Wno-builtin-declaration-mismatch -std=gnu++20
-LDFLAGS = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,-Map,$(BUILD)/LunarNX.map
+LDFLAGS = -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,-Map,$(BUILD)/LunarNX.map \
+    -Wl,--wrap=curl_easy_init
 
 INCDIRS = -Isrc -Ilib -Ilib/switch/include \
     -I$(MBEDTLS)/include \
     -I$(LIBNX)/include $(CURL_INCDIRS) -I$(PORTLIBS)/include/zlib \
+    -Ilib/temp_switch_portlibs/include \
     -I$(BOREALIS)/library/include -I$(BOREALIS)/library/include/borealis/extern \
     -I$(BOREALIS)/library/include/borealis/extern/nanovg \
     -I$(BOREALIS)/library/include/borealis/extern/tinyxml2 \
@@ -108,19 +116,22 @@ INCDIRS = -Isrc -Ilib -Ilib/switch/include \
 
 LIBDIRS = $(MBEDTLS_LIBDIR) \
     -L$(LIBNX)/lib -L$(PORTLIBS)/lib \
+    -Llib/temp_switch_portlibs \
     -L$(BOREALIS)/build_switch/library \
     -L$(BOREALIS)/build_switch/library/lib/extern/fmt \
     -L$(BOREALIS)/build_switch/library/lib/extern/yoga/yoga \
     $(LIBPEER_LIBDIRS)
 
 LIBS = -Wl,--start-group -lborealis -lfmt -lyogacore -ltinyxml2 -ldeko3d -lsrtp2 \
-    -lopus -lz -lzstd \
-    $(CURL_LIB) \
+    -lopus -lz -lzstd -lbz2 \
+    $(CURL_LIB) -ljson-c -lminiupnpc \
     $(FFMPEG_LIBS) \
+    lib/switch/libchiaki.a lib/switch/libgf_complete.a \
+    lib/switch/libjerasure.a lib/switch/libprotobuf-nanopb.a \
     $(USRSCTP_LIBS) \
     -lmbedtls -lmbedx509 -lmbedcrypto -lnx -Wl,--end-group
 
-BUILD   = build/switch
+BUILD   ?= build/switch
 TARGET  = $(BUILD)/LunarNX.nro
 ROMFS_STAGE = $(BUILD)/romfs
 ROMFS_STAGE_STAMP = $(BUILD)/romfs.stamp
@@ -132,16 +143,25 @@ ROMFS_SHADERS = romfs/shaders/basic_vsh.dksh \
     romfs/shaders/upscaling_fsh.dksh \
     romfs/shaders/rcas_fsh.dksh
 
-CXX_SRCS = src/main.cpp src/app/ice_candidate_processor.cpp src/app/stream_controller.cpp \
+CXX_SRCS = src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_processor.cpp src/app/stream_controller.cpp \
     src/app/web_rtc_transport.cpp \
     src/app/xbox_channel_manager.cpp \
     src/app/xbox_session_client.cpp src/app/xbox_stream_session.cpp \
-    src/ui/auth_activity.cpp src/ui/main_activity.cpp src/ui/stream_view.cpp src/ui/stream_loading_activity.cpp src/ui/stream_settings_activity.cpp src/ui/i18n.cpp src/ui/ui_style.cpp src/ui/qr_code.cpp src/ui/poster_loader.cpp src/ui/recycling_list.cpp \
+    src/ui/auth_activity.cpp src/ui/main_activity.cpp src/ui/stream_view.cpp src/ui/stream_loading_activity.cpp src/ui/stream_settings_activity.cpp src/ui/i18n.cpp src/ui/ui_style.cpp src/ui/qr_code.cpp src/ui/qr_code_view.cpp src/ui/poster_loader.cpp src/ui/recycling_list.cpp \
     src/ui/perf_overlay.cpp src/ui/stream_overlay.cpp \
+    src/ui/platform_activity.cpp src/ui/ps_activity.cpp src/ui/ps_settings_activity.cpp src/ui/ps_registration_activity.cpp src/ui/psn_login_activity.cpp src/ui/about_activity.cpp \
     src/input/gamepad_reader.cpp src/input/xinput_encoder.cpp src/input/rumble_controller.cpp \
     src/auth/token_store.cpp src/auth/xbox_signing.cpp src/auth/auth_manager.cpp src/auth/xbox_auth_errors.cpp \
     src/api/http_client.cpp src/api/xbox_api_client.cpp \
-    src/platform/network_worker.cpp \
+    src/platform/network_worker.cpp src/platform/chiaki_curl_compat.cpp \
+    src/ps/chiaki_log_adapter.cpp src/ps/ps_credentials.cpp \
+    src/ps/ps_discovery.cpp src/ps/ps_registration.cpp src/ps/ps_manager.cpp \
+    src/ps/ps_input_mapper.cpp src/ps/ps_media_bridge.cpp \
+    src/ps/ps_mock_replay_session.cpp \
+    src/ps/ps_stream_session.cpp src/ps/ps_stream_controller.cpp \
+    src/ps/psn_auth_manager.cpp src/ps/psn_auth_utils.cpp src/ps/ps_console_repository.cpp \
+    src/ps/ps_console_resolver.cpp src/ps/ps_remote_connector.cpp \
+    src/tools/ps_mock_lifecycle_activity.cpp \
     src/webrtc/peer_manager.cpp src/webrtc/video_rtp_jitter_buffer.cpp \
     src/webrtc/xbox_input_feedback.cpp \
     src/stream/stream_backend_provider.cpp src/stream/media_pipeline.cpp \
@@ -172,20 +192,25 @@ RHO_CXX_SRCS = src/rho/rho_main.cpp src/stream/audio_player.cpp
 RHO_C_SRCS = src/platform/switch_wrapper.c lib/stubs/dav1d_stubs.c
 RHO_CXX_OBJS = $(RHO_CXX_SRCS:%.cpp=$(BUILD)/%.o)
 RHO_C_OBJS   = $(RHO_C_SRCS:%.c=$(BUILD)/%.o)
+DEPFILES = $(sort $(ALL_OBJS:.o=.d) $(RHO_CXX_OBJS:.o=.d) $(RHO_C_OBJS:.o=.d))
+
+-include $(DEPFILES)
+
+$(ALL_OBJS) $(RHO_CXX_OBJS) $(RHO_C_OBJS): Makefile.switch
 
 RHO_LIBS = -Wl,--start-group -lborealis -lfmt -lyogacore -ltinyxml2 -ldeko3d \
     -lz -lzstd -lbz2 -lopus \
     $(FFMPEG_LIBS) \
     -lmbedtls -lmbedx509 -lmbedcrypto -lnx -Wl,--end-group
 
-.PHONY: all clean rho
+.PHONY: all clean rho chiaki-abi-check
 
 all: $(TARGET)
 	@echo "=== Switch Build Complete ===" && ls -lh $(TARGET)
 
 $(TARGET): $(BUILD)/LunarNX.elf $(ROMFS_STAGE_STAMP)
 	$(OBJCOPY) -O binary $< $(BUILD)/LunarNX.bin
-	$(NACP) --create LunarNX "LunarNX Team" 0.1.0 $(BUILD)/nacp.tmp
+	$(NACP) --create LunarNX "LunarNX Team" $(APP_VERSION) $(BUILD)/nacp.tmp
 	$(ELF2NRO) $< $@ --icon=res/icon.jpg --nacp=$(BUILD)/nacp.tmp --romfsdir=$(ROMFS_STAGE)
 
 $(ROMFS_STAGE_STAMP): $(ROMFS_SHADERS) $(BOREALIS_RESOURCES) $(APP_ROMFS_FILES)
@@ -215,17 +240,20 @@ romfs/shaders/rcas_fsh.dksh: shaders/rcas_fsh.glsl
 	@mkdir -p $(dir $@)
 	$(UAM) -s frag -o $@ $<
 
+chiaki-abi-check:
+	python3 tests/chiaki_switch_abi_test.py
+
 $(BUILD)/LunarNX.elf: $(ALL_OBJS)
 	@mkdir -p $(BUILD)
 	$(CXX) $(LDFLAGS) $(ALL_OBJS) $(LIBDIRS) $(LIBS) -o $@
 
 $(BUILD)/%.o: %.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(INCDIRS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INCDIRS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCDIRS) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCDIRS) -MMD -MP -MF $(@:.o=.d) -c $< -o $@
 
 clean:
 	rm -rf $(BUILD)
@@ -241,7 +269,7 @@ rho: $(RHO_TARGET)
 
 $(RHO_TARGET): $(RHO_ELF) $(ROMFS_STAGE_STAMP)
 	$(OBJCOPY) -O binary $< $(BUILD)/Rho.bin
-	$(NACP) --create Rho "LunarNX Team" 0.1.0 $(BUILD)/nacp_rho.tmp
+	$(NACP) --create Rho "LunarNX Team" $(APP_VERSION) $(BUILD)/nacp_rho.tmp
 	$(ELF2NRO) $< $@ --icon=res/icon.jpg --nacp=$(BUILD)/nacp_rho.tmp --romfsdir=$(ROMFS_STAGE)
 
 $(RHO_ELF): $(RHO_CXX_OBJS) $(RHO_C_OBJS)

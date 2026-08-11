@@ -34,6 +34,12 @@ struct PerfStats {
     std::atomic<uint64_t> video_jitter_us{0};
     // RTT measured by the selected ICE pair's Binding connectivity check.
     std::atomic<uint32_t> network_rtt_ms{0};
+    // Native chiaki PS metrics. These are separate from Xbox/WebRTC RTP
+    // counters because chiaki exposes transport quality at session level.
+    std::atomic<uint32_t> ps_rtt_ms{0};
+    std::atomic<float> ps_measured_bitrate_mbps{0.0f};
+    std::atomic<float> ps_packet_loss_fraction{0.0f};
+    std::atomic<uint32_t> ps_frames_lost{0};
     std::atomic<uint32_t> video_decode_errors{0};
 
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
@@ -97,7 +103,13 @@ struct PerfStats {
     std::atomic<bool> recovery_pli_logged{false};
 #endif
 
-    std::atomic<uint64_t> decode_total_us{0};
+    // Preserve the legacy Xbox microsecond counter while PS uses nanosecond
+    // precision for short asynchronous NVDEC submissions. Keep decoder
+    // counters on their own cache line: the RTP receive thread updates the
+    // preceding video transit/jitter counters for every packet, and sharing
+    // that line causes avoidable cross-core invalidation on Switch.
+    alignas(64) std::atomic<uint64_t> decode_total_us{0};
+    std::atomic<uint64_t> decode_total_ns{0};
     std::atomic<uint32_t> decode_samples{0};
     std::atomic<uint64_t> render_submit_total_us{0};
     std::atomic<uint32_t> render_submit_samples{0};
@@ -143,6 +155,8 @@ struct PerfStats {
         audio_latency_ms = 0; audio_latency_high_watermark_ms = 0;
         audio_buffer_ms = 0; audio_overflow_ms = 0; input_packets = 0;
         video_packets = 0; audio_packets = 0;
+        ps_rtt_ms = 0; ps_measured_bitrate_mbps = 0.0f;
+        ps_packet_loss_fraction = 0.0f; ps_frames_lost = 0;
         encoded_video_bytes = 0;
         received_video_bytes = 0;
         video_frame_drops = 0; video_sync_drops = 0; video_queue_drops = 0;
@@ -187,7 +201,7 @@ struct PerfStats {
         active_loss_started_ms = 0; recovery_display_pending = false;
         recovery_pli_logged = false;
 #endif
-        decode_total_us = 0; decode_samples = 0;
+        decode_total_us = 0; decode_total_ns = 0; decode_samples = 0;
         render_submit_total_us = 0; render_submit_samples = 0;
         post_processed_frames = 0; post_process_total_us = 0; post_process_samples = 0;
         dithered_frames = 0; dithering_total_us = 0; dithering_samples = 0;
@@ -215,7 +229,7 @@ struct PerfStats {
     float avg_decode_ms() const {
         auto s = decode_samples.load();
         if (s == 0) return 0;
-        return (decode_total_us.load() / (float)s) / 1000.0f;
+        return (decode_total_ns.load() / (float)s) / 1000000.0f;
     }
 
     float avg_render_submit_ms() const {
@@ -299,6 +313,13 @@ struct PerfStats {
     }
     void recordVideoNetworkBytes(size_t bytes) { received_video_bytes += bytes; }
     void recordAudioPacket() { audio_packets++; }
+    void recordPsTransportStats(uint32_t rtt_ms, float bitrate_mbps,
+                                float packet_loss, uint32_t frames_lost) {
+        ps_rtt_ms = rtt_ms;
+        ps_measured_bitrate_mbps = bitrate_mbps;
+        ps_packet_loss_fraction = packet_loss;
+        ps_frames_lost = frames_lost;
+    }
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     template <typename T>
     static void recordMaximum(std::atomic<T>& target, T sample) {
@@ -355,10 +376,21 @@ struct PerfStats {
     }
     void recordDecodeLatency(uint64_t us) {
         decode_total_us += us;
+        decode_total_ns += us * 1000ULL;
         decode_samples++;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         last_decode_us = us;
         recordMaximum(decode_window_max_us, us);
+#endif
+    }
+    void recordDecodeLatencyNs(uint64_t ns) {
+        decode_total_us += ns / 1000ULL;
+        decode_total_ns += ns;
+        decode_samples++;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+        last_decode_us = ns / 1000ULL;
+        recordMaximum(decode_window_max_us,
+                      static_cast<uint64_t>(ns / 1000ULL));
 #endif
     }
     void recordRenderSubmit(uint64_t us) {

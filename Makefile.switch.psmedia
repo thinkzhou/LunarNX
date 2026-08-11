@@ -1,0 +1,52 @@
+DEVKITPRO ?= /opt/devkitpro
+.DEFAULT_GOAL := psmedia
+APP_DIAG ?= 1
+include Makefile.switch
+
+PSMEDIA_BACKEND ?= software
+ifeq ($(PSMEDIA_BACKEND),software)
+PSMEDIA_BACKEND_DFLAG = -DLUNARNX_PSMEDIA_BACKEND=2
+else ifeq ($(PSMEDIA_BACKEND),copyout)
+PSMEDIA_BACKEND_DFLAG = -DLUNARNX_PSMEDIA_BACKEND=1
+else ifeq ($(PSMEDIA_BACKEND),zerocopy)
+PSMEDIA_BACKEND_DFLAG = -DLUNARNX_PSMEDIA_BACKEND=0
+else
+$(error Unsupported PSMEDIA_BACKEND=$(PSMEDIA_BACKEND). Use software, copyout, or zerocopy)
+endif
+
+PSMEDIA_BUILD = build/switch-psmedia-$(PSMEDIA_BACKEND)
+PSMEDIA_TARGET = $(PSMEDIA_BUILD)/LunarNXPsMediaReplay.nro
+PSMEDIA_ELF = $(PSMEDIA_BUILD)/LunarNXPsMediaReplay.elf
+PSMEDIA_SRCS = src/tools/ps_media_replay.cpp \
+    src/ps/chiaki_log_adapter.cpp src/ps/ps_media_bridge.cpp \
+    src/stream/stream_backend_provider.cpp src/stream/media_pipeline.cpp \
+    src/stream/audio_packet_reorder.cpp src/stream/video_decoder.cpp \
+    src/stream/audio_decoder.cpp src/stream/video_renderer.cpp \
+    src/stream/software_video_frame.cpp src/stream/audio_player.cpp \
+    src/stream/av_sync.cpp
+PSMEDIA_OBJS = $(PSMEDIA_SRCS:%.cpp=$(PSMEDIA_BUILD)/%.o) \
+    $(PSMEDIA_BUILD)/src/platform/switch_wrapper.o \
+    $(PSMEDIA_BUILD)/lib/stubs/dav1d_stubs.o
+PSMEDIA_LIBS = $(subst -lz -lzstd,-lz -lzstd -lbz2,$(LIBS))
+
+.PHONY: psmedia
+psmedia: $(PSMEDIA_TARGET)
+	@echo "=== PS Media Replay Build Complete ===" && ls -lh $(PSMEDIA_TARGET)
+
+$(PSMEDIA_TARGET): $(PSMEDIA_ELF) $(ROMFS_STAGE_STAMP)
+	$(OBJCOPY) -O binary $< $(PSMEDIA_BUILD)/LunarNXPsMediaReplay.bin
+	$(NACP) --create LunarNXPsMediaReplay "LunarNX Team" 0.1.0 $(PSMEDIA_BUILD)/nacp.tmp
+	$(ELF2NRO) $< $@ --icon=res/icon.jpg --nacp=$(PSMEDIA_BUILD)/nacp.tmp --romfsdir=$(ROMFS_STAGE)
+
+$(PSMEDIA_ELF): $(PSMEDIA_OBJS)
+	@mkdir -p $(PSMEDIA_BUILD)
+	$(CXX) -specs=$(LIBNX)/switch.specs -g $(ARCH) -Wl,-Map,$(PSMEDIA_BUILD)/LunarNXPsMediaReplay.map \
+	    $(PSMEDIA_OBJS) $(LIBDIRS) $(PSMEDIA_LIBS) -o $@
+
+$(PSMEDIA_BUILD)/%.o: %.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(PSMEDIA_BACKEND_DFLAG) $(INCDIRS) -c $< -o $@
+
+$(PSMEDIA_BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCDIRS) -c $< -o $@

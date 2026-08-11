@@ -41,7 +41,7 @@ BUILD    = build/pc
 TARGET   = $(BUILD)/LunarNX_Desktop
 DEPFLAGS = -MMD -MP -MF $@.d
 
-C_SRCS   = lib/cJSON.c \
+C_SRCS   = lib/cJSON.c lib/stubs/chiaki_holepunch_stubs.c \
            lib/libpeer/src/address.c lib/libpeer/src/agent.c lib/libpeer/src/base64.c \
            lib/libpeer/src/dtls_srtp.c lib/libpeer/src/ice.c lib/libpeer/src/mdns.c \
            lib/libpeer/src/peer_connection.c lib/libpeer/src/peer.c lib/libpeer/src/ports.c \
@@ -49,7 +49,7 @@ C_SRCS   = lib/cJSON.c \
            lib/libpeer/src/sdp.c lib/libpeer/src/socket.c lib/libpeer/src/stun.c \
            lib/libpeer/src/ssl_transport.c lib/libpeer/src/utils.c
 
-CXX_SRCS = src/platform/desktop_main.cpp \
+CXX_SRCS = src/platform/desktop_main.cpp lib/qrcodegen/qrcodegen.cpp \
            src/app/ice_candidate_processor.cpp \
            src/app/stream_controller.cpp \
            src/app/web_rtc_transport.cpp \
@@ -60,6 +60,12 @@ CXX_SRCS = src/platform/desktop_main.cpp \
            src/auth/xbox_auth_errors.cpp \
            src/api/xbox_api_client.cpp src/api/http_client.cpp \
            src/platform/network_worker.cpp \
+           src/ps/chiaki_log_adapter.cpp src/ps/ps_credentials.cpp \
+           src/ps/ps_discovery.cpp src/ps/ps_registration.cpp src/ps/ps_manager.cpp \
+           src/ps/ps_input_mapper.cpp src/ps/ps_media_bridge.cpp \
+           src/ps/ps_stream_session.cpp src/ps/ps_stream_controller.cpp \
+           src/ps/psn_auth_manager.cpp src/ps/psn_auth_utils.cpp src/ps/ps_console_repository.cpp \
+           src/ps/ps_console_resolver.cpp src/ps/ps_remote_connector.cpp \
 	           src/webrtc/peer_manager.cpp src/webrtc/video_rtp_jitter_buffer.cpp \
 	           src/webrtc/xbox_input_feedback.cpp \
            src/stream/stream_backend_provider.cpp src/stream/media_pipeline.cpp \
@@ -158,8 +164,12 @@ STUN_ICE_TEST_OBJS = $(BUILD)/tests/stun_ice_attributes_test.o \
 
 AUTH_UI_TEST_OBJS = $(BUILD)/tests/auth_ui_test.o \
 	            $(BUILD)/src/ui/qr_code.o \
+	            $(BUILD)/lib/qrcodegen/qrcodegen.o \
 	            $(BUILD)/src/auth/xbox_auth_errors.o \
 	            $(BUILD)/lib/cJSON.o
+
+PSN_AUTH_TEST_OBJS = $(BUILD)/tests/psn_auth_utils_test.o \
+	             $(BUILD)/src/ps/psn_auth_utils.o
 
 SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
                  $(BUILD)/src/auth/auth_manager.o $(BUILD)/src/auth/token_store.o \
@@ -175,7 +185,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 RHO_SRCS = src/rho/rho_main.cpp
 RHO_OBJS = $(RHO_SRCS:%.cpp=$(BUILD)/%.o)
 
-.PHONY: xcloud_session_support_test all clean run auth_test stream_tests h264_rtp_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
+.PHONY: xcloud_session_support_test all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
 
 all:  $(TARGET)
 	@echo "=== Desktop Build Complete ==="
@@ -204,6 +214,11 @@ auth_test: $(AUTH_TEST_OBJS)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/lunar_auth_test $(AUTH_TEST_OBJS) $(LDFLAGS)
 	@echo "=== Auth Test Build Complete ==="
 	@ls -lh $(BUILD)/lunar_auth_test
+
+psn_auth_tests: $(PSN_AUTH_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/psn_auth_utils_test $(PSN_AUTH_TEST_OBJS)
+	./$(BUILD)/psn_auth_utils_test
 
 xcloud_session_support_test: $(XCLOUD_TEST_OBJS)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/$@ $(XCLOUD_TEST_OBJS)

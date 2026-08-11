@@ -73,6 +73,7 @@ struct MediaPipelineOptions {
     PostProcessMode post_process_mode = PostProcessMode::Off;
     bool dithering_enabled = false;
     float dithering_strength = 3.0f;
+    bool hold_non_target_startup_frames = false;
 };
 
 /// Owns the media half of a streaming session.
@@ -97,6 +98,10 @@ public:
     // Queue already-decoded PCM audio (Chiaki path). Audren is only touched by
     // the media audio worker, just like the Xbox Opus decode path.
     bool playDecodedAudio(const AudioFrame& frame);
+    // Transport-specific ingress accounting. PS chiaki supplies complete
+    // access units rather than the RTP packets used by Xbox/WebRTC.
+    void recordIncomingVideoSample(size_t bytes, uint64_t pts_ns, uint32_t frames_lost);
+    void recordIncomingAudioPacket();
     void setVideoReadyCallback(std::function<void()> callback);
     // A media discontinuity requires a fresh IDR.  The video worker performs
     // the decoder reset independently; the session acknowledges this flag

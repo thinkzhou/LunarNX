@@ -43,6 +43,7 @@ private:
     int stream_width_ = 1280;
     int stream_height_ = 720;
     int stream_bitrate_kbps_ = 10000;
+    std::string preferred_game_language_ = "en-US";
     stream::VideoBackend video_backend_ = stream::VideoBackend::HardwareZeroCopy;
     stream::PostProcessMode post_process_mode_ = stream::PostProcessMode::Off;
     bool dithering_enabled_ = false;
@@ -68,6 +69,7 @@ private:
     void updateRefreshButtonLabel();
     void promptCloudSearch();
     void updateCloudSearchButtonLabel();
+    void confirmSignOut();
     void resetToAuthActivity();
     void refreshCurrentSource();
     void openStreamSettings();

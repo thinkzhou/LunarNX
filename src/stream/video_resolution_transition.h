@@ -17,13 +17,17 @@ public:
     static constexpr uint64_t StartupHoldMs = 300;
 
     VideoResolutionTransition() = default;
-    VideoResolutionTransition(int target_width, int target_height) {
-        configure(target_width, target_height);
+    VideoResolutionTransition(int target_width, int target_height,
+                              bool hold_non_target_startup_frames = true) {
+        configure(target_width, target_height,
+                  hold_non_target_startup_frames);
     }
 
-    void configure(int target_width, int target_height) {
+    void configure(int target_width, int target_height,
+                   bool hold_non_target_startup_frames = true) {
         target_width_ = target_width;
         target_height_ = target_height;
+        hold_non_target_startup_frames_ = hold_non_target_startup_frames;
         reset();
     }
 
@@ -44,7 +48,8 @@ public:
         }
 
         if (active_width_ == 0 || active_height_ == 0) {
-            if (width == target_width_ && height == target_height_) {
+            if (!hold_non_target_startup_frames_ ||
+                (width == target_width_ && height == target_height_)) {
                 active_width_ = width;
                 active_height_ = height;
                 clearCandidate();
@@ -124,6 +129,7 @@ private:
     uint64_t startup_deadline_ms_ = 0;
     bool startup_candidate_ = false;
     bool transitioning_ = false;
+    bool hold_non_target_startup_frames_ = true;
 };
 
 } // namespace lunar::stream

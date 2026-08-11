@@ -2,6 +2,7 @@
 #include "main_activity.h"
 #include "stream_loading_activity.h"
 #include "stream_settings_activity.h"
+#include "about_activity.h"
 #include "ui_style.h"
 #include "poster_loader.h"
 #include "recycling_list.hpp"
@@ -38,9 +39,20 @@ std::string streamStateText(app::StreamState state, const std::string& info) {
 }
 
 MainActivity::MainActivity(std::shared_ptr<app::StreamController> ctrl) : ctrl_(std::move(ctrl)) {
-    video_backend_ = ctrl_->getDefaultVideoBackend();
-    vibration_enabled_ = ctrl_->getRumbleEnabled();
-    rumble_strength_percent_ = ctrl_->getRumbleStrengthPercent();
+    const auto saved = loadStreamSettings();
+    stream_width_ = saved.width;
+    stream_height_ = saved.height;
+    stream_bitrate_kbps_ = saved.bitrate_kbps;
+    preferred_game_language_ = saved.preferred_game_language;
+    video_backend_ = saved.video_backend;
+    post_process_mode_ = saved.post_process_mode;
+    dithering_enabled_ = saved.dithering_enabled;
+    vibration_enabled_ = saved.vibration_enabled;
+    rumble_strength_percent_ = saved.rumble_strength_percent;
+    ctrl_->setDefaultVideoBackend(video_backend_);
+    ctrl_->setRumbleEnabled(vibration_enabled_);
+    ctrl_->setRumbleStrengthPercent(rumble_strength_percent_);
+    ctrl_->setPreferredGameLanguage(preferred_game_language_);
     if (ctrl_->getForceRegionIp().empty()) {
         ctrl_->setForceRegionIp("4.2.2.2");
     }
@@ -71,21 +83,10 @@ brls::View* MainActivity::createContentView() {
     scroll_frame_ = scroll;
     scroll->setBackgroundColor(p.background);
     scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
-    scroll->registerAction(brls::getStr("lunarnx/main/sign_out_action"),
+    scroll->registerAction("Back",
         brls::ControllerButton::BUTTON_B,
-        [this](brls::View*) -> bool {
-            auto now = std::chrono::steady_clock::now();
-            if (!signout_pending_.load() ||
-                std::chrono::duration_cast<std::chrono::seconds>(
-                    now - signout_press_time_).count() >= 3) {
-                signout_pending_ = true;
-                signout_press_time_ = now;
-                if (status_) {
-                    status_->setText(brls::getStr("lunarnx/main/sign_out_again"));
-                }
-                return true;
-            }
-            resetToAuthActivity();
+        [](brls::View*) -> bool {
+            brls::Application::popActivity(brls::TransitionAnimation::NONE);
             return true;
         });
 
@@ -117,12 +118,23 @@ brls::View* MainActivity::createContentView() {
     });
     header->addView(settings_btn);
 
+    auto* about_btn = new brls::Button();
+    about_btn->setText(brls::getStr("lunarnx/common/about"));
+    styleSecondaryButton(about_btn);
+    about_btn->setMarginLeft(8);
+    about_btn->registerClickAction([](brls::View*) -> bool {
+        brls::Application::pushActivity(
+            new AboutActivity(), brls::TransitionAnimation::NONE);
+        return true;
+    });
+    header->addView(about_btn);
+
     auto* sign_out_btn = new brls::Button();
     sign_out_btn->setText(brls::getStr("lunarnx/common/sign_out"));
     styleQuietButton(sign_out_btn);
     sign_out_btn->setMarginLeft(8);
     sign_out_btn->registerClickAction([this](brls::View*) -> bool {
-        resetToAuthActivity();
+        confirmSignOut();
         return true;
     });
     header->addView(sign_out_btn);
@@ -312,6 +324,7 @@ void MainActivity::openStreamSettings() {
     snapshot.width = stream_width_;
     snapshot.height = stream_height_;
     snapshot.bitrate_kbps = stream_bitrate_kbps_;
+    snapshot.preferred_game_language = preferred_game_language_;
     snapshot.video_backend = video_backend_;
     snapshot.post_process_mode = post_process_mode_;
     snapshot.dithering_enabled = dithering_enabled_;
@@ -324,9 +337,13 @@ void MainActivity::openStreamSettings() {
             ctrl_, snapshot,
             [this, alive](const StreamSettingsSnapshot& updated) {
                 if (!alive->load()) return;
+                const bool game_language_changed =
+                    preferred_game_language_ != updated.preferred_game_language;
                 stream_width_ = updated.width;
                 stream_height_ = updated.height;
                 stream_bitrate_kbps_ = updated.bitrate_kbps;
+                preferred_game_language_ = updated.preferred_game_language;
+                ctrl_->setPreferredGameLanguage(preferred_game_language_);
                 video_backend_ = updated.video_backend;
                 post_process_mode_ = updated.post_process_mode;
                 dithering_enabled_ = updated.dithering_enabled;
@@ -337,6 +354,10 @@ void MainActivity::openStreamSettings() {
                         "lunarnx/main/settings_ready",
                         stream_height_,
                         stream::videoBackendOverlayName(video_backend_)));
+                }
+                if (game_language_changed &&
+                    stream_source_ == StreamSource::Cloud) {
+                    refreshCurrentSource();
                 }
             }),
         brls::TransitionAnimation::NONE);
@@ -703,6 +724,15 @@ void MainActivity::setFetchControlsEnabled(bool enabled) {
     if (cloud_search_btn_) cloud_search_btn_->setState(state);
 }
 
+void MainActivity::confirmSignOut() {
+    auto* dialog = new brls::Dialog(
+        brls::getStr("lunarnx/common/sign_out_confirm_message"));
+    dialog->addButton(brls::getStr("lunarnx/common/cancel"), []() {});
+    dialog->addButton(brls::getStr("lunarnx/common/sign_out"),
+        [this]() { resetToAuthActivity(); });
+    dialog->open();
+}
+
 void MainActivity::resetToAuthActivity() {
     if (signout_running_.exchange(true)) return;
     alive_->store(false);
@@ -712,6 +742,7 @@ void MainActivity::resetToAuthActivity() {
     bool started = lunar::platform::startNetworkWorker("sign-out", [ctrl]() {
         ctrl->signOut();
         brls::sync([]() {
+            // Return from the Xbox account scope to platform selection.
             brls::Application::popActivity(brls::TransitionAnimation::NONE);
         });
     });

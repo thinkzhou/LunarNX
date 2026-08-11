@@ -31,6 +31,8 @@ bool PsMediaBridge::onVideoSample(uint8_t* data, size_t size, int32_t frames_los
         next_video_pts_ns_.store(pts + frame_advance * frame_duration_ns);
     }
     video_frame_count_++;
+    media_.recordIncomingVideoSample(size, pts,
+        static_cast<uint32_t>(std::max(frames_lost, 0)));
     video_samples_since_summary_++;
     video_sample_bytes_ += size;
     if (frames_lost > 0) {
@@ -134,6 +136,7 @@ void PsMediaBridge::audioHeaderCb(ChiakiAudioHeader* header, void* user) {
 void PsMediaBridge::audioFrameCb(uint8_t* buf, size_t buf_size, void* user) {
     auto* self = static_cast<PsMediaBridge*>(user);
     if (!self || !self->audio_format_valid_ || !self->opus_sink_.frame_cb) return;
+    self->media_.recordIncomingAudioPacket();
     self->opus_sink_.frame_cb(buf, buf_size, self->opus_sink_.user);
 }
 

@@ -2,12 +2,16 @@
 #include <switch.h>
 
 #include <arpa/inet.h>
+#include <algorithm>
 #include <cstdarg>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <netdb.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -39,6 +43,22 @@
 #define LUNARNX_NETPROBE_LOCAL_PORT "18080"
 #endif
 
+#ifndef LUNARNX_NETPROBE_UDP_HOST
+#define LUNARNX_NETPROBE_UDP_HOST ""
+#endif
+
+#ifndef LUNARNX_NETPROBE_UDP_PORT
+#define LUNARNX_NETPROBE_UDP_PORT 48000
+#endif
+
+#ifndef LUNARNX_NETPROBE_UDP_SEQUENTIAL
+#define LUNARNX_NETPROBE_UDP_SEQUENTIAL 20
+#endif
+
+#ifndef LUNARNX_NETPROBE_UDP_BURST
+#define LUNARNX_NETPROBE_UDP_BURST 1000
+#endif
+
 namespace {
 
 constexpr const char* LOG_DIR = "sdmc:/switch/LunarNXNetProbe";
@@ -52,6 +72,9 @@ struct Probe {
 struct ResponseBody {
     std::string text;
 };
+
+constexpr uint32_t UDP_PROBE_MAGIC = 0x4c4e5855; // LNXU
+constexpr size_t UDP_PROBE_HEADER_SIZE = 16;
 
 std::recursive_mutex share_locks[CURL_LOCK_DATA_LAST];
 
@@ -80,6 +103,211 @@ void logLine(const char* format, ...) {
     va_end(args);
     std::printf("\n");
     consoleUpdate(nullptr);
+}
+
+uint64_t monotonicMilliseconds() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+void makeUdpProbePacket(std::vector<uint8_t>& packet, uint32_t phase, uint32_t sequence,
+                        uint32_t total) {
+    for (size_t i = 0; i < packet.size(); ++i) {
+        packet[i] = static_cast<uint8_t>((sequence + phase * 17 + i * 31) & 0xff);
+    }
+    const uint32_t header[] = {
+        htonl(UDP_PROBE_MAGIC), htonl(phase), htonl(sequence), htonl(total),
+    };
+    std::memcpy(packet.data(), header, sizeof(header));
+}
+
+bool parseUdpProbePacket(const uint8_t* packet, size_t size, uint32_t expected_phase,
+                         uint32_t total, uint32_t* sequence) {
+    if (size < UDP_PROBE_HEADER_SIZE) {
+        return false;
+    }
+    uint32_t header[4];
+    std::memcpy(header, packet, sizeof(header));
+    if (ntohl(header[0]) != UDP_PROBE_MAGIC || ntohl(header[1]) != expected_phase ||
+        ntohl(header[3]) != total) {
+        return false;
+    }
+    *sequence = ntohl(header[2]);
+    if (*sequence >= total) {
+        return false;
+    }
+    std::vector<uint8_t> expected(size);
+    makeUdpProbePacket(expected, expected_phase, *sequence, total);
+    return std::memcmp(packet, expected.data(), size) == 0;
+}
+
+bool sendUdpPacket(int fd, const std::vector<uint8_t>& packet) {
+    for (int attempt = 0; attempt < 5; ++attempt) {
+        const ssize_t sent = send(fd, packet.data(), packet.size(), 0);
+        if (sent == static_cast<ssize_t>(packet.size())) {
+            return true;
+        }
+        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            pollfd event{fd, POLLOUT, 0};
+            poll(&event, 1, 20);
+            continue;
+        }
+        logLine("[udp] send failed sent=%zd expected=%zu errno=%d", sent, packet.size(), errno);
+        return false;
+    }
+    logLine("[udp] send remained blocked after retries");
+    return false;
+}
+
+void drainUdpPackets(int fd, uint32_t phase, uint32_t total, size_t packet_size,
+                     std::vector<bool>& received, uint32_t& valid, uint32_t& duplicates,
+                     uint32_t& invalid) {
+    std::vector<uint8_t> packet(packet_size + 64);
+    while (true) {
+        const ssize_t size = recv(fd, packet.data(), packet.size(), MSG_DONTWAIT);
+        if (size < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return;
+        }
+        if (size < 0) {
+            logLine("[udp] recv failed errno=%d", errno);
+            ++invalid;
+            return;
+        }
+        uint32_t sequence = 0;
+        if (static_cast<size_t>(size) != packet_size ||
+            !parseUdpProbePacket(packet.data(), static_cast<size_t>(size), phase, total,
+                                 &sequence)) {
+            ++invalid;
+            continue;
+        }
+        if (received[sequence]) {
+            ++duplicates;
+        } else {
+            received[sequence] = true;
+            ++valid;
+        }
+    }
+}
+
+bool runSequentialUdpProbe(int fd) {
+    constexpr uint32_t phase = 1;
+    const uint32_t total = LUNARNX_NETPROBE_UDP_SEQUENTIAL;
+    constexpr size_t packet_size = 64;
+    std::vector<uint8_t> packet(packet_size);
+    uint32_t received = 0;
+    uint64_t rtt_total = 0;
+    uint64_t rtt_max = 0;
+
+    for (uint32_t sequence = 0; sequence < total; ++sequence) {
+        makeUdpProbePacket(packet, phase, sequence, total);
+        bool matched = false;
+        for (int attempt = 0; attempt < 3 && !matched; ++attempt) {
+            const uint64_t started = monotonicMilliseconds();
+            if (!sendUdpPacket(fd, packet)) {
+                continue;
+            }
+            const uint64_t deadline = started + 500;
+            while (monotonicMilliseconds() < deadline) {
+                const int remaining = static_cast<int>(deadline - monotonicMilliseconds());
+                pollfd event{fd, POLLIN, 0};
+                const int ready = poll(&event, 1, std::max(1, remaining));
+                if (ready <= 0) {
+                    continue;
+                }
+                std::vector<uint8_t> response(packet_size + 1);
+                const ssize_t size = recv(fd, response.data(), response.size(), MSG_DONTWAIT);
+                uint32_t response_sequence = 0;
+                if (size == static_cast<ssize_t>(packet_size) &&
+                    parseUdpProbePacket(response.data(), static_cast<size_t>(size), phase,
+                                        total, &response_sequence) &&
+                    response_sequence == sequence) {
+                    const uint64_t rtt = monotonicMilliseconds() - started;
+                    rtt_total += rtt;
+                    rtt_max = std::max(rtt_max, rtt);
+                    ++received;
+                    matched = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    logLine("[udp] sequential sent=%u received=%u lost=%u avg_rtt_ms=%.2f max_rtt_ms=%llu",
+            total, received, total - received,
+            received ? static_cast<double>(rtt_total) / received : 0.0,
+            static_cast<unsigned long long>(rtt_max));
+    return received == total;
+}
+
+bool runBurstUdpProbe(int fd) {
+    constexpr uint32_t phase = 2;
+    const uint32_t total = LUNARNX_NETPROBE_UDP_BURST;
+    constexpr size_t packet_size = 1200;
+    std::vector<uint8_t> packet(packet_size);
+    std::vector<bool> received(total, false);
+    uint32_t sent = 0;
+    uint32_t valid = 0;
+    uint32_t duplicates = 0;
+    uint32_t invalid = 0;
+    const uint64_t started = monotonicMilliseconds();
+
+    for (uint32_t sequence = 0; sequence < total; ++sequence) {
+        makeUdpProbePacket(packet, phase, sequence, total);
+        if (sendUdpPacket(fd, packet)) {
+            ++sent;
+        }
+        drainUdpPackets(fd, phase, total, packet_size, received, valid, duplicates, invalid);
+        svcSleepThread(1000000LL);
+    }
+
+    const uint64_t deadline = monotonicMilliseconds() + 3000;
+    while (valid < sent && monotonicMilliseconds() < deadline) {
+        pollfd event{fd, POLLIN, 0};
+        poll(&event, 1, 20);
+        drainUdpPackets(fd, phase, total, packet_size, received, valid, duplicates, invalid);
+    }
+
+    const uint64_t elapsed = monotonicMilliseconds() - started;
+    const uint32_t lost = sent >= valid ? sent - valid : 0;
+    const double loss_percent = sent ? 100.0 * lost / sent : 100.0;
+    logLine("[udp] burst sent=%u received=%u lost=%u loss=%.2f%% duplicate=%u invalid=%u elapsed_ms=%llu",
+            sent, valid, lost, loss_percent, duplicates, invalid,
+            static_cast<unsigned long long>(elapsed));
+    return sent == total && loss_percent <= 1.0 && invalid == 0;
+}
+
+void runUdpEchoProbe() {
+    if (std::strlen(LUNARNX_NETPROBE_UDP_HOST) == 0) {
+        return;
+    }
+    logLine("[udp] begin host=%s port=%d mode=nonblocking+poll",
+            LUNARNX_NETPROBE_UDP_HOST, LUNARNX_NETPROBE_UDP_PORT);
+    const int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (fd < 0) {
+        logLine("[udp] socket failed errno=%d", errno);
+        return;
+    }
+    const int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        logLine("[udp] fcntl O_NONBLOCK failed errno=%d", errno);
+        close(fd);
+        return;
+    }
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(LUNARNX_NETPROBE_UDP_PORT);
+    if (inet_pton(AF_INET, LUNARNX_NETPROBE_UDP_HOST, &address.sin_addr) != 1 ||
+        connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) < 0) {
+        logLine("[udp] connect failed errno=%d", errno);
+        close(fd);
+        return;
+    }
+    const bool sequential_ok = runSequentialUdpProbe(fd);
+    const bool burst_ok = runBurstUdpProbe(fd);
+    logLine("[udp] RESULT %s sequential=%s burst=%s",
+            sequential_ok && burst_ok ? "PASS" : "FAIL",
+            sequential_ok ? "PASS" : "FAIL", burst_ok ? "PASS" : "FAIL");
+    close(fd);
 }
 
 size_t writeCallback(void* contents, size_t size, size_t nmemb, void* userp) {
@@ -373,6 +601,8 @@ int main(int argc, char* argv[]) {
 
     logLine("[probe] LunarNXNetProbe start");
     logLine("[probe] applet_type=%d", static_cast<int>(appletGetAppletType()));
+
+    runUdpEchoProbe();
 
     CURLcode init_result = curl_global_init(CURL_GLOBAL_DEFAULT);
     logLine("[probe] curl_global_init=%d", static_cast<int>(init_result));

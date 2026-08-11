@@ -23,9 +23,9 @@ def main() -> None:
 
     require("APP_DIAG ?= 0" in switch_makefile,
             "normal per-frame diagnostics must remain disabled by default")
-    require("DROP_DIAG ?= 1" in switch_makefile and
+    require("DROP_DIAG ?= 0" in switch_makefile and
             "LUNARNX_DROP_DIAGNOSTIC_LOG=$(DROP_DIAG)" in switch_makefile,
-            "sparse drop diagnostics must remain available in hardware builds")
+            "drop diagnostics must be available but disabled in release builds")
     require("dropDiagnosticLog" in diagnostics and "[drop-diag t=" in diagnostics,
             "drop events need a searchable timestamped log prefix")
     require("logVideoDropDiagnostic" in perf,

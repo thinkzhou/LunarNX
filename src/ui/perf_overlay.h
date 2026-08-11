@@ -1,6 +1,7 @@
 #pragma once
 #ifdef __SWITCH__
 #include <borealis.hpp>
+#include "../app/stream_runtime.h"
 #include "../stream/perf_stats.h"
 #include <string>
 
@@ -10,7 +11,7 @@ namespace lunar::ui {
 /// Shows FPS, decode latency, network stats, battery.
 class PerfOverlay : public brls::Box {
 public:
-    PerfOverlay(const stream::PerfStats* perf);
+    PerfOverlay(const stream::PerfStats* perf, app::StreamPlatform platform);
     void update(float fps, const std::string& resolution,
                 const std::string& video_backend);
     void toggle();
@@ -20,6 +21,7 @@ public:
 private:
     brls::Label* label_;
     const stream::PerfStats* perf_;
+    app::StreamPlatform platform_ = app::StreamPlatform::Xbox;
     bool visible_ = false;
 };
 

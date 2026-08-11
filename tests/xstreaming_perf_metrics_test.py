@@ -61,12 +61,16 @@ def main() -> None:
         require(f'"lunarnx/perf/{key}"' in detail_overlay,
                 f"detailed diagnostics must localize {key}")
     require("rtp_video_missing_packets.load()" in detail_overlay and
-            "packets_lost.load()" not in detail_overlay,
-            "compact and detailed overlays must use the same video RTP loss source")
+            "ps_frames_lost" in detail_overlay and
+            "has_ps_transport" in detail_overlay,
+            "detailed overlay must keep Xbox RTP loss and PS chiaki loss paths separate")
 
     require("last_encoded_bytes_" in overlay_header and
-            "last_decode_total_us_" in overlay_header,
+            "last_decode_total_us_" in overlay_header and
+            "decode_total_ns" in perf_stats,
             "bitrate and decode time must use interval deltas instead of lifetime averages")
+    require("alignas(64) std::atomic<uint64_t> decode_total_us" in perf_stats,
+            "decoder counters must not share a cache line with Xbox RTP hot-path stats")
     require("getStreamWidth()" in stream_view and "getStreamHeight()" in stream_view,
             "HUD resolution must include actual width and height")
     require("recordVideoQueueDrops(" in media_pipeline and

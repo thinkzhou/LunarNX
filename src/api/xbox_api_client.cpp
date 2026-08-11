@@ -394,7 +394,9 @@ std::string XboxApiClient::createSession(const CreateSessionRequest& request,
     cJSON_AddStringToObject(settings, "nanoVersion", "V3;WebrtcTransport.dll");
     cJSON_AddBoolToObject(settings, "enableTextToSpeech", false);
     cJSON_AddNumberToObject(settings, "highContrast", 0);
-    cJSON_AddStringToObject(settings, "locale", "en-US");
+    cJSON_AddStringToObject(settings, "locale",
+                            request.locale.empty() ? "en-US"
+                                                   : request.locale.c_str());
     // XStreaming/Greenlight use the GSSV SDP/ICE exchange path.
     cJSON_AddBoolToObject(settings, "useIceConnection", false);
     cJSON_AddNumberToObject(settings, "timezoneOffsetMinutes", 120);
@@ -1103,13 +1105,17 @@ std::vector<CloudTitle> XboxApiClient::hydrateCatalogProducts(
         std::map<std::string, std::string> headers;
         headers["Accept"] = "application/json";
         headers["Content-Type"] = "application/json";
+        headers["Accept-Language"] = catalog_language_;
         headers["ms-cv"] = "0";
         headers["calling-app-name"] = "Xbox Cloud Gaming Web";
         headers["calling-app-version"] = "24.17.63";
 
-        const std::string url = catalog_base_url_.empty()
-            ? "https://catalog.gamepass.com/v3/products?market=US&language=en-US&hydration=RemoteLowJade0"
-            : (catalog_base_url_ + "/v3/products?market=US&language=en-US&hydration=RemoteLowJade0");
+        const std::string catalog_origin = catalog_base_url_.empty()
+            ? "https://catalog.gamepass.com"
+            : catalog_base_url_;
+        const std::string url = catalog_origin +
+            "/v3/products?market=US&language=" + catalog_language_ +
+            "&hydration=RemoteLowJade0";
         auto resp = http_.post(url, body_str ? body_str : "{}", headers, cancel);
         free(body_str);
         traceXboxResponse("catalog-products", url, resp);
@@ -1192,6 +1198,7 @@ std::vector<CloudTitle> XboxApiClient::getRecentCloudTitles(HttpClient::CancelCa
     std::map<std::string, std::string> headers;
     headers["Content-Type"] = "application/json";
     headers["Authorization"] = "Bearer " + gssv_token_;
+    headers["Accept-Language"] = catalog_language_;
 
     auto resp = http_.get(url, headers, cancel);
     traceXboxResponse("cloud-titles-mru", url, resp);
@@ -1216,6 +1223,7 @@ std::vector<CloudTitle> XboxApiClient::getCloudTitles(HttpClient::CancelCallback
     std::map<std::string, std::string> headers;
     headers["Content-Type"] = "application/json";
     headers["Authorization"] = "Bearer " + gssv_token_;
+    headers["Accept-Language"] = catalog_language_;
 
     auto resp = http_.get(url, headers, cancel);
     traceXboxResponse("cloud-titles", url, resp);
@@ -1253,10 +1261,16 @@ std::vector<CloudTitle> XboxApiClient::getCloudTitles(HttpClient::CancelCallback
 std::vector<std::string> XboxApiClient::getNewCloudProductIds(HttpClient::CancelCallback cancel) {
     std::vector<std::string> ids;
     last_error_.clear();
-    const std::string sigls_url = catalog_base_url_.empty()
-        ? std::string(constants::GAMEPASS_NEW_TITLES_URL)
-        : (catalog_base_url_ + "/sigls/v2?id=f13cf6b4-57e6-4459-89df-6aec18cf0538&market=US&language=en-US");
-    auto resp = http_.get(sigls_url, {{"Accept", "application/json"}}, cancel);
+    const std::string catalog_origin = catalog_base_url_.empty()
+        ? "https://catalog.gamepass.com"
+        : catalog_base_url_;
+    const std::string sigls_url = catalog_origin +
+        "/sigls/v2?id=f13cf6b4-57e6-4459-89df-6aec18cf0538" +
+        "&market=US&language=" + catalog_language_;
+    auto resp = http_.get(sigls_url,
+                          {{"Accept", "application/json"},
+                           {"Accept-Language", catalog_language_}},
+                          cancel);
     traceXboxResponse("cloud-new-titles", sigls_url, resp);
     if (resp.status_code != 200) {
         lunar::diagnosticLog("xbox-api", "New titles sigls failed status=%d", resp.status_code);

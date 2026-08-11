@@ -26,8 +26,10 @@ def main() -> None:
     for strength in (25, 50, 75, 100):
         require(str(strength) in settings_source,
                 f"settings UI must expose {strength}% vibration strength")
-    require("saveRumbleSettings" in settings_source,
-            "rumble settings must persist to config.json")
+    require("saveStreamSettings(settings_)" in settings_source and
+            '"vibration"' in settings_source and
+            '"rumble_strength_percent"' in settings_source,
+            "rumble settings must persist with the stream settings snapshot")
     require("setRumbleEnabled" in controller_header and
             "setRumbleStrengthPercent" in controller_header,
             "stream controller must own runtime rumble preferences")
