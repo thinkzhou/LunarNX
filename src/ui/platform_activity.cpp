@@ -4,6 +4,7 @@
 #include "main_activity.h"
 #include "ps_activity.h"
 #include "about_activity.h"
+#include "stream_settings_activity.h"
 #include "ui_style.h"
 #include "../common.h"
 #include "../diagnostics.h"
@@ -24,6 +25,7 @@ std::string formatResult(Result rc) {
 
 brls::Button* makePlatformTile(const std::string& title,
                                const std::string& detail,
+                               const std::string& account_state,
                                const std::string& console_type,
                                const std::function<void()>& open) {
     const auto& p = uiPalette();
@@ -55,11 +57,25 @@ brls::Button* makePlatformTile(const std::string& title,
     description->setHeight(54);
     description->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     tile->addView(description);
+    auto* state = new brls::Label();
+    state->setText(account_state);
+    state->setFontSize(12);
+    state->setTextColor(p.accent);
+    state->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    state->setHeight(24);
+    tile->addView(state);
     tile->registerClickAction([open](brls::View*) -> bool {
         open();
         return true;
     });
     return tile;
+}
+
+bool savedFileExists(const char* path) {
+    FILE* file = std::fopen(path, "rb");
+    if (!file) return false;
+    std::fclose(file);
+    return true;
 }
 
 } // namespace
@@ -79,6 +95,15 @@ brls::View* PlatformActivity::createContentView() {
     sidebar->setBackgroundColor(p.surface);
     sidebar->addView(makeSidebarButton(
         brls::getStr("lunarnx/platform/subtitle"), true));
+
+    auto* settings = makeSidebarButton(brls::getStr("lunarnx/common/settings"));
+    settings->registerClickAction([](brls::View*) -> bool {
+        brls::Application::pushActivity(
+            new StreamSettingsActivity(nullptr, loadStreamSettings(), {}),
+            brls::TransitionAnimation::NONE);
+        return true;
+    });
+    sidebar->addView(settings);
 
     auto* browser_test = makeSidebarButton("Browser Test: Baidu");
     browser_test->registerClickAction([this](brls::View*) -> bool {
@@ -107,15 +132,26 @@ brls::View* PlatformActivity::createContentView() {
     platforms->setGrow(1.0f);
     platforms->setAlignItems(brls::AlignItems::CENTER);
     platforms->setJustifyContent(brls::JustifyContent::CENTER);
+    const bool xbox_saved = savedFileExists(lunar::get_token_path());
     auto* xbox_card = makePlatformTile(brls::getStr("lunarnx/platform/xbox_title"),
-        brls::getStr("lunarnx/platform/xbox_desc"), "SeriesX", [this]() {
+        brls::getStr("lunarnx/platform/xbox_desc"),
+        brls::getStr(xbox_saved
+            ? "lunarnx/common/signed_in_microsoft"
+            : "lunarnx/common/not_signed_in"),
+        "SeriesX", [this]() {
         diagnosticLog("ui-platform", "Xbox Open clicked");
         openXbox();
     });
     platforms->addView(xbox_card);
 
+    const bool ps_saved = savedFileExists(lunar::get_ps_credentials_path()) ||
+        savedFileExists(lunar::get_psn_token_path());
     auto* ps_card = makePlatformTile(brls::getStr("lunarnx/platform/ps_title"),
-        brls::getStr("lunarnx/platform/ps_desc"), "PS5", [this]() {
+        brls::getStr("lunarnx/platform/ps_desc"),
+        brls::getStr(ps_saved
+            ? "lunarnx/ps/signed_in"
+            : "lunarnx/common/not_signed_in"),
+        "PS5", [this]() {
         diagnosticLog("ui-platform", "PlayStation Open clicked");
         openPlayStation();
     });

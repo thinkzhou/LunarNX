@@ -15,11 +15,12 @@ def main():
             'lunarnx/ps/tab_remote' in ui and
             "PsConsoleSource::Local" in ui and "PsConsoleSource::Remote" in ui,
             "PS page must use Xbox-style local and remote source tabs")
-    require('wordmark->setText("LUNARNX")' in ui and
-            'account_chip = makeUiCard(brls::Axis::ROW)' in ui and
-            'account_mark->setText("PS")' in ui and
+    require('return makeAppFrame("PlayStation", workspace);' in ui and
+            'makeSidebarButton(brls::getStr("lunarnx/ps/tab_local"), true)' in ui and
+            'makeSidebarButton(brls::getStr("lunarnx/ps/tab_remote"))' in ui and
+            'makeSidebarButton(brls::getStr("lunarnx/ps/pair_by_ip"))' in ui and
             'lunarnx/ps/account_network' in ui,
-            "PS page must share the Xbox brand header and compact account chip")
+            "PS page must use the platform workspace shell and explicit source navigation")
     require('lunarnx/common/settings' in ui and
             'new PsSettingsActivity(' in ui and
             'lunarnx/common/about' in ui and
@@ -46,6 +47,10 @@ def main():
             "remote-disabled devices must remain visible with guidance")
     require('lunarnx/ps/pair_ps4' in ui and 'lunarnx/ps/pair_ps5' in ui,
             "manual local pairing must remain available")
+    require('card->setFocusable(true)' in ui and
+            'card->registerClickAction' in ui and
+            'action->setText(action_text)' in ui,
+            "available PS hosts must use whole-card focus with a visible action label")
     require('refreshConsoles();' not in ui.split('if (!resumed_once_)', 1)[1].split('} else {', 1)[0],
             "opening the page must not auto-trigger network discovery")
     require("chiaki_discovery_service_init" in discovery,

@@ -131,7 +131,7 @@ brls::View* StreamLoadingActivity::createContentView() {
     loading_card_->setWidth(780);
     loading_card_->setHeight(430);
     loading_card_->setPadding(34, 46, 30, 46);
-    loading_card_->setCornerRadius(22);
+    loading_card_->setCornerRadius(6);
     loading_card_->setAlignItems(brls::AlignItems::CENTER);
 
     auto* eyebrow = new brls::Label();
@@ -204,7 +204,7 @@ brls::View* StreamLoadingActivity::createContentView() {
     error_card_->setWidth(780);
     error_card_->setHeight(390);
     error_card_->setPadding(30, 54, 30, 54);
-    error_card_->setCornerRadius(22);
+    error_card_->setCornerRadius(6);
     error_card_->setAlignItems(brls::AlignItems::CENTER);
     error_card_->setVisibility(brls::Visibility::GONE);
 

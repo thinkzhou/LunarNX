@@ -262,10 +262,9 @@ PsActivity::~PsActivity() {
 
 brls::View* PsActivity::createContentView() {
     const auto& p = uiPalette();
-    auto* scroll = new brls::ScrollingFrame();
-    scroll->setBackgroundColor(p.background);
-    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
-    scroll->registerAction("Back", brls::ControllerButton::BUTTON_B,
+    auto* workspace = new brls::Box(brls::Axis::ROW);
+    workspace->setBackgroundColor(p.background);
+    workspace->registerAction("Back", brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
             const auto now = std::chrono::steady_clock::now();
             if (now < back_navigation_ready_at_) return true;
@@ -273,113 +272,72 @@ brls::View* PsActivity::createContentView() {
             return true;
         });
 
-    auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(26, 48, 36, 48);
-    root->setBackgroundColor(p.background);
+    auto* sidebar = new brls::Box(brls::Axis::COLUMN);
+    sidebar->setWidth(286);
+    sidebar->setPadding(24, 24, 24, 30);
+    sidebar->setBackgroundColor(p.surface);
 
-    auto* header = new brls::Box(brls::Axis::ROW);
-    header->setHeight(84);
-    header->setAlignItems(brls::AlignItems::CENTER);
-    auto* brand = new brls::Box(brls::Axis::COLUMN);
-    brand->setGrow(1.0f);
-    auto* wordmark = new brls::Label();
-    wordmark->setText("LUNARNX");
-    wordmark->setFontSize(29);
-    wordmark->setTextColor(p.accent);
-    brand->addView(wordmark);
-    brand->addView(makeMutedLabel(brls::getStr("lunarnx/ps/subtitle"), 13));
-    header->addView(brand);
+    local_tab_ = makeSidebarButton(brls::getStr("lunarnx/ps/tab_local"), true);
+    local_tab_->registerClickAction([this](brls::View*) -> bool {
+        setConsoleSource(PsConsoleSource::Local);
+        return true;
+    });
+    sidebar->addView(local_tab_);
+    remote_tab_ = makeSidebarButton(brls::getStr("lunarnx/ps/tab_remote"));
+    remote_tab_->registerClickAction([this](brls::View*) -> bool {
+        setConsoleSource(PsConsoleSource::Remote);
+        return true;
+    });
+    sidebar->addView(remote_tab_);
+    pair_tab_ = makeSidebarButton(brls::getStr("lunarnx/ps/pair_by_ip"));
+    pair_tab_->registerClickAction([this](brls::View*) -> bool {
+        setConsoleSource(PsConsoleSource::Pair);
+        return true;
+    });
+    sidebar->addView(pair_tab_);
 
-    auto* settings_button = new brls::Button();
-    settings_button->setText(brls::getStr("lunarnx/common/settings"));
-    styleSecondaryButton(settings_button);
+    auto* settings_button = makeSidebarButton(brls::getStr("lunarnx/common/settings"));
     settings_button->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new PsSettingsActivity(loadPsSettings()),
             brls::TransitionAnimation::NONE);
         return true;
     });
-    header->addView(settings_button);
-
-    auto* about_button = new brls::Button();
-    about_button->setText(brls::getStr("lunarnx/common/about"));
-    styleSecondaryButton(about_button);
-    about_button->setMarginLeft(8);
+    sidebar->addView(settings_button);
+    auto* about_button = makeSidebarButton(brls::getStr("lunarnx/common/about"));
     about_button->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new AboutActivity(), brls::TransitionAnimation::NONE);
         return true;
     });
-    header->addView(about_button);
-
-    account_button_ = new brls::Button();
-    styleQuietButton(account_button_);
-    account_button_->setMarginLeft(8);
+    sidebar->addView(about_button);
+    account_button_ = makeSidebarButton(brls::getStr("lunarnx/ps/sign_in"));
     account_button_->registerClickAction([this](brls::View*) -> bool {
         handleAccountAction();
         return true;
     });
-    header->addView(account_button_);
+    sidebar->addView(account_button_);
 
-    auto* account_chip = makeUiCard(brls::Axis::ROW);
-    account_chip->setWidth(306);
-    account_chip->setHeight(58);
-    account_chip->setMarginLeft(10);
-    account_chip->setPadding(7, 10, 7, 10);
-    account_chip->setCornerRadius(14);
-    account_chip->setAlignItems(brls::AlignItems::CENTER);
-
-    auto* account_mark = new brls::Label();
-    account_mark->setWidth(42);
-    account_mark->setHeight(42);
-    account_mark->setText("PS");
-    account_mark->setFontSize(13);
-    account_mark->setTextColor(p.accent);
-    account_mark->setBackgroundColor(p.accent_soft);
-    account_mark->setCornerRadius(21);
-    account_mark->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    account_mark->setVerticalAlign(brls::VerticalAlign::CENTER);
-    account_chip->addView(account_mark);
-
-    auto* account_copy = new brls::Box(brls::Axis::COLUMN);
-    account_copy->setGrow(1.0f);
-    account_copy->setPadding(2, 0, 2, 10);
-    auto* account_label = new brls::Label();
-    account_label->setText(brls::getStr("lunarnx/ps/account_network"));
-    account_label->setFontSize(10);
-    account_label->setTextColor(p.accent);
-    account_copy->addView(account_label);
+    auto* account = new brls::Box(brls::Axis::COLUMN);
+    account->setGrow(1.0f);
+    account->setJustifyContent(brls::JustifyContent::FLEX_END);
+    account->addView(makeMutedLabel(brls::getStr("lunarnx/ps/account_network"), 12));
     account_state_ = new brls::Label();
-    account_state_->setFontSize(14);
+    account_state_->setFontSize(15);
     account_state_->setTextColor(p.text);
     account_state_->setSingleLine(true);
-    account_copy->addView(account_state_);
-    account_chip->addView(account_copy);
-    header->addView(account_chip);
-    root->addView(header);
+    account->addView(account_state_);
+    sidebar->addView(account);
+    workspace->addView(sidebar);
 
-    auto* source_card = makeUiCard(brls::Axis::ROW);
-    source_card->setHeight(68);
-    source_card->setPadding(8, 8, 8, 8);
-    source_card->setMarginBottom(18);
-    local_tab_ = new brls::Button();
-    local_tab_->setText(brls::getStr("lunarnx/ps/tab_local"));
-    local_tab_->setGrow(1.0f);
-    local_tab_->registerClickAction([this](brls::View*) -> bool {
-        setConsoleSource(PsConsoleSource::Local);
-        return true;
-    });
-    source_card->addView(local_tab_);
-    remote_tab_ = new brls::Button();
-    remote_tab_->setText(brls::getStr("lunarnx/ps/tab_remote"));
-    remote_tab_->setGrow(1.0f);
-    remote_tab_->setMarginLeft(8);
-    remote_tab_->registerClickAction([this](brls::View*) -> bool {
-        setConsoleSource(PsConsoleSource::Remote);
-        return true;
-    });
-    source_card->addView(remote_tab_);
-    root->addView(source_card);
+    auto* scroll = new brls::ScrollingFrame();
+    scroll->setGrow(1.0f);
+    scroll->setBackgroundColor(p.background);
+    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
+
+    auto* root = new brls::Box(brls::Axis::COLUMN);
+    root->setPadding(24, 42, 32, 42);
+    root->setBackgroundColor(p.background);
 
     remote_actions_ = new brls::Box(brls::Axis::COLUMN);
     auto* remote_header = new brls::Box(brls::Axis::ROW);
@@ -436,6 +394,11 @@ brls::View* PsActivity::createContentView() {
     lan_state_->setMarginBottom(12);
     local_actions_->addView(lan_state_);
 
+    pair_actions_ = new brls::Box(brls::Axis::COLUMN);
+    auto* pair_heading = makePageHeading(
+        brls::getStr("lunarnx/ps/pair_by_ip"),
+        brls::getStr("lunarnx/ps/pair_by_ip_desc"));
+    pair_actions_->addView(pair_heading);
     auto* manual_card = makeUiCard(brls::Axis::ROW);
     manual_card->setHeight(92);
     manual_card->setMarginBottom(18);
@@ -466,7 +429,8 @@ brls::View* PsActivity::createContentView() {
     };
     add_pair_button(brls::getStr("lunarnx/ps/pair_ps4"), 900);
     add_pair_button(brls::getStr("lunarnx/ps/pair_ps5"), 1000100);
-    local_actions_->addView(manual_card);
+    pair_actions_->addView(manual_card);
+    root->addView(pair_actions_);
     root->addView(local_actions_);
 
     console_list_ = new brls::Box(brls::Axis::COLUMN);
@@ -492,13 +456,14 @@ brls::View* PsActivity::createContentView() {
     root->addView(status_card);
 
     scroll->setContentView(root);
+    workspace->addView(scroll);
     updateAccountUi();
     hosts_ = ps_manager_ ? ps_manager_->getDiscoveredHosts()
                          : std::vector<ps::PsConsole>{};
     appendMockReplayConsole(hosts_);
     updateSourceUi();
     rebuildConsoleList(hosts_);
-    return scroll;
+    return makeAppFrame("PlayStation", workspace);
 }
 
 void PsActivity::onResume() {
@@ -618,18 +583,25 @@ void PsActivity::setConsoleSource(PsConsoleSource source) {
 
 void PsActivity::updateSourceUi() {
     const bool local = source_ == PsConsoleSource::Local;
+    const bool remote = source_ == PsConsoleSource::Remote;
+    const bool pair = source_ == PsConsoleSource::Pair;
     if (local_tab_) {
-        if (local) stylePrimaryButton(local_tab_);
-        else styleSecondaryButton(local_tab_);
+        setSidebarButtonActive(local_tab_, local);
     }
     if (remote_tab_) {
-        if (local) styleSecondaryButton(remote_tab_);
-        else stylePrimaryButton(remote_tab_);
+        setSidebarButtonActive(remote_tab_, remote);
+    }
+    if (pair_tab_) {
+        setSidebarButtonActive(pair_tab_, pair);
     }
     if (local_actions_) local_actions_->setVisibility(
         local ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
     if (remote_actions_) remote_actions_->setVisibility(
-        local ? brls::Visibility::GONE : brls::Visibility::VISIBLE);
+        remote ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+    if (pair_actions_) pair_actions_->setVisibility(
+        pair ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+    if (console_list_) console_list_->setVisibility(
+        pair ? brls::Visibility::GONE : brls::Visibility::VISIBLE);
 }
 
 void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
@@ -666,7 +638,7 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
     for (const auto& host : hosts) {
         const bool visible = source_ == PsConsoleSource::Local
             ? host.local.has_value()
-            : host.remote.has_value();
+            : source_ == PsConsoleSource::Remote && host.remote.has_value();
         if (!visible) continue;
         visible_count++;
         auto* card = makeUiCard(brls::Axis::ROW);
@@ -724,35 +696,32 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         const bool remote_enabled = host.remote.has_value() &&
             host.remote->remoteplay_enabled;
 
-        auto* action = new brls::Button();
-        action->setWidth(190);
+        card->setFocusable(true);
+        card->setHighlightCornerRadius(14);
+        std::string action_text;
         if (source_ == PsConsoleSource::Local && !paired) {
-            stylePrimaryButton(action);
-            action->setText(brls::getStr("lunarnx/ps/btn_pair"));
-            action->registerClickAction([this, host](brls::View*) -> bool {
+            action_text = brls::getStr("lunarnx/ps/btn_pair");
+            card->registerClickAction([this, host](brls::View*) -> bool {
                 pairConsole(host);
                 return true;
             });
         } else if (source_ == PsConsoleSource::Local && paired && local_standby) {
-            stylePrimaryButton(action);
-            action->setText(brls::getStr("lunarnx/ps/btn_wake_connect"));
-            action->registerClickAction([this, host](brls::View*) -> bool {
+            action_text = brls::getStr("lunarnx/ps/btn_wake_connect");
+            card->registerClickAction([this, host](brls::View*) -> bool {
                 wakeupConsole(host);
                 return true;
             });
         } else if (source_ == PsConsoleSource::Local && paired && local_ready) {
-            stylePrimaryButton(action);
-            action->setText(brls::getStr("lunarnx/ps/btn_connect"));
-            action->registerClickAction([this, host](brls::View*) -> bool {
+            action_text = brls::getStr("lunarnx/ps/btn_connect");
+            card->registerClickAction([this, host](brls::View*) -> bool {
                 diagnosticLog("ui-ps", "Local Connect clicked name=%s",
                               host.nickname.c_str());
                 connectToConsole(host);
                 return true;
             });
         } else if (source_ == PsConsoleSource::Remote && remote_enabled) {
-            stylePrimaryButton(action);
-            action->setText(brls::getStr("lunarnx/ps/btn_connect"));
-            action->registerClickAction([this, host](brls::View*) -> bool {
+            action_text = brls::getStr("lunarnx/ps/btn_connect");
+            card->registerClickAction([this, host](brls::View*) -> bool {
                 diagnosticLog("ui-ps", "Remote Connect clicked name=%s",
                               host.nickname.c_str());
                 connectToConsole(host);
@@ -760,17 +729,22 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
             });
         } else if (source_ == PsConsoleSource::Remote && host.remote.has_value() &&
                    !host.remote->remoteplay_enabled) {
-            styleSecondaryButton(action);
-            action->setText(brls::getStr("lunarnx/ps/btn_how_enable"));
-            action->registerClickAction([this](brls::View*) -> bool {
+            action_text = brls::getStr("lunarnx/ps/btn_how_enable");
+            card->registerClickAction([this](brls::View*) -> bool {
                 showRemotePlayHelp();
                 return true;
             });
         } else {
-            styleSecondaryButton(action);
-            action->setText(brls::getStr("lunarnx/ps/btn_unavailable"));
-            action->registerClickAction([](brls::View*) -> bool { return true; });
+            action_text = brls::getStr("lunarnx/ps/btn_unavailable");
+            card->setFocusable(false);
         }
+        auto* action = new brls::Label();
+        action->setWidth(190);
+        action->setText(action_text);
+        action->setFontSize(14);
+        action->setTextColor(card->isFocusable() ? p.accent : p.text_muted);
+        action->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
+        action->setVerticalAlign(brls::VerticalAlign::CENTER);
         card->addView(action);
         console_list_->addView(card);
     }
@@ -838,8 +812,9 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
     if (source_ == PsConsoleSource::Local) selected.remote.reset();
     else selected.local.reset();
 
-    const bool remote_enabled = selected.remote.has_value() &&
-        selected.remote->remoteplay_enabled && ps_manager_->hasPsnToken();
+    const bool requested_remote = selected.remote.has_value();
+    const bool remote_enabled = requested_remote &&
+        selected.remote->remoteplay_enabled && ps_manager_->hasStoredPsnSession();
     if (!selected.credentials.has_value() && !remote_enabled) {
         diagnosticLog("ui-ps", "connect blocked: no usable route credentials=%s remote_enabled=%s",
                       selected.credentials.has_value() ? "true" : "false",
@@ -847,14 +822,19 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
         if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/no_route"));
         return;
     }
-    auto route = ps_manager_->resolveRoute(selected);
-    if (route.type == ps::ResolvedRouteType::None) {
-        diagnosticLog("ui-ps", "connect blocked by resolver error=%s", route.error.c_str());
-        if (action_status_) action_status_->setText(route.error);
-        return;
+    if (!requested_remote) {
+        auto route = ps_manager_->resolveRoute(selected);
+        if (route.type == ps::ResolvedRouteType::None) {
+            diagnosticLog("ui-ps", "connect blocked by resolver error=%s", route.error.c_str());
+            if (action_status_) action_status_->setText(route.error);
+            return;
+        }
+        diagnosticLog("ui-ps", "connect route resolved type=%d", static_cast<int>(route.type));
+        if (action_status_) action_status_->setText(
+            ps::PsConsoleResolver::routeDescription(route));
+    } else if (action_status_) {
+        action_status_->setText("Connecting via PSN...");
     }
-    diagnosticLog("ui-ps", "connect route resolved type=%d", static_cast<int>(route.type));
-    if (action_status_) action_status_->setText(ps::PsConsoleResolver::routeDescription(route));
 
     const auto settings = loadPsSettings();
     diagnosticLog("ui-ps", "stream profile=%dx%d fps=60 bitrate_kbps=%d",

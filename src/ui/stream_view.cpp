@@ -214,20 +214,20 @@ brls::View* StreamView::createContentView() {
     perf_overlay_->setDetachedPosition(10, 76);
     root->addView(perf_overlay_);
 
-    // Right-edge quick menu. It remains detached and hidden until the edge
-    // swipe is recognized, so normal streaming and controller input stay
-    // untouched.
+    // The menu remains detached and hidden until the button chord is pressed.
     quick_menu_ = new brls::Box(brls::Axis::COLUMN);
-    quick_menu_->setWidth(390);
-    quick_menu_->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
-    quick_menu_->setPadding(42, 28, 36, 28);
+    quick_menu_->setWidth(520);
+    quick_menu_->setHeight(430);
+    quick_menu_->setPadding(28, 32, 24, 32);
     quick_menu_->setBackgroundColor(nvgRGBA(15, 22, 19, 246));
     quick_menu_->setBorderThickness(1);
     quick_menu_->setBorderColor(p.border);
+    quick_menu_->setCornerRadius(6);
     quick_menu_->setVisibility(brls::Visibility::GONE);
     quick_menu_->detach();
     quick_menu_->setDetachedPosition(
-        brls::Application::ORIGINAL_WINDOW_WIDTH - 390, 0);
+        (brls::Application::ORIGINAL_WINDOW_WIDTH - 520) / 2,
+        (brls::Application::ORIGINAL_WINDOW_HEIGHT - 430) / 2);
     quick_menu_->registerAction(brls::getStr("lunarnx/stream/menu_close"),
         brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {

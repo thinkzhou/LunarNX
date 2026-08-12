@@ -306,38 +306,9 @@ brls::View* StreamSettingsActivity::createContentView() {
         });
 
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(28, 64, 40, 64);
+    root->setPadding(24, 64, 40, 64);
     root->setBackgroundColor(p.background);
     scroll->setContentView(root);
-
-    auto* top = new brls::Box(brls::Axis::ROW);
-    top->setHeight(72);
-    top->setAlignItems(brls::AlignItems::CENTER);
-
-    auto* brand = new brls::Label();
-    brand->setText("LUNARNX");
-    brand->setFontSize(18);
-    brand->setTextColor(p.accent);
-    top->addView(brand);
-
-    auto* title = new brls::Label();
-    title->setText(brls::getStr("lunarnx/settings/title"));
-    title->setFontSize(30);
-    title->setTextColor(p.text);
-    title->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
-    title->setGrow(1.0f);
-    top->addView(title);
-    root->addView(top);
-
-    auto* intro = makeUiCard();
-    intro->setMarginBottom(22);
-    auto* intro_title = new brls::Label();
-    intro_title->setText(brls::getStr("lunarnx/settings/intro_title"));
-    intro_title->setFontSize(20);
-    intro_title->setTextColor(p.text);
-    intro->addView(intro_title);
-    intro->addView(makeMutedLabel(brls::getStr("lunarnx/settings/intro_detail"), 14));
-    root->addView(intro);
 
     root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/app_section"),
@@ -549,7 +520,7 @@ brls::View* StreamSettingsActivity::createContentView() {
     hint->setHeight(34);
     hint->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
     root->addView(hint);
-    return scroll;
+    return makeAppFrame(brls::getStr("lunarnx/settings/title"), scroll);
 }
 
 void StreamSettingsActivity::closeSettings() {

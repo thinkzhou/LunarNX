@@ -20,6 +20,12 @@ def main():
     require("makeAppFrame" in platform and
             "makeSidebarButton" in platform,
             "platform selection must use the shared Borealis workspace shell")
+    require("new StreamSettingsActivity(nullptr, loadStreamSettings(), {})" in platform,
+            "platform selection must expose global settings without constructing a controller")
+    require("savedFileExists(lunar::get_token_path())" in platform and
+            "savedFileExists(lunar::get_ps_credentials_path())" in platform and
+            "savedFileExists(lunar::get_psn_token_path())" in platform,
+            "platform tiles must show conservative saved-account readiness without networking")
     require("content_title_ = new brls::Label()" not in ps and
             "content_subtitle_ = makeMutedLabel" not in ps,
             "PS source pages must not duplicate their section headings")
