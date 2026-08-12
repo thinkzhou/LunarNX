@@ -35,6 +35,13 @@ void stylePrimaryButton(brls::Button* button);
 void styleSecondaryButton(brls::Button* button);
 void styleQuietButton(brls::Button* button);
 
+brls::AppletFrame* makeAppFrame(const std::string& title,
+                                brls::View* content);
+brls::Button* makeSidebarButton(const std::string& label, bool active = false);
+void setSidebarButtonActive(brls::Button* button, bool active);
+brls::Box* makePageHeading(const std::string& title,
+                           const std::string& subtitle = "");
+
 class ConsoleGlyphView : public brls::View {
 public:
     ConsoleGlyphView(std::string console_type, bool online);

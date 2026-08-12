@@ -175,6 +175,50 @@ void styleQuietButton(brls::Button* button) {
     button->setHighlightCornerRadius(12);
 }
 
+brls::AppletFrame* makeAppFrame(const std::string& title,
+                                brls::View* content) {
+    auto* frame = new brls::AppletFrame(content);
+    frame->setTitle(title);
+    return frame;
+}
+
+brls::Button* makeSidebarButton(const std::string& label, bool active) {
+    auto* button = new brls::Button();
+    button->setText(label);
+    button->setStyle(&brls::BUTTONSTYLE_BORDERLESS);
+    button->setHeight(58);
+    button->setCornerRadius(0);
+    button->setHighlightCornerRadius(6);
+    button->setJustifyContent(brls::JustifyContent::FLEX_START);
+    button->setPaddingLeft(18);
+    setSidebarButtonActive(button, active);
+    return button;
+}
+
+void setSidebarButtonActive(brls::Button* button, bool active) {
+    if (!button) return;
+    const auto& p = uiPalette();
+    button->setTextColor(active ? p.accent : p.text);
+    button->setBorderThickness(active ? 3 : 0);
+    button->setBorderColor(active ? p.accent : p.surface);
+}
+
+brls::Box* makePageHeading(const std::string& title,
+                           const std::string& subtitle) {
+    const auto& p = uiPalette();
+    auto* heading = new brls::Box(brls::Axis::COLUMN);
+    heading->setHeight(subtitle.empty() ? 48 : 62);
+    auto* title_label = new brls::Label();
+    title_label->setText(title);
+    title_label->setFontSize(25);
+    title_label->setTextColor(p.text);
+    heading->addView(title_label);
+    if (!subtitle.empty()) {
+        heading->addView(makeMutedLabel(subtitle, 13));
+    }
+    return heading;
+}
+
 ConsoleGlyphView::ConsoleGlyphView(std::string console_type, bool online)
     : console_type_(std::move(console_type)), online_(online) {
     setWidth(112);
