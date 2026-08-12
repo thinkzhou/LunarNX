@@ -79,102 +79,76 @@ brls::View* MainActivity::createContentView() {
 
     const auto& p = uiPalette();
 
-    auto* scroll = new brls::ScrollingFrame();
-    scroll_frame_ = scroll;
-    scroll->setBackgroundColor(p.background);
-    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
-    scroll->registerAction("Back",
+    auto* workspace = new brls::Box(brls::Axis::ROW);
+    workspace->setBackgroundColor(p.background);
+    workspace->registerAction("Back",
         brls::ControllerButton::BUTTON_B,
         [](brls::View*) -> bool {
             brls::Application::popActivity(brls::TransitionAnimation::NONE);
             return true;
         });
 
-    auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(26, 48, 36, 48);
-    root->setBackgroundColor(p.background);
-    scroll->setContentView(root);
+    auto* sidebar = new brls::Box(brls::Axis::COLUMN);
+    sidebar->setWidth(286);
+    sidebar->setPadding(24, 24, 24, 30);
+    sidebar->setBackgroundColor(p.surface);
 
-    auto* header = new brls::Box(brls::Axis::ROW);
-    header->setHeight(84);
-    header->setAlignItems(brls::AlignItems::CENTER);
+    source_xbox_ = makeSidebarButton(
+        brls::getStr("lunarnx/common/remote_play"), true);
+    source_xbox_->registerClickAction([this](brls::View*) -> bool {
+        setStreamSource(StreamSource::Xbox);
+        return true;
+    });
+    sidebar->addView(source_xbox_);
+    source_cloud_ = makeSidebarButton(brls::getStr("lunarnx/common/xcloud"));
+    source_cloud_->registerClickAction([this](brls::View*) -> bool {
+        setStreamSource(StreamSource::Cloud);
+        return true;
+    });
+    sidebar->addView(source_cloud_);
 
-    auto* brand = new brls::Box(brls::Axis::COLUMN);
-    brand->setGrow(1.0f);
-    auto* wordmark = new brls::Label();
-    wordmark->setText("LUNARNX");
-    wordmark->setFontSize(29);
-    wordmark->setTextColor(p.accent);
-    brand->addView(wordmark);
-    brand->addView(makeMutedLabel(brls::getStr("lunarnx/main/brand_subtitle"), 13));
-    header->addView(brand);
-
-    auto* settings_btn = new brls::Button();
-    settings_btn->setText(brls::getStr("lunarnx/common/settings"));
-    styleSecondaryButton(settings_btn);
+    auto* settings_btn = makeSidebarButton(brls::getStr("lunarnx/common/settings"));
     settings_btn->registerClickAction([this](brls::View*) -> bool {
         openStreamSettings();
         return true;
     });
-    header->addView(settings_btn);
-
-    auto* about_btn = new brls::Button();
-    about_btn->setText(brls::getStr("lunarnx/common/about"));
-    styleSecondaryButton(about_btn);
-    about_btn->setMarginLeft(8);
+    sidebar->addView(settings_btn);
+    auto* about_btn = makeSidebarButton(brls::getStr("lunarnx/common/about"));
     about_btn->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new AboutActivity(), brls::TransitionAnimation::NONE);
         return true;
     });
-    header->addView(about_btn);
-
-    auto* sign_out_btn = new brls::Button();
-    sign_out_btn->setText(brls::getStr("lunarnx/common/sign_out"));
-    styleQuietButton(sign_out_btn);
-    sign_out_btn->setMarginLeft(8);
+    sidebar->addView(about_btn);
+    auto* sign_out_btn = makeSidebarButton(brls::getStr("lunarnx/common/sign_out"));
     sign_out_btn->registerClickAction([this](brls::View*) -> bool {
         confirmSignOut();
         return true;
     });
-    header->addView(sign_out_btn);
+    sidebar->addView(sign_out_btn);
 
-    auto* account_chip = makeUiCard(brls::Axis::ROW);
-    account_chip->setWidth(286);
-    account_chip->setHeight(58);
-    account_chip->setMarginLeft(10);
-    account_chip->setPadding(7, 10, 7, 10);
-    account_chip->setCornerRadius(14);
-    account_chip->setAlignItems(brls::AlignItems::CENTER);
-
-    auto* account_mark = new brls::Label();
-    account_mark->setWidth(42);
-    account_mark->setHeight(42);
-    account_mark->setText("X");
-    account_mark->setFontSize(15);
-    account_mark->setTextColor(p.accent);
-    account_mark->setBackgroundColor(p.accent_soft);
-    account_mark->setCornerRadius(21);
-    account_mark->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    account_mark->setVerticalAlign(brls::VerticalAlign::CENTER);
-    account_chip->addView(account_mark);
-
-    auto* account_copy = new brls::Box(brls::Axis::COLUMN);
-    account_copy->setGrow(1.0f);
-    account_copy->setPadding(2, 0, 2, 10);
-    auto* account_label = new brls::Label();
-    account_label->setText(brls::getStr("lunarnx/common/account"));
-    account_label->setFontSize(10);
-    account_label->setTextColor(p.accent);
-    account_copy->addView(account_label);
+    auto* account = new brls::Box(brls::Axis::COLUMN);
+    account->setGrow(1.0f);
+    account->setJustifyContent(brls::JustifyContent::FLEX_END);
+    account->addView(makeMutedLabel(brls::getStr("lunarnx/common/account"), 12));
     gamer_tag_ = new brls::Label();
-    gamer_tag_->setFontSize(14);
+    gamer_tag_->setFontSize(15);
     gamer_tag_->setTextColor(p.text);
     gamer_tag_->setSingleLine(true);
-    account_copy->addView(gamer_tag_);
-    account_chip->addView(account_copy);
-    header->addView(account_chip);
-    root->addView(header);
+    account->addView(gamer_tag_);
+    sidebar->addView(account);
+    workspace->addView(sidebar);
+
+    auto* scroll = new brls::ScrollingFrame();
+    scroll_frame_ = scroll;
+    scroll->setGrow(1.0f);
+    scroll->setBackgroundColor(p.background);
+    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
+    auto* root = new brls::Box(brls::Axis::COLUMN);
+    root->setPadding(24, 42, 32, 42);
+    root->setBackgroundColor(p.background);
+    scroll->setContentView(root);
+    workspace->addView(scroll);
 
     const bool can_use_console_api = ctrl_->hasCredentials();
     if (ctrl_->isMockMode()) {
@@ -188,28 +162,6 @@ brls::View* MainActivity::createContentView() {
         gamer_tag_->setText(brls::getStr("lunarnx/common/not_signed_in"));
     }
 
-    auto* source_card = makeUiCard(brls::Axis::ROW);
-    source_card->setHeight(68);
-    source_card->setPadding(8, 8, 8, 8);
-    source_card->setMarginBottom(18);
-    source_xbox_ = new brls::Button();
-    source_xbox_->setText(brls::getStr("lunarnx/common/remote_play"));
-    source_xbox_->setGrow(1.0f);
-    source_xbox_->registerClickAction([this](brls::View*) -> bool {
-        setStreamSource(StreamSource::Xbox);
-        return true;
-    });
-    source_cloud_ = new brls::Button();
-    source_cloud_->setText(brls::getStr("lunarnx/common/xcloud"));
-    source_cloud_->setGrow(1.0f);
-    source_cloud_->setMarginLeft(8);
-    source_cloud_->registerClickAction([this](brls::View*) -> bool {
-        setStreamSource(StreamSource::Cloud);
-        return true;
-    });
-    source_card->addView(source_xbox_);
-    source_card->addView(source_cloud_);
-    root->addView(source_card);
     highlightStreamSource();
 
     auto* content_header = new brls::Box(brls::Axis::ROW);
@@ -298,7 +250,7 @@ brls::View* MainActivity::createContentView() {
             status_->setText(brls::getStr("lunarnx/main/mock_ready"));
         }
     }
-    return scroll;
+    return makeAppFrame("Xbox", workspace);
 }
 
 void MainActivity::onResume() {
@@ -579,6 +531,8 @@ void MainActivity::refreshConsoles() {
         item->setPadding(16, 18, 16, 18);
         item->setMarginBottom(12);
         item->setAlignItems(brls::AlignItems::CENTER);
+        item->setFocusable(can_connect);
+        item->setHighlightCornerRadius(14);
         item->addView(new ConsoleGlyphView(c.console_type, can_connect));
 
         auto* details = new brls::Box(brls::Axis::COLUMN);
@@ -619,20 +573,13 @@ void MainActivity::refreshConsoles() {
         std::string console_name = c.name.empty()
             ? brls::getStr("lunarnx/main/xbox_console")
             : c.name;
-        auto* btn = new brls::Button();
-        btn->setWidth(168);
-        btn->setText(on ? brls::getStr("lunarnx/common/connect")
-                        : (can_connect
-                            ? brls::getStr("lunarnx/common/wake_connect")
-                            : brls::getStr("lunarnx/common/offline")));
-        if (can_connect) stylePrimaryButton(btn);
-        else styleSecondaryButton(btn);
-        if (!can_connect) btn->setState(brls::ButtonState::DISABLED);
-        btn->registerClickAction([this, server_id, console_name](brls::View*) -> bool {
-            startConsoleStream(server_id, console_name);
-            return true;
-        });
-        item->addView(btn);
+        if (can_connect) {
+            item->registerClickAction(
+                [this, server_id, console_name](brls::View*) -> bool {
+                    startConsoleStream(server_id, console_name);
+                    return true;
+                });
+        }
 
         console_list_->addView(item);
     }
@@ -797,19 +744,13 @@ void MainActivity::setStreamSource(StreamSource source) {
 void MainActivity::highlightStreamSource() {
     if (source_xbox_) {
         source_xbox_->setState(brls::ButtonState::ENABLED);
-        if (stream_source_ == StreamSource::Xbox) {
-            stylePrimaryButton(source_xbox_);
-        } else {
-            styleSecondaryButton(source_xbox_);
-        }
+        setSidebarButtonActive(source_xbox_,
+            stream_source_ == StreamSource::Xbox);
     }
     if (source_cloud_) {
         source_cloud_->setState(brls::ButtonState::ENABLED);
-        if (stream_source_ == StreamSource::Cloud) {
-            stylePrimaryButton(source_cloud_);
-        } else {
-            styleSecondaryButton(source_cloud_);
-        }
+        setSidebarButtonActive(source_cloud_,
+            stream_source_ == StreamSource::Cloud);
     }
 }
 
@@ -937,14 +878,15 @@ void MainActivity::rebuildCloudList() {
     auto make_title_card = [this, pending, &palette](
                                const lunar::api::CloudTitle& title,
                                bool load_poster) -> brls::Box* {
-        auto* card = makeUiCard(brls::Axis::ROW);
-        card->setWidth(568);
-        card->setHeight(204);
+        auto* card = makeUiCard(brls::Axis::COLUMN);
+        card->setWidth(240);
+        card->setHeight(250);
         card->setPadding(12, 12, 12, 12);
-        card->setAlignItems(brls::AlignItems::CENTER);
+        card->setFocusable(!title.title_id.empty());
+        card->setHighlightCornerRadius(14);
 
         auto* image = new brls::Image();
-        image->setWidth(116);
+        image->setWidth(216);
         image->setHeight(174);
         image->setCornerRadius(10);
         image->setBackgroundColor(palette.surface_alt);
@@ -957,8 +899,8 @@ void MainActivity::rebuildCloudList() {
         const std::string title_name = title.name.empty() ? title.title_id : title.name;
         auto* details = new brls::Box(brls::Axis::COLUMN);
         details->setGrow(1.0f);
-        details->setHeight(174);
-        details->setPadding(4, 0, 2, 16);
+        details->setHeight(52);
+        details->setPadding(8, 0, 0, 0);
 
         auto* name = new brls::Label();
         name->setText(title_name);
@@ -967,39 +909,14 @@ void MainActivity::rebuildCloudList() {
         name->setSingleLine(true);
         details->addView(name);
 
-        auto* publisher = makeMutedLabel(
-            title.publisher.empty()
-                ? brls::getStr("lunarnx/common/xbox_cloud_gaming")
-                : title.publisher,
-            13);
-        publisher->setSingleLine(true);
-        details->addView(publisher);
-
-        auto* availability = new brls::Label();
-        availability->setHeight(34);
-        availability->setText(brls::getStr("lunarnx/main/cloud_ready"));
-        availability->setFontSize(11);
-        availability->setTextColor(palette.accent);
-        availability->setVerticalAlign(brls::VerticalAlign::CENTER);
-        details->addView(availability);
-
-        auto* spacer = new brls::Box();
-        spacer->setGrow(1.0f);
-        details->addView(spacer);
-
-        auto* play = new brls::Button();
-        play->setText(brls::getStr("lunarnx/common/play"));
-        stylePrimaryButton(play);
-        if (title.title_id.empty()) {
-            play->setState(brls::ButtonState::DISABLED);
-        }
         const std::string title_id = title.title_id;
-        play->registerClickAction(
+        if (!title_id.empty()) {
+            card->registerClickAction(
             [this, title_id, title_name](brls::View*) -> bool {
                 startCloudTitleStream(title_id, title_name);
                 return true;
             });
-        details->addView(play);
+        }
         card->addView(details);
         return card;
     };
@@ -1015,7 +932,7 @@ void MainActivity::rebuildCloudList() {
         const size_t shown = std::min(items.size(), max_items);
         for (size_t index = 0; index < shown; index += 2) {
             auto* row = new brls::Box(brls::Axis::ROW);
-            row->setHeight(216);
+            row->setHeight(264);
             row->addView(make_title_card(items[index], index < max_posters));
             if (index + 1 < shown) {
                 auto* second = make_title_card(

@@ -25,7 +25,7 @@ def main():
             "PS source pages must not duplicate their section headings")
 
     create = xbox.split("brls::View* MainActivity::createContentView()", 1)[1]
-    back = create.split("scroll->registerAction", 1)[1].split(");", 1)[0]
+    back = create.split("workspace->registerAction", 1)[1].split(");", 1)[0]
     require("BUTTON_B" in back and "popActivity" in back,
             "Xbox B action must return to platform selection")
     require("resetToAuthActivity" not in back and "signOut" not in back,
