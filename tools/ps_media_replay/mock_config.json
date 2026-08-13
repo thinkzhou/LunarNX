@@ -1,3 +1,4 @@
 {
-  "ps_network_profile": "mock_replay"
+  "ps_network_profile": "mock_replay",
+  "ps_video_codec": "hevc"
 }

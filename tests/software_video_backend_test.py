@@ -40,8 +40,8 @@ def main():
             "VideoDecoder should accept the selected backend before initialize")
     require("usesHardwareDecode(video_backend_)" in decoder_impl,
             "Switch decoder should keep NVDEC behind both hardware backends")
-    require("Software H.264 decoder initialized" in decoder_impl,
-            "Switch software backend should reuse FFmpeg software H.264 decode")
+    require("Software %s decoder initialized" in decoder_impl,
+            "Switch software backend should reuse the selected FFmpeg decoder")
     require("software alloc probe" in decoder_impl,
             "Switch software decoder should log allocation probes before FFmpeg init")
     require("softwareDecoderThreadCount()" in decoder_impl and

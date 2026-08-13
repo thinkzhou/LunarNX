@@ -295,7 +295,7 @@
   "resolution": "分辨率",
   "drop": "丢弃",
   "hud_metrics": "{0}  |  延迟 {1}ms  |  抖动 {2:.1f}ms  |  帧率 {3:.0f}  |  丢帧 {4} ({5:.2f}%)  |  丢包 {6} ({7:.2f}%)  |  码率 {8:.1f} Mbps  |  解码 {9:.2f}ms",
-  "hud_metrics_ps": "{0}  |  延迟 {1}ms  |  码率 {2:.1f} Mbps  |  丢包 {3:.2f}%  |  帧率 {4:.1f}  |  解码 {5:.2f}ms  |  丢帧 {6}",
+  "hud_metrics_ps": "{0}  |  延迟 {1}ms  |  码率 {2:.1f} Mbps  |  丢包 {3:.2f}%  |  帧率 {4:.1f}  |  解码 {5:.2f}ms ({7})  |  丢帧 {6}",
   "detail_frames": "帧率: {0:.1f}  (视频:{1} 音频:{2} 输入:{3})",
   "detail_frames_xbox": "帧率: {0:.0f}  (视频:{1} 音频:{2} 输入:{3})",
   "detail_decode": "解码: {0:.1f} ms",
@@ -306,6 +306,7 @@
   "detail_rtp": "RTP: 视频{0} 音频{1} 缺失{2} H.264损坏{3} SRTP失败{4}",
   "detail_resolution": "分辨率: {0}",
   "detail_backend": "后端: {0}",
+  "detail_codec": "视频编码: {0}",
   "detail_packet_loss": "丢包: {0} ({1:.1f}%)"
  },
  "ps": {
@@ -327,6 +328,7 @@
   "settings_bitrate": "码率",
   "settings_controller_section": "控制器",
   "settings_controller_detail": "PlayStation 串流按键映射",
+  "settings_codec": "视频编码",
   "tab_local": "局域网串流",
   "tab_remote": "通过 PSN 远程",
   "account_header": "账户",

@@ -29,7 +29,8 @@ void PsStreamController::releasePendingRemoteResult() {
 PsStreamController::PsStreamController(const PsConsole& console,
                                         const std::string& psn_access_token,
                                         const std::string& psn_account_id,
-                                        int width, int height, int fps, int bitrate_kbps)
+                                        int width, int height, int fps, int bitrate_kbps,
+                                        stream::VideoCodec video_codec)
     : console_(console)
     , psn_access_token_(psn_access_token)
     , psn_account_id_(psn_account_id)
@@ -37,6 +38,8 @@ PsStreamController::PsStreamController(const PsConsole& console,
     , height_(height)
     , fps_(fps)
     , bitrate_kbps_(bitrate_kbps)
+    , video_codec_(console.target >= 1000000
+          ? video_codec : stream::VideoCodec::H264)
     , video_backend_(stream::VideoBackend::HardwareZeroCopy) {}
 
 PsStreamController::~PsStreamController() {
@@ -85,6 +88,9 @@ bool PsStreamController::startStream() {
     lunar::startDropDiagnosticWriter();
 
     const bool mock_replay = psMockReplayEnabled();
+    diagnosticLog("ps-controller", "video codec=%s target_ps5=%d",
+                  stream::videoCodecName(video_codec_),
+                  console_.target >= 1000000 ? 1 : 0);
     bool has_token = !psn_access_token_.empty();
     ResolvedRoute route;
     if (mock_replay) {
@@ -216,11 +222,12 @@ bool PsStreamController::startStream() {
             0.0f, 0.0f, 30, 0, 0);
     });
     if (mock_replay) {
-        mock_session_ = std::make_unique<PsMockReplaySession>(*bridge_, fps_);
+        mock_session_ = std::make_unique<PsMockReplaySession>(
+            *bridge_, fps_, video_codec_);
     } else {
         session_ = std::make_unique<PsStreamSession>(
             host_addr, regist_key, morning, console_.target,
-            width_, height_, fps_, bitrate_kbps_, *bridge_);
+            width_, height_, fps_, bitrate_kbps_, video_codec_, *bridge_);
     }
 
     PsSessionCallbacks callbacks;
@@ -286,6 +293,7 @@ bool PsStreamController::startStream() {
     // Now initialize the media pipeline (NVDEC, audio) while the session
     // thread already runs regist/request on the CTRL channel in parallel.
     stream::MediaPipelineOptions media_opts;
+    media_opts.video_codec = video_codec_;
     media_opts.hold_non_target_startup_frames = true;
     media_opts.video_backend = video_backend_;
     if (!media_->initialize(width_, height_, &perf_, media_opts)) {

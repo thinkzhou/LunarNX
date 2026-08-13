@@ -457,11 +457,15 @@ void StreamView::runLoop() {
         std::string res = std::to_string(w) + "x" + std::to_string(h);
         std::string video_backend = stream::videoBackendOverlayName(
             runtime_->getDefaultVideoBackend());
+        std::string video_codec = stream::videoCodecOverlayName(
+            runtime_->getVideoCodec());
         auto alive = alive_;
-        brls::sync([alive, this, fps, res, video_backend]() {
+        brls::sync([alive, this, fps, res, video_backend, video_codec]() {
             if (!alive->load()) return;
-            if (overlay_) overlay_->update(fps, res);
-            if (perf_overlay_) perf_overlay_->update(fps, res, video_backend);
+            if (overlay_) overlay_->update(fps, res, video_codec);
+            if (perf_overlay_) {
+                perf_overlay_->update(fps, res, video_backend, video_codec);
+            }
         });
 
         // Detect disconnect/error

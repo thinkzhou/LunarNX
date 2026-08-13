@@ -35,7 +35,8 @@ public:
     PsStreamController(const PsConsole& console,
                        const std::string& psn_access_token,
                        const std::string& psn_account_id,
-                       int width, int height, int fps, int bitrate_kbps);
+                       int width, int height, int fps, int bitrate_kbps,
+                       stream::VideoCodec video_codec = stream::VideoCodec::H264);
     ~PsStreamController() override;
 
     // IStreamRuntime
@@ -45,6 +46,7 @@ public:
     int getStreamWidth() const override { return width_; }
     int getStreamHeight() const override { return height_; }
     stream::VideoBackend getDefaultVideoBackend() const override { return video_backend_; }
+    stream::VideoCodec getVideoCodec() const override { return video_codec_; }
     app::StreamPlatform getStreamPlatform() const override {
         return app::StreamPlatform::PlayStation;
     }
@@ -77,6 +79,7 @@ private:
     std::string psn_access_token_;
     std::string psn_account_id_;
     int width_, height_, fps_, bitrate_kbps_;
+    stream::VideoCodec video_codec_;
     stream::VideoBackend video_backend_;
 
     // Components

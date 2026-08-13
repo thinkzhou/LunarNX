@@ -62,7 +62,7 @@ struct Demuxer {
         return next;
     }
 
-    bool open() {
+    bool open(stream::VideoCodec expected_codec) {
         FILE* input = std::fopen(kFixturePath, "rb");
         if (!input) return false;
         std::fseek(input, 0, SEEK_END);
@@ -100,7 +100,9 @@ struct Demuxer {
         if (video_index < 0 || audio_index < 0) return false;
         const auto* video = format->streams[video_index]->codecpar;
         const auto* audio = format->streams[audio_index]->codecpar;
-        return video->codec_id == AV_CODEC_ID_H264 &&
+        const AVCodecID expected_id = expected_codec == stream::VideoCodec::HEVC
+            ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
+        return video->codec_id == expected_id &&
                audio->codec_id == AV_CODEC_ID_OPUS &&
                audio->sample_rate == 48000 && audio->ch_layout.nb_channels == 2;
     }
@@ -153,8 +155,10 @@ bool psMockReplayEnabled() {
 #endif
 }
 
-PsMockReplaySession::PsMockReplaySession(PsMediaBridge& bridge, int fps)
-    : bridge_(bridge), fps_(std::clamp(fps, 1, 120)) {}
+PsMockReplaySession::PsMockReplaySession(PsMediaBridge& bridge, int fps,
+                                         stream::VideoCodec video_codec)
+    : bridge_(bridge), fps_(std::clamp(fps, 1, 120)),
+      video_codec_(video_codec) {}
 
 PsMockReplaySession::~PsMockReplaySession() {
     stop();
@@ -176,20 +180,22 @@ void PsMockReplaySession::stop() {
 void PsMockReplaySession::replayLoop() {
     if (callbacks_.on_status) callbacks_.on_status("Opening mock replay fixture...");
     Demuxer demux;
-    if (!demux.open()) {
+    if (!demux.open(video_codec_)) {
         last_error_ = "Missing or invalid ps_media_replay.mp4";
         running_ = false;
         if (callbacks_.on_error) callbacks_.on_error(last_error_);
         return;
     }
 
-    const AVBitStreamFilter* filter = av_bsf_get_by_name("h264_mp4toannexb");
+    const char* filter_name = video_codec_ == stream::VideoCodec::HEVC
+        ? "hevc_mp4toannexb" : "h264_mp4toannexb";
+    const AVBitStreamFilter* filter = av_bsf_get_by_name(filter_name);
     AVBSFContext* bsf = nullptr;
     const auto* video_par = demux.format->streams[demux.video_index]->codecpar;
     if (!filter || av_bsf_alloc(filter, &bsf) < 0 ||
         avcodec_parameters_copy(bsf->par_in, video_par) < 0) {
         av_bsf_free(&bsf);
-        last_error_ = "H.264 Annex-B filter unavailable";
+        last_error_ = std::string(filter_name) + " unavailable";
         running_ = false;
         if (callbacks_.on_error) callbacks_.on_error(last_error_);
         return;
@@ -197,7 +203,7 @@ void PsMockReplaySession::replayLoop() {
     bsf->time_base_in = demux.format->streams[demux.video_index]->time_base;
     if (av_bsf_init(bsf) < 0) {
         av_bsf_free(&bsf);
-        last_error_ = "H.264 Annex-B filter initialization failed";
+        last_error_ = std::string(filter_name) + " initialization failed";
         running_ = false;
         if (callbacks_.on_error) callbacks_.on_error(last_error_);
         return;

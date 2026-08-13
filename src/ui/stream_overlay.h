@@ -14,7 +14,8 @@ namespace lunar::ui {
 class StreamOverlay : public brls::Box {
 public:
     StreamOverlay(const stream::PerfStats* perf, app::StreamPlatform platform);
-    void update(float fps, const std::string& resolution);
+    void update(float fps, const std::string& resolution,
+                const std::string& video_codec);
 
 private:
     const stream::PerfStats* perf_ = nullptr;

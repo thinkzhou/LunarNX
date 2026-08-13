@@ -295,7 +295,7 @@
   "resolution": "Res",
   "drop": "Drop",
   "hud_metrics": "{0}  |  RTT {1}ms  |  JIT {2:.1f}ms  |  FPS {3:.0f}  |  FD {4} ({5:.2f}%)  |  PL {6} ({7:.2f}%)  |  Bitrate {8:.1f} Mbps  |  DT {9:.2f}ms",
-  "hud_metrics_ps": "{0}  |  RTT {1}ms  |  BT {2:.1f} Mbps  |  PL {3:.2f}%  |  FPS {4:.1f}  |  DT {5:.2f}ms  |  FL {6}",
+  "hud_metrics_ps": "{0}  |  RTT {1}ms  |  BT {2:.1f} Mbps  |  PL {3:.2f}%  |  FPS {4:.1f}  |  DT {5:.2f}ms ({7})  |  FL {6}",
   "detail_frames": "FPS: {0:.1f}  (V:{1} A:{2} I:{3})",
   "detail_frames_xbox": "FPS: {0:.0f}  (V:{1} A:{2} I:{3})",
   "detail_decode": "Dec: {0:.1f} ms",
@@ -306,6 +306,7 @@
   "detail_rtp": "RTP: V{0} A{1} miss{2} h264bad{3} srtp{4}",
   "detail_resolution": "Res: {0}",
   "detail_backend": "Backend: {0}",
+  "detail_codec": "Codec: {0}",
   "detail_packet_loss": "Drop: {0} ({1:.1f}%)"
  },
  "ps": {
@@ -327,6 +328,7 @@
   "settings_bitrate": "Bitrate",
   "settings_controller_section": "Controller",
   "settings_controller_detail": "PlayStation streaming button mapping",
+  "settings_codec": "Video codec",
   "tab_local": "Local Remote Play",
   "tab_remote": "Remote via PSN",
   "account_header": "Account",

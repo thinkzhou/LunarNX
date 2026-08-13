@@ -5,6 +5,7 @@
 #include "audio_packet_reorder.h"
 #include "audio_decoder.h"
 #include "stream_backend_provider.h"
+#include "video_codec.h"
 #include <atomic>
 #include <functional>
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
@@ -69,6 +70,7 @@ inline bool usesZeroCopyRender(VideoBackend backend) {
 }
 
 struct MediaPipelineOptions {
+    VideoCodec video_codec = VideoCodec::H264;
     VideoBackend video_backend = VideoBackend::HardwareZeroCopy;
     PostProcessMode post_process_mode = PostProcessMode::Off;
     bool dithering_enabled = false;
@@ -168,6 +170,7 @@ private:
     std::unique_ptr<AVSync> av_sync_;
 
     PerfStats* perf_ = nullptr;
+    VideoCodec video_codec_ = VideoCodec::H264;
     std::atomic<bool> running_{false};
     std::atomic<uint32_t> generation_{0};
     mutable std::mutex lifecycle_mutex_;

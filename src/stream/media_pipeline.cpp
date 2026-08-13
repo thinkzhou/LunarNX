@@ -42,23 +42,6 @@ bool shouldLogMediaWorker() {
     return g_media_worker_logs.fetch_add(1) < kMediaWorkerLogLimit;
 }
 
-bool accessUnitContainsIdr(const uint8_t* data, size_t len) {
-    if (!data || len < 4) return false;
-    for (size_t offset = 0; offset + 3 < len; ++offset) {
-        if (data[offset] != 0 || data[offset + 1] != 0) continue;
-        size_t nalu_offset = 0;
-        if (data[offset + 2] == 1) {
-            nalu_offset = offset + 3;
-        } else if (offset + 4 < len && data[offset + 2] == 0 &&
-                   data[offset + 3] == 1) {
-            nalu_offset = offset + 4;
-        }
-        if (nalu_offset < len && (data[nalu_offset] & 0x1f) == 5) {
-            return true;
-        }
-    }
-    return false;
-}
 }
 
 MediaPipeline::MediaPipeline(StreamBackendProvider& provider)
@@ -77,14 +60,16 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
     uint32_t worker_generation = 0;
     {
         std::lock_guard<std::mutex> lock(lifecycle_mutex_);
-        lunar::diagnosticLog("media", "initialize begin width=%d height=%d",
+        lunar::diagnosticLog("media", "initialize begin width=%d height=%d codec=%s",
                              width,
-                             height);
+                             height,
+                             videoCodecName(options.video_codec));
         shutdownUnlocked();
 
         const uint32_t generation = generation_.fetch_add(1) + 1;
         video_ready_notified_ = false;
         perf_ = perf;
+        video_codec_ = options.video_codec;
 
         try {
             lunar::diagnosticLog("media", "create components begin backend=%s",
@@ -130,6 +115,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         }
 
         video_decoder_->setVideoBackend(options.video_backend);
+        video_decoder_->setVideoCodec(options.video_codec);
         video_decoder_->setPerfStats(perf_);
         lunar::diagnosticLog("media", "video decoder init begin");
         if (!video_decoder_->initialize(width, height)) {
@@ -363,7 +349,8 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
     QueuedVideoPacket packet;
     packet.timestamp = timestamp;
     packet.generation = generation_.load();
-    packet.contains_idr = accessUnitContainsIdr(data, len);
+    packet.contains_idr = inspectVideoAccessUnit(video_codec_, data, len)
+        .has_random_access;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     packet.enqueued_at = std::chrono::steady_clock::now();
 #endif

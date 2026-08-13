@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 namespace lunar::ui {
@@ -44,6 +45,11 @@ PsSettingsSnapshot loadPsSettings() {
     if (cJSON_IsNumber(resolution) && resolution->valueint >= 1080) { out.width = 1920; out.height = 1080; }
     const cJSON* bitrate = cJSON_GetObjectItem(root, "ps_bitrate_kbps");
     if (cJSON_IsNumber(bitrate) && bitrate->valueint > 0) out.bitrate_kbps = bitrate->valueint;
+    const cJSON* codec = cJSON_GetObjectItem(root, "ps_video_codec");
+    if (cJSON_IsString(codec) && codec->valuestring &&
+        std::strcmp(codec->valuestring, "hevc") == 0) {
+        out.video_codec = stream::VideoCodec::HEVC;
+    }
     cJSON_Delete(root);
     return out;
 }
@@ -54,6 +60,9 @@ bool savePsSettings(const PsSettingsSnapshot& settings) {
     cJSON_AddNumberToObject(root, "ps_resolution", settings.height);
     cJSON_DeleteItemFromObject(root, "ps_bitrate_kbps");
     cJSON_AddNumberToObject(root, "ps_bitrate_kbps", settings.bitrate_kbps);
+    cJSON_DeleteItemFromObject(root, "ps_video_codec");
+    cJSON_AddStringToObject(root, "ps_video_codec",
+                            stream::videoCodecName(settings.video_codec));
     bool ok = writeConfig(root);
     cJSON_Delete(root);
     return ok;
@@ -83,7 +92,17 @@ brls::View* PsSettingsActivity::createContentView() {
     auto* bitrate = new brls::SelectorCell();
     bitrate->init(brls::getStr("lunarnx/ps/settings_bitrate"), {"10 Mbps", "20 Mbps", "30 Mbps"}, settings_.bitrate_kbps >= 30000 ? 2 : settings_.bitrate_kbps >= 20000 ? 1 : 0,
         [this](int selected) { settings_.bitrate_kbps = selected >= 2 ? 30000 : selected == 1 ? 20000 : 10000; });
-    card->addView(bitrate); root->addView(card);
+    card->addView(bitrate);
+    auto* codec = new brls::SelectorCell();
+    codec->init(brls::getStr("lunarnx/ps/settings_codec"),
+        {"H.264", "HEVC (H.265)"},
+        settings_.video_codec == stream::VideoCodec::HEVC ? 1 : 0,
+        [this](int selected) {
+            settings_.video_codec = selected == 1
+                ? stream::VideoCodec::HEVC : stream::VideoCodec::H264;
+        });
+    card->addView(codec);
+    root->addView(card);
     root->addView(makeSectionHeader(
         brls::getStr("lunarnx/ps/settings_controller_section"),
         brls::getStr("lunarnx/ps/settings_controller_detail")));

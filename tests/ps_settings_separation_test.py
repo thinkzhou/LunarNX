@@ -13,6 +13,8 @@ def main():
     assert '"ps_resolution"' in settings
     assert '"ps_bitrate_kbps"' in settings
     assert "ButtonMappingProfile::PlayStation" in settings
+    assert '"ps_video_codec"' in settings
+    assert "HEVC (H.265)" in settings
     assert "force_region_ip" not in settings
     assert "xCloud" not in settings
     assert "ps_settings_activity.cpp" in build

@@ -969,11 +969,13 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
     if (action_status_) action_status_->setText(ps::PsConsoleResolver::routeDescription(route));
 
     const auto settings = loadPsSettings();
-    diagnosticLog("ui-ps", "stream profile=%dx%d fps=60 bitrate_kbps=%d",
-                  settings.width, settings.height, settings.bitrate_kbps);
+    diagnosticLog("ui-ps", "stream profile=%dx%d fps=60 bitrate_kbps=%d codec=%s",
+                  settings.width, settings.height, settings.bitrate_kbps,
+                  stream::videoCodecName(settings.video_codec));
     auto controller = std::make_shared<ps::PsStreamController>(
         selected, ps_manager_->getPsnAccessToken(), ps_manager_->getPsnAccountId(),
-        settings.width, settings.height, 60, settings.bitrate_kbps);
+        settings.width, settings.height, 60, settings.bitrate_kbps,
+        settings.video_codec);
     const auto stream_settings = loadStreamSettings();
     controller->setRumbleEnabled(stream_settings.vibration_enabled);
     controller->setRumbleStrengthPercent(stream_settings.rumble_strength_percent);

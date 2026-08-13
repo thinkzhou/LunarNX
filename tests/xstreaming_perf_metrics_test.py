@@ -56,6 +56,7 @@ def main() -> None:
         "detail_rtp",
         "detail_resolution",
         "detail_backend",
+        "detail_codec",
         "detail_packet_loss",
     ):
         require(f'"lunarnx/perf/{key}"' in detail_overlay,

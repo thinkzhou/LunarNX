@@ -113,7 +113,8 @@ struct Demuxer {
         if (video_index < 0 || audio_index < 0) return false;
         const auto* video = format->streams[video_index]->codecpar;
         const auto* audio = format->streams[audio_index]->codecpar;
-        return video->codec_id == AV_CODEC_ID_H264 &&
+        return (video->codec_id == AV_CODEC_ID_H264 ||
+                video->codec_id == AV_CODEC_ID_HEVC) &&
                audio->codec_id == AV_CODEC_ID_OPUS &&
                audio->sample_rate == 48000 && audio->ch_layout.nb_channels == 2;
     }
@@ -254,11 +255,13 @@ private:
         if (media_) media_->presentVideoFrame();
     }
 
-    bool initializePipeline(int width, int height) {
+    bool initializePipeline(int width, int height,
+                            lunar::stream::VideoCodec video_codec) {
         std::lock_guard<std::mutex> lock(pipeline_mutex_);
         provider_ = lunar::stream::StreamBackendProvider::createDefault();
         media_ = std::make_unique<lunar::stream::MediaPipeline>(*provider_);
         lunar::stream::MediaPipelineOptions options;
+        options.video_codec = video_codec;
         options.video_backend = kVideoBackend;
         perf_.reset();
         first_video_ = false;
@@ -301,26 +304,32 @@ private:
             return;
         }
         const auto* video_par = demux.format->streams[demux.video_index]->codecpar;
-        if (!initializePipeline(video_par->width, video_par->height)) {
+        const auto video_codec = video_par->codec_id == AV_CODEC_ID_HEVC
+            ? lunar::stream::VideoCodec::HEVC : lunar::stream::VideoCodec::H264;
+        if (!initializePipeline(video_par->width, video_par->height, video_codec)) {
             writeResult("FAIL", "reason=pipeline_init");
             setStatus("FAIL: media pipeline initialization failed");
             return;
         }
 
-        const AVBitStreamFilter* filter = av_bsf_get_by_name("h264_mp4toannexb");
+        const char* filter_name = video_codec == lunar::stream::VideoCodec::HEVC
+            ? "hevc_mp4toannexb" : "h264_mp4toannexb";
+        const AVBitStreamFilter* filter = av_bsf_get_by_name(filter_name);
         AVBSFContext* bsf = nullptr;
         if (!filter || av_bsf_alloc(filter, &bsf) < 0 ||
             avcodec_parameters_copy(bsf->par_in, video_par) < 0) {
             av_bsf_free(&bsf);
-            writeResult("FAIL", "reason=h264_bsf_init");
-            setStatus("FAIL: h264_mp4toannexb unavailable");
+            writeResult("FAIL", "reason=video_bsf_init codec=%s",
+                        lunar::stream::videoCodecName(video_codec));
+            setStatus(std::string("FAIL: ") + filter_name + " unavailable");
             return;
         }
         bsf->time_base_in = demux.format->streams[demux.video_index]->time_base;
         if (av_bsf_init(bsf) < 0) {
             av_bsf_free(&bsf);
-            writeResult("FAIL", "reason=h264_bsf_init");
-            setStatus("FAIL: h264_mp4toannexb unavailable");
+            writeResult("FAIL", "reason=video_bsf_init codec=%s",
+                        lunar::stream::videoCodecName(video_codec));
+            setStatus(std::string("FAIL: ") + filter_name + " unavailable");
             return;
         }
         const auto wall_start = std::chrono::steady_clock::now();
@@ -359,7 +368,8 @@ private:
 
             if (restart_requested_.exchange(false)) {
                 destroyPipeline();
-                if (!initializePipeline(video_par->width, video_par->height)) {
+                if (!initializePipeline(video_par->width, video_par->height,
+                                        video_codec)) {
                     av_packet_free(&packet);
                     writeResult("FAIL", "reason=pipeline_restart backend=%s",
                                 lunar::stream::videoBackendName(kVideoBackend));

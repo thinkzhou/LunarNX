@@ -12,6 +12,17 @@ cp /tmp/ps_media_replay.mp4 \
   "$HOME/work/self/ryujinx-data/sdcard/switch/LunarNX/ps_media_replay.mp4"
 ```
 
+Generate an 8-bit HEVC fixture for the PS5 production codec path:
+
+```sh
+PS_MEDIA_REPLAY_CODEC=hevc \
+  tools/ps_media_replay/generate_fixture.sh /tmp/ps_media_replay.mp4
+```
+
+Both generated fixtures use FFmpeg's `testsrc2`: vertical color bars, moving
+shapes, a frame counter, and a running timestamp. The HEVC fixture changes the
+encoder and bitrate, not the visual test pattern.
+
 To replay the exact H.264 video track previously used by the Xbox/Rho test,
 preserving its encoded video bytes while adapting only the audio for Chiaki:
 
@@ -34,7 +45,7 @@ docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
 ```
 
 Run `build/switch-psmedia-software/LunarNXPsMediaReplay.nro`. The player converts MP4
-H.264 packets to Annex-B access units, sends the Opus stream header and encoded
+H.264 or HEVC packets to Annex-B access units, sends the Opus stream header and encoded
 packets through `PsMediaBridge`, then uses the normal `MediaPipeline`, renderer,
 and Audren implementations. The default software backend establishes a simulator
 baseline without invoking Ryubing's NVDEC emulation. Use
@@ -56,6 +67,21 @@ events manually:
 - `X`: report one lost video frame on the next sample.
 - `Y`: stop and reinitialize the complete media pipeline.
 - `B`: exit.
+
+### Ryubing HEVC limitation
+
+Ryubing Canary 1.3.333 does not implement the NVDEC HEVC application id. An
+HEVC run with `PSMEDIA_BACKEND=copyout` or `PSMEDIA_BACKEND=zerocopy` can report
+decoded/rendered frames while displaying an uninitialized green surface. The
+same fixture renders correctly with `PSMEDIA_BACKEND=software`; this validates
+the HEVC bitstream conversion, decoder gate, recovery, audio, and renderer, but
+not HEVC NVDEC pixel output or performance.
+
+For HEVC, a hardware-backend `status=PASS` is therefore only a lifecycle result
+under this Ryubing version. Visible HEVC hardware output and performance must be
+verified on a real Switch. The Switch FFmpeg archive includes the
+`hevc_nvtegra` hardware accelerator; the remaining risk is runtime behavior on
+Tegra X1 hardware rather than a missing LunarNX decoder backend.
 
 The fixture is generated and remains untracked. A future capture from the macOS
 native probe can use the same callback-level replay boundary.

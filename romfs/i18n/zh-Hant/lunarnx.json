@@ -295,7 +295,7 @@
   "resolution": "解析度",
   "drop": "丟棄",
   "hud_metrics": "{0}  |  延遲 {1}ms  |  抖動 {2:.1f}ms  |  幀率 {3:.0f}  |  丟幀 {4} ({5:.2f}%)  |  封包遺失 {6} ({7:.2f}%)  |  位元率 {8:.1f} Mbps  |  解碼 {9:.2f}ms",
-  "hud_metrics_ps": "{0}  |  延遲 {1}ms  |  位元率 {2:.1f} Mbps  |  封包遺失 {3:.2f}%  |  幀率 {4:.1f}  |  解碼 {5:.2f}ms  |  丟幀 {6}",
+  "hud_metrics_ps": "{0}  |  延遲 {1}ms  |  位元率 {2:.1f} Mbps  |  封包遺失 {3:.2f}%  |  幀率 {4:.1f}  |  解碼 {5:.2f}ms ({7})  |  丟幀 {6}",
   "detail_frames": "幀率: {0:.1f}  (視訊:{1} 音訊:{2} 輸入:{3})",
   "detail_frames_xbox": "幀率: {0:.0f}  (視訊:{1} 音訊:{2} 輸入:{3})",
   "detail_decode": "解碼: {0:.1f} ms",
@@ -306,6 +306,7 @@
   "detail_rtp": "RTP: 視訊{0} 音訊{1} 遺失{2} H.264損壞{3} SRTP失敗{4}",
   "detail_resolution": "解析度: {0}",
   "detail_backend": "後端: {0}",
+  "detail_codec": "視訊編碼: {0}",
   "detail_packet_loss": "封包遺失: {0} ({1:.1f}%)"
  },
  "ps": {
@@ -327,6 +328,7 @@
   "settings_bitrate": "位元率",
   "settings_controller_section": "控制器",
   "settings_controller_detail": "PlayStation 串流按鍵映射",
+  "settings_codec": "視訊編碼",
   "tab_local": "區域網路串流",
   "tab_remote": "透過 PSN 遠端",
   "account_header": "帳戶",

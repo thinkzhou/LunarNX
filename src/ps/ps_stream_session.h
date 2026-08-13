@@ -45,6 +45,7 @@ public:
                     const uint8_t* regist_key, const uint8_t* morning,
                     int target,
                     int width, int height, int fps, int bitrate_kbps,
+                    stream::VideoCodec video_codec,
                     PsMediaBridge& bridge);
     ~PsStreamSession();
 
@@ -87,6 +88,7 @@ private:
     uint8_t morning_[0x10];
     bool is_ps5_;
     int width_, height_, fps_, bitrate_kbps_;
+    stream::VideoCodec video_codec_;
     PsMediaBridge& bridge_;
 
     // Remote mode

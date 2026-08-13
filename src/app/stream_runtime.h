@@ -4,6 +4,7 @@ namespace lunar::stream {
 
 struct PerfStats;
 enum class VideoBackend;
+enum class VideoCodec;
 
 } // namespace lunar::stream
 
@@ -37,6 +38,7 @@ public:
     virtual int getStreamWidth() const = 0;
     virtual int getStreamHeight() const = 0;
     virtual stream::VideoBackend getDefaultVideoBackend() const = 0;
+    virtual stream::VideoCodec getVideoCodec() const = 0;
     virtual StreamPlatform getStreamPlatform() const = 0;
 
     virtual void setInputSuppressed(bool suppressed) = 0;

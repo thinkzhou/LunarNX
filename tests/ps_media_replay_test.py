@@ -12,8 +12,10 @@ def main():
     makefile = Path("Makefile.switch.psmedia").read_text()
     fixture = Path("tools/ps_media_replay/generate_fixture.sh").read_text()
 
-    require('av_bsf_get_by_name("h264_mp4toannexb")' in source,
-            "MP4 H.264 must be converted to Chiaki-compatible Annex-B")
+    require('"h264_mp4toannexb"' in source and
+            '"hevc_mp4toannexb"' in source and
+            "av_bsf_get_by_name(filter_name)" in source,
+            "MP4 H.264 and HEVC must be converted to Chiaki-compatible Annex-B")
     require("bridge_->onVideoSample" in source,
             "video access units must enter the production PS bridge")
     require("bsf->par_out->extradata" not in source and
