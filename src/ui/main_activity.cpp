@@ -90,59 +90,79 @@ brls::View* MainActivity::createContentView() {
             return true;
         });
 
-    auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(26, 48, 36, 48);
+    auto* root = new brls::Box(brls::Axis::ROW);
     root->setBackgroundColor(p.background);
     scroll->setContentView(root);
 
-    auto* header = new brls::Box(brls::Axis::ROW);
-    header->setHeight(84);
-    header->setAlignItems(brls::AlignItems::CENTER);
+    // Left sidebar navigation.
+    auto* sidebar = new brls::Box(brls::Axis::COLUMN);
+    sidebar->setWidth(232);
+    sidebar->setPadding(24, 20, 24, 20);
+    sidebar->setBackgroundColor(p.surface);
 
-    auto* brand = new brls::Box(brls::Axis::COLUMN);
-    brand->setGrow(1.0f);
     auto* wordmark = new brls::Label();
     wordmark->setText("LUNARNX");
-    wordmark->setFontSize(29);
+    wordmark->setFontSize(26);
     wordmark->setTextColor(p.accent);
-    brand->addView(wordmark);
-    brand->addView(makeMutedLabel(brls::getStr("lunarnx/main/brand_subtitle"), 13));
-    header->addView(brand);
+    sidebar->addView(wordmark);
+    sidebar->addView(makeMutedLabel(brls::getStr("lunarnx/main/brand_subtitle"), 12));
+
+    source_xbox_ = new brls::Button();
+    source_xbox_->setText(brls::getStr("lunarnx/common/remote_play"));
+    source_xbox_->setWidthPercentage(100.0f);
+    source_xbox_->setMarginTop(24);
+    source_xbox_->registerClickAction([this](brls::View*) -> bool {
+        setStreamSource(StreamSource::Xbox);
+        return true;
+    });
+    sidebar->addView(source_xbox_);
+
+    source_cloud_ = new brls::Button();
+    source_cloud_->setText(brls::getStr("lunarnx/common/xcloud"));
+    source_cloud_->setWidthPercentage(100.0f);
+    source_cloud_->setMarginTop(8);
+    source_cloud_->registerClickAction([this](brls::View*) -> bool {
+        setStreamSource(StreamSource::Cloud);
+        return true;
+    });
+    sidebar->addView(source_cloud_);
+    highlightStreamSource();
+
+    auto* nav_sep = new brls::Box();
+    nav_sep->setHeight(1);
+    nav_sep->setBackgroundColor(p.border);
+    nav_sep->setMarginTop(18);
+    nav_sep->setMarginBottom(18);
+    sidebar->addView(nav_sep);
 
     auto* settings_btn = new brls::Button();
     settings_btn->setText(brls::getStr("lunarnx/common/settings"));
-    styleSecondaryButton(settings_btn);
+    settings_btn->setWidthPercentage(100.0f);
+    styleQuietButton(settings_btn);
     settings_btn->registerClickAction([this](brls::View*) -> bool {
         openStreamSettings();
         return true;
     });
-    header->addView(settings_btn);
+    sidebar->addView(settings_btn);
 
     auto* about_btn = new brls::Button();
     about_btn->setText(brls::getStr("lunarnx/common/about"));
-    styleSecondaryButton(about_btn);
-    about_btn->setMarginLeft(8);
+    about_btn->setWidthPercentage(100.0f);
+    styleQuietButton(about_btn);
+    about_btn->setMarginTop(8);
     about_btn->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new AboutActivity(), brls::TransitionAnimation::NONE);
         return true;
     });
-    header->addView(about_btn);
+    sidebar->addView(about_btn);
 
-    auto* sign_out_btn = new brls::Button();
-    sign_out_btn->setText(brls::getStr("lunarnx/common/sign_out"));
-    styleQuietButton(sign_out_btn);
-    sign_out_btn->setMarginLeft(8);
-    sign_out_btn->registerClickAction([this](brls::View*) -> bool {
-        confirmSignOut();
-        return true;
-    });
-    header->addView(sign_out_btn);
+    auto* side_spacer = new brls::Box();
+    side_spacer->setGrow(1.0f);
+    sidebar->addView(side_spacer);
 
     auto* account_chip = makeUiCard(brls::Axis::ROW);
-    account_chip->setWidth(286);
     account_chip->setHeight(58);
-    account_chip->setMarginLeft(10);
     account_chip->setPadding(7, 10, 7, 10);
     account_chip->setCornerRadius(14);
     account_chip->setAlignItems(brls::AlignItems::CENTER);
@@ -161,7 +181,7 @@ brls::View* MainActivity::createContentView() {
 
     auto* account_copy = new brls::Box(brls::Axis::COLUMN);
     account_copy->setGrow(1.0f);
-    account_copy->setPadding(2, 0, 2, 10);
+    account_copy->setPadding(2, 0, 2, 8);
     auto* account_label = new brls::Label();
     account_label->setText(brls::getStr("lunarnx/common/account"));
     account_label->setFontSize(10);
@@ -173,8 +193,25 @@ brls::View* MainActivity::createContentView() {
     gamer_tag_->setSingleLine(true);
     account_copy->addView(gamer_tag_);
     account_chip->addView(account_copy);
-    header->addView(account_chip);
-    root->addView(header);
+    sidebar->addView(account_chip);
+
+    auto* sign_out_btn = new brls::Button();
+    sign_out_btn->setText(brls::getStr("lunarnx/common/sign_out"));
+    styleQuietButton(sign_out_btn);
+    sign_out_btn->setWidthPercentage(100.0f);
+    sign_out_btn->setMarginTop(8);
+    sign_out_btn->registerClickAction([this](brls::View*) -> bool {
+        confirmSignOut();
+        return true;
+    });
+    sidebar->addView(sign_out_btn);
+
+    root->addView(sidebar);
+
+    // Right content column.
+    auto* content = new brls::Box(brls::Axis::COLUMN);
+    content->setGrow(1.0f);
+    content->setPadding(24, 20, 36, 20);
 
     const bool can_use_console_api = ctrl_->hasCredentials();
     if (ctrl_->isMockMode()) {
@@ -188,37 +225,13 @@ brls::View* MainActivity::createContentView() {
         gamer_tag_->setText(brls::getStr("lunarnx/common/not_signed_in"));
     }
 
-    auto* source_card = makeUiCard(brls::Axis::ROW);
-    source_card->setHeight(68);
-    source_card->setPadding(8, 8, 8, 8);
-    source_card->setMarginBottom(18);
-    source_xbox_ = new brls::Button();
-    source_xbox_->setText(brls::getStr("lunarnx/common/remote_play"));
-    source_xbox_->setGrow(1.0f);
-    source_xbox_->registerClickAction([this](brls::View*) -> bool {
-        setStreamSource(StreamSource::Xbox);
-        return true;
-    });
-    source_cloud_ = new brls::Button();
-    source_cloud_->setText(brls::getStr("lunarnx/common/xcloud"));
-    source_cloud_->setGrow(1.0f);
-    source_cloud_->setMarginLeft(8);
-    source_cloud_->registerClickAction([this](brls::View*) -> bool {
-        setStreamSource(StreamSource::Cloud);
-        return true;
-    });
-    source_card->addView(source_xbox_);
-    source_card->addView(source_cloud_);
-    root->addView(source_card);
-    highlightStreamSource();
-
     auto* content_header = new brls::Box(brls::Axis::ROW);
     content_header->setHeight(68);
     content_header->setAlignItems(brls::AlignItems::CENTER);
     auto* content_labels = new brls::Box(brls::Axis::COLUMN);
     content_labels->setGrow(1.0f);
     content_title_ = new brls::Label();
-    content_title_->setFontSize(25);
+    content_title_->setFontSize(24);
     content_title_->setTextColor(p.text);
     content_labels->addView(content_title_);
     content_subtitle_ = makeMutedLabel("", 13);
@@ -251,11 +264,11 @@ brls::View* MainActivity::createContentView() {
         return true;
     });
     content_header->addView(searchBtn);
-    root->addView(content_header);
+    content->addView(content_header);
 
     console_list_ = new brls::Box(brls::Axis::COLUMN);
     console_list_->setMarginBottom(18);
-    root->addView(console_list_);
+    content->addView(console_list_);
 
     // Cloud list reuses console_list_ plain box for emulator stability.
     // RecyclingList was crashing under Ryubing during first data bind.
@@ -284,7 +297,11 @@ brls::View* MainActivity::createContentView() {
     status_->setGrow(1.0f);
     status_->setVerticalAlign(brls::VerticalAlign::CENTER);
     status_card->addView(status_);
-    root->addView(status_card);
+    content->addView(status_card);
+    content->addView(makeHintBar(brls::getStr("lunarnx/common/confirm"),
+                                 brls::getStr("lunarnx/common/back")));
+
+    root->addView(content);
     installStateCallback();
 
     // Do not auto-start home stream in mock mode.

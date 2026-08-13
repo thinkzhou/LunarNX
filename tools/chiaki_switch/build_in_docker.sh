@@ -3,8 +3,15 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 IMAGE=${LUNARNX_DEVKIT_IMAGE:-devkitpro/devkita64:20251117}
+CHIAKI_RECV_OPT=${CHIAKI_RECV_OPT:-1}
+
+case "$CHIAKI_RECV_OPT" in
+    0|1) ;;
+    *) echo "CHIAKI_RECV_OPT must be 0 or 1" >&2; exit 2 ;;
+esac
 
 docker run --rm --platform linux/amd64 \
+    -e CHIAKI_RECV_OPT="$CHIAKI_RECV_OPT" \
     -v "$ROOT:/work" -w /work "$IMAGE" bash -lc '
 set -euo pipefail
 export DEVKITPRO=/opt/devkitpro
@@ -30,9 +37,12 @@ mkdir -p "$src"
 cp -a "$checkout/." "$src/"
 git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-stun-order.patch
 git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-stream-switch.patch
+git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-video-reorder-capacity.patch
+git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-recv-allocation.patch
 git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-holepunch-reliability.patch
 git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-stream-rtt.patch
 git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-recvbuf.patch
+git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-transport-diagnostics.patch
 mkdir -p "$stage/include"
 mkdir -p /tmp/lunarnx-chiaki-tools
 cp /work/tools/chiaki_switch/protoc_from_pbgen.sh /tmp/lunarnx-chiaki-tools/protoc
@@ -45,7 +55,7 @@ cmake -S "$src" -B "$build" \
     -DCMAKE_TOOLCHAIN_FILE="$src/cmake/switch.cmake" \
     -DPKG_CONFIG_EXECUTABLE=/tmp/lunarnx-chiaki-tools/pkg-config \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-    -DCMAKE_C_FLAGS="-I/work/lib/switch/include/curl -include /work/lib/switch/include/curl/curl/curl.h" \
+    -DCMAKE_C_FLAGS="-I/work/lib/switch/include/curl -include /work/lib/switch/include/curl/curl/curl.h -DLUNARNX_CHIAKI_RECV_OPT=$CHIAKI_RECV_OPT" \
     -DNSWITCH=TRUE \
     -DCHIAKI_ENABLE_TESTS=OFF \
     -DCHIAKI_ENABLE_CLI=OFF \

@@ -4,6 +4,7 @@
   "exit": "退出",
   "cancel": "取消",
   "done": "完成",
+  "confirm": "确认",
   "status": "状态",
   "settings": "设置",
   "about": "关于",
@@ -440,11 +441,11 @@
   "footer": "B  返回"
  },
  "platform": {
-  "subtitle": "选择你的串流平台",
-  "open": "打开",
+    "subtitle": "Xbox 与 PlayStation 串流客户端",
+    "open": "进入",
   "xbox_title": "Xbox",
-  "xbox_desc": "远程串流与 xCloud",
+    "xbox_desc": "Remote Play 与云游戏",
   "ps_title": "PlayStation",
-  "ps_desc": "PS4 与 PS5 远程串流"
+    "ps_desc": "PS4 / PS5 Remote Play"
  }
 }

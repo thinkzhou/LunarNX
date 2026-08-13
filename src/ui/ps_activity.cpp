@@ -321,58 +321,78 @@ brls::View* PsActivity::createContentView() {
             return true;
         });
 
-    auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(26, 48, 36, 48);
+    auto* root = new brls::Box(brls::Axis::ROW);
     root->setBackgroundColor(p.background);
 
-    auto* header = new brls::Box(brls::Axis::ROW);
-    header->setHeight(84);
-    header->setAlignItems(brls::AlignItems::CENTER);
-    auto* brand = new brls::Box(brls::Axis::COLUMN);
-    brand->setGrow(1.0f);
+    auto* sidebar = new brls::Box(brls::Axis::COLUMN);
+    sidebar->setWidth(232);
+    sidebar->setPadding(24, 20, 24, 20);
+    sidebar->setBackgroundColor(p.surface);
+
     auto* wordmark = new brls::Label();
     wordmark->setText("LUNARNX");
-    wordmark->setFontSize(29);
+    wordmark->setFontSize(26);
     wordmark->setTextColor(p.accent);
-    brand->addView(wordmark);
-    brand->addView(makeMutedLabel(brls::getStr("lunarnx/ps/subtitle"), 13));
-    header->addView(brand);
+    sidebar->addView(wordmark);
+    sidebar->addView(makeMutedLabel(brls::getStr("lunarnx/ps/subtitle"), 12));
+
+    local_tab_ = new brls::Button();
+    local_tab_->setText(brls::getStr("lunarnx/ps/tab_local"));
+    local_tab_->setWidthPercentage(100.0f);
+    local_tab_->setMarginTop(24);
+    local_tab_->registerClickAction([this](brls::View*) -> bool {
+        setConsoleSource(PsConsoleSource::Local);
+        return true;
+    });
+    sidebar->addView(local_tab_);
+
+    remote_tab_ = new brls::Button();
+    remote_tab_->setText(brls::getStr("lunarnx/ps/tab_remote"));
+    remote_tab_->setWidthPercentage(100.0f);
+    remote_tab_->setMarginTop(8);
+    remote_tab_->registerClickAction([this](brls::View*) -> bool {
+        setConsoleSource(PsConsoleSource::Remote);
+        return true;
+    });
+    sidebar->addView(remote_tab_);
+
+    auto* nav_sep = new brls::Box();
+    nav_sep->setHeight(1);
+    nav_sep->setBackgroundColor(p.border);
+    nav_sep->setMarginTop(18);
+    nav_sep->setMarginBottom(18);
+    sidebar->addView(nav_sep);
 
     auto* settings_button = new brls::Button();
     settings_button->setText(brls::getStr("lunarnx/common/settings"));
-    styleSecondaryButton(settings_button);
+    settings_button->setWidthPercentage(100.0f);
+    styleQuietButton(settings_button);
     settings_button->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new PsSettingsActivity(loadPsSettings()),
             brls::TransitionAnimation::NONE);
         return true;
     });
-    header->addView(settings_button);
+    sidebar->addView(settings_button);
 
     auto* about_button = new brls::Button();
     about_button->setText(brls::getStr("lunarnx/common/about"));
-    styleSecondaryButton(about_button);
-    about_button->setMarginLeft(8);
+    about_button->setWidthPercentage(100.0f);
+    styleQuietButton(about_button);
+    about_button->setMarginTop(8);
     about_button->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new AboutActivity(), brls::TransitionAnimation::NONE);
         return true;
     });
-    header->addView(about_button);
+    sidebar->addView(about_button);
 
-    account_button_ = new brls::Button();
-    styleQuietButton(account_button_);
-    account_button_->setMarginLeft(8);
-    account_button_->registerClickAction([this](brls::View*) -> bool {
-        handleAccountAction();
-        return true;
-    });
-    header->addView(account_button_);
+    auto* side_spacer = new brls::Box();
+    side_spacer->setGrow(1.0f);
+    sidebar->addView(side_spacer);
 
     auto* account_chip = makeUiCard(brls::Axis::ROW);
-    account_chip->setWidth(306);
     account_chip->setHeight(58);
-    account_chip->setMarginLeft(10);
     account_chip->setPadding(7, 10, 7, 10);
     account_chip->setCornerRadius(14);
     account_chip->setAlignItems(brls::AlignItems::CENTER);
@@ -391,7 +411,7 @@ brls::View* PsActivity::createContentView() {
 
     auto* account_copy = new brls::Box(brls::Axis::COLUMN);
     account_copy->setGrow(1.0f);
-    account_copy->setPadding(2, 0, 2, 10);
+    account_copy->setPadding(2, 0, 2, 8);
     auto* account_label = new brls::Label();
     account_label->setText(brls::getStr("lunarnx/ps/account_network"));
     account_label->setFontSize(10);
@@ -403,31 +423,23 @@ brls::View* PsActivity::createContentView() {
     account_state_->setSingleLine(true);
     account_copy->addView(account_state_);
     account_chip->addView(account_copy);
-    header->addView(account_chip);
-    root->addView(header);
+    sidebar->addView(account_chip);
 
-    auto* source_card = makeUiCard(brls::Axis::ROW);
-    source_card->setHeight(68);
-    source_card->setPadding(8, 8, 8, 8);
-    source_card->setMarginBottom(18);
-    local_tab_ = new brls::Button();
-    local_tab_->setText(brls::getStr("lunarnx/ps/tab_local"));
-    local_tab_->setGrow(1.0f);
-    local_tab_->registerClickAction([this](brls::View*) -> bool {
-        setConsoleSource(PsConsoleSource::Local);
+    account_button_ = new brls::Button();
+    styleQuietButton(account_button_);
+    account_button_->setWidthPercentage(100.0f);
+    account_button_->setMarginTop(8);
+    account_button_->registerClickAction([this](brls::View*) -> bool {
+        handleAccountAction();
         return true;
     });
-    source_card->addView(local_tab_);
-    remote_tab_ = new brls::Button();
-    remote_tab_->setText(brls::getStr("lunarnx/ps/tab_remote"));
-    remote_tab_->setGrow(1.0f);
-    remote_tab_->setMarginLeft(8);
-    remote_tab_->registerClickAction([this](brls::View*) -> bool {
-        setConsoleSource(PsConsoleSource::Remote);
-        return true;
-    });
-    source_card->addView(remote_tab_);
-    root->addView(source_card);
+    sidebar->addView(account_button_);
+
+    root->addView(sidebar);
+
+    auto* content = new brls::Box(brls::Axis::COLUMN);
+    content->setGrow(1.0f);
+    content->setPadding(24, 20, 36, 20);
 
     remote_actions_ = new brls::Box(brls::Axis::COLUMN);
     auto* remote_header = new brls::Box(brls::Axis::ROW);
@@ -455,7 +467,7 @@ brls::View* PsActivity::createContentView() {
     psn_state_ = makeMutedLabel(brls::getStr("lunarnx/ps/psn_not_checked"), 13);
     psn_state_->setMarginBottom(12);
     remote_actions_->addView(psn_state_);
-    root->addView(remote_actions_);
+    content->addView(remote_actions_);
 
     local_actions_ = new brls::Box(brls::Axis::COLUMN);
     auto* local_header = new brls::Box(brls::Axis::ROW);
@@ -515,11 +527,11 @@ brls::View* PsActivity::createContentView() {
     add_pair_button(brls::getStr("lunarnx/ps/pair_ps4"), 900);
     add_pair_button(brls::getStr("lunarnx/ps/pair_ps5"), 1000100);
     local_actions_->addView(manual_card);
-    root->addView(local_actions_);
+    content->addView(local_actions_);
 
     console_list_ = new brls::Box(brls::Axis::COLUMN);
     console_list_->setMarginBottom(18);
-    root->addView(console_list_);
+    content->addView(console_list_);
 
     auto* status_card = makeUiCard(brls::Axis::ROW);
     status_card->setHeight(58);
@@ -537,8 +549,11 @@ brls::View* PsActivity::createContentView() {
     action_status_->setGrow(1.0f);
     action_status_->setVerticalAlign(brls::VerticalAlign::CENTER);
     status_card->addView(action_status_);
-    root->addView(status_card);
+    content->addView(status_card);
+    content->addView(makeHintBar(brls::getStr("lunarnx/common/confirm"),
+                                 brls::getStr("lunarnx/common/back")));
 
+    root->addView(content);
     scroll->setContentView(root);
     updateAccountUi();
     hosts_ = ps_manager_ ? ps_manager_->getDiscoveredHosts()

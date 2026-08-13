@@ -1,0 +1,35 @@
+diff --git a/lib/src/takion.c b/lib/src/takion.c
+index 38f9f5df..3a985dc4 100644
+--- a/lib/src/takion.c
++++ b/lib/src/takion.c
+@@ -52,6 +52,10 @@
+ 
+ #define TAKION_MESSAGE_HEADER_SIZE 0x10
+ 
++#ifndef LUNARNX_CHIAKI_RECV_OPT
++#define LUNARNX_CHIAKI_RECV_OPT 0
++#endif
++
+ #define TAKION_PACKET_BASE_TYPE_MASK 0xf
+ 
+ #define TAKION_EXPECT_TIMEOUT_MS 5000
+@@ -1153,6 +1157,11 @@ static void *takion_thread_func(void *user)
+ 			}
+ 			break;
+ 		}
++#if LUNARNX_CHIAKI_RECV_OPT
++		// The packet handler owns the allocation. Keeping its 1500-byte capacity
++		// avoids a second allocator operation on every received UDP datagram.
++		takion_handle_packet(takion, buf, received_size);
++#else
+ 		uint8_t *resized_buf = realloc(buf, received_size);
+ 		if(!resized_buf)
+ 		{
+@@ -1160,6 +1168,7 @@ static void *takion_thread_func(void *user)
+ 			continue;
+ 		}
+ 		takion_handle_packet(takion, resized_buf, received_size);
++#endif
+ 	}
+ 
+ 	chiaki_takion_send_buffer_fini(&takion->send_buffer);

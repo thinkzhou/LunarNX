@@ -12,10 +12,17 @@ def main():
     ps = Path("src/ui/ps_activity.cpp").read_text()
     xbox = Path("src/ui/main_activity.cpp").read_text()
 
-    require("makePlatformRow" in platform and
-            "button->setWidth(180)" in platform and
-            "copy->setGrow(1.0f)" in platform,
-            "platform cards must reserve separate text and button columns")
+    make_card = platform.split("brls::Box* makePlatformRow", 1)[1].split(
+        "} // namespace", 1)[0]
+    require("card->setWidth(360)" in make_card and
+            "card->setHeight(285)" in make_card,
+            "platform cards must retain the Stitch card proportions")
+    require("auto* action = new brls::Button()" in make_card and
+            "action->registerClickAction" in make_card and
+            "open();" in make_card,
+            "each platform entry must use a focusable Borealis button")
+    require("card->registerClickAction" not in make_card,
+            "non-focusable platform card containers must not own click actions")
     require("content_title_ = new brls::Label()" not in ps and
             "content_subtitle_ = makeMutedLabel" not in ps,
             "PS source pages must not duplicate their section headings")

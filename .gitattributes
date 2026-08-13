@@ -1,1 +1,3 @@
 tools/libpeer_legacy/*.patch -whitespace
+tools/borealis_switch/*.patch -whitespace
+tools/chiaki_switch/*.patch -whitespace

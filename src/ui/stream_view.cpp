@@ -128,13 +128,12 @@ StreamView::~StreamView() {
     running_ = false;
     runtime_->setInputSuppressed(false);
     if (update_thread_.joinable()) update_thread_.join();
-    auto runtime = runtime_;
-    const auto state = runtime_->getState();
-    const bool already_reported_failure =
-        state == app::StreamState::Disconnected || state == app::StreamState::Error;
-    lunar::platform::startNetworkWorker("stop-stream", [runtime, already_reported_failure]() {
-        runtime->stopStream(!already_reported_failure);
-    });
+    if (!stop_started_.load()) {
+        auto runtime = runtime_;
+        lunar::platform::startNetworkWorker("stop-stream-fallback", [runtime]() {
+            runtime->stopStream(false);
+        });
+    }
 }
 
 brls::View* StreamView::createContentView() {
@@ -174,7 +173,7 @@ brls::View* StreamView::createContentView() {
         if (exit_pending_.load() && std::chrono::duration_cast<std::chrono::seconds>(
                 now - exit_press_time_).count() < 3) {
             running_ = false;
-            brls::Application::popActivity(brls::TransitionAnimation::NONE);
+            stopAndReturn();
             return true;
         }
         exit_pending_ = true;
@@ -344,6 +343,30 @@ brls::View* StreamView::createContentView() {
     return root;
 }
 
+void StreamView::stopAndReturn() {
+    if (stop_started_.exchange(true)) return;
+    running_ = false;
+    runtime_->setInputSuppressed(false);
+    auto runtime = runtime_;
+    auto alive = alive_;
+    const auto state = runtime_->getState();
+    const bool report_disconnect =
+        state != app::StreamState::Disconnected && state != app::StreamState::Error;
+    const bool started = lunar::platform::startNetworkWorker(
+        "stop-stream", [runtime, alive, report_disconnect]() {
+            runtime->stopStream(report_disconnect);
+            brls::sync([alive]() {
+                if (alive->load()) {
+                    brls::Application::popActivity(brls::TransitionAnimation::NONE);
+                }
+            });
+        });
+    if (!started) {
+        stop_started_ = false;
+        running_ = true;
+    }
+}
+
 void StreamView::setQuickMenuVisible(bool visible) {
     if (!quick_menu_ || quick_menu_visible_ == visible) return;
     quick_menu_visible_ = visible;
@@ -387,9 +410,7 @@ void StreamView::handleQuickDisconnect() {
         const auto armed_at = std::chrono::steady_clock::time_point(
             std::chrono::steady_clock::duration(disconnect_arm_ticks_.load()));
         if (now - armed_at < kQuickDisconnectConfirmWindow) {
-            running_ = false;
-            runtime_->setInputSuppressed(false);
-            brls::Application::popActivity(brls::TransitionAnimation::NONE);
+            stopAndReturn();
             return;
         }
     }
@@ -473,9 +494,9 @@ void StreamView::runLoop() {
         if (state == app::StreamState::Disconnected || state == app::StreamState::Error) {
             running_ = false;
             auto alive = alive_;
-            brls::sync([alive]() {
+            brls::sync([alive, this]() {
                 if (!alive->load()) return;
-                brls::Application::popActivity(brls::TransitionAnimation::NONE);
+                stopAndReturn();
             });
             return;
         }

@@ -26,6 +26,14 @@ def main() -> None:
     require("DROP_DIAG ?= 0" in switch_makefile and
             "LUNARNX_DROP_DIAGNOSTIC_LOG=$(DROP_DIAG)" in switch_makefile,
             "drop diagnostics must be available but disabled in release builds")
+    media_stats_start = peer.index("PeerMediaStats PeerManager::getMediaStats() const")
+    media_stats_end = peer.index("void PeerManager::processEvents()", media_stats_start)
+    media_stats = peer[media_stats_start:media_stats_end]
+    diagnostic_guard = media_stats.index("#if LUNARNX_DROP_DIAGNOSTIC_LOG")
+    recovery_state = media_stats.index(
+        "stats.video_waiting_keyframe = video_jitter_.waitingForKeyframe();")
+    require(recovery_state < diagnostic_guard,
+            "Xbox keyframe recovery state must remain available with DROP_DIAG=0")
     require("dropDiagnosticLog" in diagnostics and "[drop-diag t=" in diagnostics,
             "drop events need a searchable timestamped log prefix")
     require("logVideoDropDiagnostic" in perf,

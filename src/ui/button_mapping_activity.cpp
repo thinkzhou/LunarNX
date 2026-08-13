@@ -96,10 +96,19 @@ brls::View* ButtonMappingActivity::createContentView() {
     scroll->setBackgroundColor(p.background);
     scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
     mapping_content_->addView(scroll);
+    auto* footer = makeHintBar(brls::getStr("lunarnx/common/confirm"),
+                               brls::getStr("lunarnx/common/back"));
+    footer->setBackgroundColor(p.surface);
+    mapping_content_->addView(footer);
+
+    auto* stage = new brls::Box(brls::Axis::COLUMN);
+    stage->setPadding(26, 0, 28, 0);
+    stage->setAlignItems(brls::AlignItems::CENTER);
+    scroll->setContentView(stage);
 
     auto* content = new brls::Box(brls::Axis::COLUMN);
-    content->setPadding(28, 64, 40, 64);
-    scroll->setContentView(content);
+    content->setWidth(860);
+    stage->addView(content);
 
     auto* title = new brls::Label();
     title->setText(brls::getStr(
@@ -108,14 +117,22 @@ brls::View* ButtonMappingActivity::createContentView() {
             : "lunarnx/button_mapping/xbox_title"));
     title->setFontSize(30);
     title->setTextColor(p.text);
-    title->setHeight(60);
+    title->setHeight(52);
     content->addView(title);
-    content->addView(makeMutedLabel(
-        brls::getStr("lunarnx/button_mapping/detail"), 14));
+    auto* detail = makeMutedLabel(
+        brls::getStr("lunarnx/button_mapping/detail"), 14);
+    detail->setHeight(42);
+    detail->setIsWrapping(true);
+    content->addView(detail);
+
+    auto* focus_wash = makeUiCard();
+    focus_wash->setBackgroundColor(p.accent_soft);
+    focus_wash->setBorderColor(p.accent);
+    focus_wash->setPadding(18, 68, 18, 68);
+    focus_wash->setMarginTop(14);
 
     auto* card = makeUiCard();
     card->setPadding(4, 8, 4, 8);
-    card->setMarginTop(22);
     const size_t row_count = profile_ == input::ButtonMappingProfile::PlayStation
         ? input::kRemoteButtonCount
         : static_cast<size_t>(input::RemoteButton::Touchpad);
@@ -124,6 +141,7 @@ brls::View* ButtonMappingActivity::createContentView() {
         : kXboxLabels;
     for (size_t i = 0; i < row_count; ++i) {
         auto* row = new brls::DetailCell();
+        row->setHeight(54);
         row->setText(brls::getStr(labels[i]));
         row->setFocusable(true);
         row->registerClickAction([this, i](brls::View*) -> bool {
@@ -133,9 +151,11 @@ brls::View* ButtonMappingActivity::createContentView() {
         card->addView(row);
         rows_.push_back(row);
     }
-    content->addView(card);
+    focus_wash->addView(card);
+    content->addView(focus_wash);
 
     auto* reset = new brls::Button();
+    reset->setWidth(220);
     reset->setText(brls::getStr("lunarnx/button_mapping/reset_all"));
     styleSecondaryButton(reset);
     reset->setMarginTop(24);
@@ -261,7 +281,11 @@ void ButtonMappingActivity::refreshRows() {
             detail += "  ";
             detail += brls::getStr("lunarnx/button_mapping/conflict");
             rows_[i]->setDetailTextColor(p.error);
-            rows_[i]->setBackgroundColor(nvgRGBA(255, 80, 70, 30));
+            rows_[i]->setBackgroundColor(nvgRGBA(
+                static_cast<unsigned char>(p.error.r * 255.0f),
+                static_cast<unsigned char>(p.error.g * 255.0f),
+                static_cast<unsigned char>(p.error.b * 255.0f),
+                30));
         } else {
             rows_[i]->setDetailTextColor(p.text_muted);
             rows_[i]->setBackgroundColor(nvgRGBA(0, 0, 0, 0));

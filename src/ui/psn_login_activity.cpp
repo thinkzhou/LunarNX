@@ -125,6 +125,7 @@ brls::View* PsnLoginActivity::createContentView() {
     guide->addView(status_);
     content->addView(guide);
     root->addView(content);
+    root->addView(makeHintBar("", brls::getStr("lunarnx/common/back")));
 
     startPhoneLogin();
     scroll->setContentView(root);

@@ -5,6 +5,7 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 borealis_dir="$project_root/lib/borealis"
 libpeer_dir="$project_root/lib/libpeer"
+borealis_patch="$project_root/tools/borealis_switch/lunarnx-borealis-gpu-lifecycle.patch"
 libpeer_patch="$project_root/tools/libpeer_legacy/legacy-libpeer-switch.patch"
 
 borealis_commit="240223f372731949e04cba943c453dc45b69faa1"
@@ -41,6 +42,17 @@ clone_at_commit \
     https://github.com/XITRIX/borealis.git \
     "$borealis_dir" \
     "$borealis_commit"
+
+if git -C "$borealis_dir" apply --reverse --check "$borealis_patch" >/dev/null 2>&1; then
+    printf 'LunarNX Borealis GPU lifecycle patch is already applied.\n'
+elif git -C "$borealis_dir" apply --check "$borealis_patch" >/dev/null 2>&1; then
+    git -C "$borealis_dir" apply "$borealis_patch"
+    printf 'Applied LunarNX Borealis GPU lifecycle patch.\n'
+else
+    printf 'Borealis GPU lifecycle patch conflicts with the local checkout: %s\n' \
+        "$borealis_dir" >&2
+    exit 2
+fi
 
 libpeer_was_missing=0
 if [[ ! -e "$libpeer_dir" ]]; then

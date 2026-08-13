@@ -1260,6 +1260,7 @@ bool VideoRenderer::initialize(const char*,int w,int h){
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);
   if(s->ok)shutdown();
 
+  std::unique_lock<std::recursive_mutex> gpu_lock;
   try {
     lunar::diagnosticLog("render","initialize begin width=%d height=%d",w,h);
     auto* platform=brls::Application::getPlatform();
@@ -1272,6 +1273,7 @@ bool VideoRenderer::initialize(const char*,int w,int h){
       lunar::diagnosticLog("render","initialize failed missing video context");
       return false;
     }
+    gpu_lock=std::unique_lock<std::recursive_mutex>(s->vctx->getGpuMutex());
     s->dev=s->vctx->getDeko3dDevice();s->q=s->vctx->getQueue();
     if(!s->dev||!s->q){
       lunar::diagnosticLog("render","initialize failed dev=%s queue=%s",s->dev?"true":"false",s->q?"true":"false");
@@ -1360,6 +1362,7 @@ void VideoRenderer::setPostProcessMode(PostProcessMode mode){
   requested_post_process_mode_=mode;
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);
   if(!s)return;
+  std::lock_guard<std::recursive_mutex> gpu_lock(s->vctx->getGpuMutex());
   std::lock_guard<std::mutex> lock(s->render_mutex);
   s->post_process_mode_requested=mode;
   configurePresentPipeline(s->pipeline, mode);
@@ -1376,6 +1379,7 @@ void VideoRenderer::setDitheringEnabled(bool enabled, float strength){
   requested_dithering_strength_=std::clamp(strength,1.0f,10.0f);
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);
   if(!s)return;
+  std::lock_guard<std::recursive_mutex> gpu_lock(s->vctx->getGpuMutex());
   std::lock_guard<std::mutex> lock(s->render_mutex);
   s->dithering_enabled=enabled;
   s->dithering_strength=std::clamp(strength,1.0f,10.0f);
@@ -1456,6 +1460,7 @@ bool VideoRenderer::render(const VideoFrame&frame){
     if(shouldLogRender())lunar::diagnosticLog("render","render reject format=%d expected=%d",f->format,AV_PIX_FMT_NVTEGRA);
     return false;
   }
+  std::lock_guard<std::recursive_mutex> gpu_lock(s->vctx->getGpuMutex());
   std::lock_guard<std::mutex> lock(s->render_mutex);
   AVFrame* keep=av_frame_alloc();
   if(!keep||av_frame_ref(keep,f)<0){
@@ -1521,6 +1526,7 @@ void VideoRenderer::present(){
     if(shouldLogRender())lunar::diagnosticLog("render","present reject context unavailable");
     return;
   }
+  std::lock_guard<std::recursive_mutex> gpu_lock(s->vctx->getGpuMutex());
   std::lock_guard<std::mutex> lock(s->render_mutex);
   if(s->decoder_reset_requested){
     if(!s->q||!s->present_ring){
@@ -1756,6 +1762,8 @@ void VideoRenderer::shutdown(){
   }
   SoftwareVideoFrameSink::instance().clear();
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);if(!s)return;
+  std::unique_lock<std::recursive_mutex> gpu_lock;
+  if(s->vctx)gpu_lock=std::unique_lock<std::recursive_mutex>(s->vctx->getGpuMutex());
   std::lock_guard<std::mutex> render_lock(s->render_mutex);
   s->decoder_reset_requested=false;
   s->decoder_reset_ready=false;

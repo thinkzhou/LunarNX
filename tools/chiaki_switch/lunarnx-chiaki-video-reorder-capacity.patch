@@ -1,0 +1,18 @@
+diff --git a/lib/src/takion.c b/lib/src/takion.c
+index 38f9f5df..1847c7e3 100644
+--- a/lib/src/takion.c
++++ b/lib/src/takion.c
+@@ -43,7 +43,13 @@
+ #define TAKION_INBOUND_STREAMS 0x64
+ 
+ #define TAKION_REORDER_QUEUE_SIZE_EXP 4 // => 16 entries
++#ifdef __SWITCH__
++// A 30 Mbit/s IDR can exceed 90 datagrams. Keep a complete high-bitrate
++// frame behind one missing packet while the 16 ms reorder timer runs.
++#define TAKION_AV_VIDEO_REORDER_QUEUE_SIZE_EXP 8 // => 256 entries
++#else
+ #define TAKION_AV_VIDEO_REORDER_QUEUE_SIZE_EXP 6 // => 64 entries
++#endif
+ #define TAKION_AV_REORDER_TIMEOUT_US 16000 // ~1 frame at 60fps
+ #define TAKION_SEND_BUFFER_SIZE 16
+ 

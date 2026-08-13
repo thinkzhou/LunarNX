@@ -18,6 +18,11 @@ def read(path: str) -> str:
 
 def main() -> None:
     main_entry = read("src/main.cpp")
+    create_window = main_entry.find('brls::Application::createWindow("LunarNX")')
+    set_dark_theme = main_entry.find("setThemeVariant(brls::ThemeVariant::DARK)")
+    require(create_window >= 0, "main must create the Borealis window")
+    require(set_dark_theme > create_window,
+            "dark theme must be selected after createWindow to avoid Switch startup crashes")
     style_header = read("src/ui/ui_style.h")
     style_source = read("src/ui/ui_style.cpp")
     auth_source = read("src/ui/auth_activity.cpp")

@@ -1,0 +1,59 @@
+diff --git a/library/include/borealis/platforms/switch/switch_video.hpp b/library/include/borealis/platforms/switch/switch_video.hpp
+index 3a342b0..9defb0b 100644
+--- a/library/include/borealis/platforms/switch/switch_video.hpp
++++ b/library/include/borealis/platforms/switch/switch_video.hpp
+@@ -25,6 +25,7 @@ limitations under the License.
+ #include <deko3d.hpp>
+ #include <nanovg/dk_renderer.hpp>
+ #include <optional>
++#include <mutex>
+ 
+ typedef Event _LibNXEvent; // "Event" alone clashes with brls::Event
+ 
+@@ -70,6 +71,8 @@ class SwitchVideoContext : public VideoContext
+ 
+     void queueFlush();
+ 
++    std::recursive_mutex& getGpuMutex();
++
+   private:
+     _LibNXEvent defaultDisplayResolutionChangeEvent;
+     bool displayResolutionChangeEventReady = true;
+@@ -103,6 +106,7 @@ class SwitchVideoContext : public VideoContext
+ 
+     std::optional<nvg::DkRenderer> renderer;
+     NVGcontext* nvgContext;
++    std::recursive_mutex gpuMutex;
+ };
+ 
+ } // namespace brls
+diff --git a/library/lib/platforms/switch/switch_video.cpp b/library/lib/platforms/switch/switch_video.cpp
+index dc87445..5bcc5b9 100644
+--- a/library/lib/platforms/switch/switch_video.cpp
++++ b/library/lib/platforms/switch/switch_video.cpp
+@@ -214,6 +214,7 @@ void SwitchVideoContext::resetFramebuffer()
+ 
+ void SwitchVideoContext::beginFrame()
+ {
++    gpuMutex.lock();
+     // Poll the display resolution change event
+     if (this->displayResolutionChangeEventReady && R_SUCCEEDED(eventWait(&this->defaultDisplayResolutionChangeEvent, 0)))
+         this->resetFramebuffer();
+@@ -231,6 +232,7 @@ void SwitchVideoContext::endFrame()
+ {
+     // Now that we are done rendering, present it to the screen
+     queue.presentImage(this->swapchain, this->imageSlot);
++    gpuMutex.unlock();
+ }
+ 
+ void SwitchVideoContext::setSwapInterval(int interval)
+@@ -334,4 +336,9 @@ void SwitchVideoContext::queueFlush()
+     dkQueueFlush(this->queue);
+ }
+ 
++std::recursive_mutex& SwitchVideoContext::getGpuMutex()
++{
++    return gpuMutex;
++}
++
+ } // namespace brls
