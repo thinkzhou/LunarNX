@@ -190,6 +190,7 @@ public:
                             if (auth_error_kind == ps::PsnAuthErrorKind::SessionExpired) {
                                 manager->psnAuth().signOut();
                                 std::remove(lunar::get_psn_token_path());
+                                manager->clearPsnDeviceCache();
                             }
                         } else if (token_refreshed &&
                                    !manager->psnAuth().saveToken(
@@ -295,6 +296,7 @@ PsActivity::PsActivity() {
         ps_manager_ = std::make_shared<ps::PsManager>();
         ps_manager_->loadCredentials();
         ps_manager_->psnAuth().loadToken(lunar::get_psn_token_path());
+        psn_cache_loaded_ = ps_manager_->loadPsnDeviceCache();
         diagnosticLog("ui-ps", "initial state loaded stored_session=%s",
                       ps_manager_->hasStoredPsnSession() ? "true" : "false");
     } catch (...) {
@@ -465,6 +467,9 @@ brls::View* PsActivity::createContentView() {
     remote_header->addView(psn_button_);
     remote_actions_->addView(remote_header);
     psn_state_ = makeMutedLabel(brls::getStr("lunarnx/ps/psn_not_checked"), 13);
+    if (psn_cache_loaded_) {
+        psn_state_->setText(brls::getStr("lunarnx/ps/psn_cache_loaded"));
+    }
     psn_state_->setMarginBottom(12);
     remote_actions_->addView(psn_state_);
     content->addView(remote_actions_);
@@ -663,6 +668,7 @@ void PsActivity::fetchPsnConsoles() {
                     if (error_kind == ps::PsnAuthErrorKind::SessionExpired) {
                         manager->psnAuth().signOut();
                         std::remove(lunar::get_psn_token_path());
+                        manager->clearPsnDeviceCache();
                         if (psn_state_) psn_state_->setText(
                             brls::getStr("lunarnx/ps/psn_session_expired", error));
                         brls::Application::pushActivity(
@@ -1043,6 +1049,7 @@ void PsActivity::confirmSignOut() {
     dialog->addButton(brls::getStr("lunarnx/common/sign_out"), [this]() {
         ps_manager_->psnAuth().signOut();
         std::remove(lunar::get_psn_token_path());
+        ps_manager_->clearPsnDeviceCache();
         had_psn_session_ = false;
         updateAccountUi();
         brls::Application::pushActivity(
@@ -1086,6 +1093,7 @@ void PsActivity::signInToPsn() {
                         if (error_kind == ps::PsnAuthErrorKind::SessionExpired) {
                             manager->psnAuth().signOut();
                             std::remove(lunar::get_psn_token_path());
+                            manager->clearPsnDeviceCache();
                             if (psn_state_) psn_state_->setText(
                                 brls::getStr("lunarnx/ps/psn_session_expired", error));
                             brls::Application::pushActivity(

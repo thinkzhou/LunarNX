@@ -342,6 +342,7 @@
   "remote_desc": "已登录 PlayStation 账户绑定的 PS5 主机",
   "refresh_psn": "刷新 PSN",
   "psn_not_checked": "PSN:未检查",
+  "psn_cache_loaded": "已显示保存的主机，如需更新请重新查找。",
   "local_desc": "在局域网中搜索、配对、唤醒和连接",
   "local_console_desc": "通过当前局域网直接连接主机",
   "remote_console_desc": "通过 PlayStation Network 远程连接",

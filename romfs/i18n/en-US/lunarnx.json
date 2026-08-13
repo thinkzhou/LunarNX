@@ -342,6 +342,7 @@
   "remote_desc": "PS5 devices linked to the signed-in PlayStation account",
   "refresh_psn": "Refresh PSN",
   "psn_not_checked": "PSN: Not checked",
+  "psn_cache_loaded": "Showing saved consoles. Refresh to check for changes.",
   "local_desc": "Search, pair, wake, and connect on the local network",
   "local_console_desc": "Play directly over your local network",
   "remote_console_desc": "Play remotely through PlayStation Network",

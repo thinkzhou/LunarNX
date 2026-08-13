@@ -75,8 +75,19 @@ bool PsManager::fetchPsnDevices(HostListCallback cb) {
         return false;
     }
 
+    repository_->savePsnCache(psn_auth_.getAccountId());
     psn_device_error_.clear();
     return true;
+}
+
+bool PsManager::loadPsnDeviceCache() {
+    const auto account_id = psn_auth_.getAccountId();
+    if (account_id.empty()) return false;
+    return repository_->loadPsnCache(account_id);
+}
+
+void PsManager::clearPsnDeviceCache() {
+    repository_->clearPsnCache();
 }
 
 bool PsManager::loadCredentials() {

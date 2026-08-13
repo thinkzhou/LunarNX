@@ -35,6 +35,9 @@ public:
     // Fetch PSN device list (requires valid OAuth token)
     bool fetchPsnDevices(const std::string& access_token,
                          HostListCallback cb, std::string* error);
+    bool loadPsnCache(const std::string& account_id);
+    bool savePsnCache(const std::string& account_id) const;
+    void clearPsnCache();
     int getLastPsnStatusCode() const { return last_psn_status_code_; }
 
     // Get current unified console list

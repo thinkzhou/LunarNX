@@ -47,6 +47,8 @@ public:
 
     // PSN device list (requires valid token)
     bool fetchPsnDevices(HostListCallback cb);
+    bool loadPsnDeviceCache();
+    void clearPsnDeviceCache();
     const std::string& getPsnDeviceError() const { return psn_device_error_; }
 
     // Credentials

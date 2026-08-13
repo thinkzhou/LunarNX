@@ -3,11 +3,15 @@
 #include "ps_console_repository.h"
 #include "ps_discovery.h"
 #include "../api/http_client.h"
+#include "../common.h"
 #include "../diagnostics.h"
 #include <borealis.hpp>
 #include <cJSON.h>
 #include <algorithm>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
+#include <cstdio>
 
 namespace lunar::ps {
 
@@ -15,6 +19,125 @@ PsConsoleRepository::PsConsoleRepository(ChiakiLog* log) : log_(log) {}
 
 PsConsoleRepository::~PsConsoleRepository() {
     stopDiscovery();
+}
+
+bool PsConsoleRepository::loadPsnCache(const std::string& account_id) {
+    constexpr long kMaxCacheBytes = 1024 * 1024;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        psn_consoles_.clear();
+    }
+    if (account_id.empty()) return false;
+    FILE* file = std::fopen(lunar::get_ps_console_cache_path(), "rb");
+    if (!file) return false;
+    if (std::fseek(file, 0, SEEK_END) != 0) { std::fclose(file); return false; }
+    const long length = std::ftell(file);
+    if (length <= 0 || length > kMaxCacheBytes) { std::fclose(file); return false; }
+    std::rewind(file);
+    std::string content(static_cast<size_t>(length), '\0');
+    const bool read_ok = std::fread(content.data(), 1, content.size(), file) == content.size();
+    std::fclose(file);
+    if (!read_ok) return false;
+
+    cJSON* root = cJSON_Parse(content.c_str());
+    cJSON* account = root ? cJSON_GetObjectItemCaseSensitive(root, "account_id") : nullptr;
+    cJSON* consoles = root ? cJSON_GetObjectItemCaseSensitive(root, "consoles") : nullptr;
+    if (!root || !cJSON_IsString(account) || account_id != account->valuestring ||
+        !cJSON_IsArray(consoles)) {
+        if (root) cJSON_Delete(root);
+        return false;
+    }
+
+    std::vector<PsConsole> cached;
+    cJSON* item = nullptr;
+    cJSON_ArrayForEach(item, consoles) {
+        cJSON* duid = cJSON_GetObjectItemCaseSensitive(item, "duid");
+        cJSON* name = cJSON_GetObjectItemCaseSensitive(item, "name");
+        cJSON* enabled = cJSON_GetObjectItemCaseSensitive(item, "remoteplay_enabled");
+        if (!cJSON_IsString(duid) || !normalizeDuid(duid->valuestring) ||
+            !cJSON_IsString(name) || !cJSON_IsBool(enabled)) continue;
+        PsConsole console;
+        console.psn_duid = *normalizeDuid(duid->valuestring);
+        console.stable_id = "duid:" + console.psn_duid;
+        console.nickname = name->valuestring;
+        console.target = CHIAKI_TARGET_PS5_1;
+        console.remote = PsRemoteEndpoint{console.psn_duid, console.nickname,
+                                           cJSON_IsTrue(enabled)};
+        cached.push_back(std::move(console));
+    }
+    cJSON_Delete(root);
+    if (cached.empty()) return false;
+    const size_t cached_count = cached.size();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        psn_consoles_ = std::move(cached);
+    }
+    diagnosticLog("ps-console-repository", "Loaded PSN device cache count=%zu",
+                  cached_count);
+    return true;
+}
+
+bool PsConsoleRepository::savePsnCache(const std::string& account_id) const {
+    if (account_id.empty()) return false;
+    std::vector<PsConsole> consoles;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        consoles = psn_consoles_;
+    }
+    if (consoles.empty()) {
+        std::remove(lunar::get_ps_console_cache_path());
+        return true;
+    }
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "account_id", account_id.c_str());
+    cJSON* array = cJSON_CreateArray();
+    for (const auto& console : consoles) {
+        if (console.psn_duid.empty() || !console.remote.has_value()) continue;
+        cJSON* item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "duid", console.psn_duid.c_str());
+        cJSON_AddStringToObject(item, "name", console.nickname.c_str());
+        cJSON_AddBoolToObject(item, "remoteplay_enabled", console.remote->remoteplay_enabled);
+        cJSON_AddItemToArray(array, item);
+    }
+    cJSON_AddItemToObject(root, "consoles", array);
+    char* json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) return false;
+    const std::string path = lunar::get_ps_console_cache_path();
+    const std::string temp_path = path + ".tmp";
+    FILE* file = std::fopen(temp_path.c_str(), "wb");
+    if (!file) { std::free(json); return false; }
+    bool ok = std::fputs(json, file) >= 0;
+    ok = std::fflush(file) == 0 && ok;
+    ok = std::fclose(file) == 0 && ok;
+    std::free(json);
+    if (!ok) { std::remove(temp_path.c_str()); return false; }
+    const std::string backup_path = path + ".bak";
+    std::remove(backup_path.c_str());
+    errno = 0;
+    const bool had_existing = std::rename(path.c_str(), backup_path.c_str()) == 0;
+    if (!had_existing && errno != ENOENT) {
+        std::remove(temp_path.c_str());
+        return false;
+    }
+    if (std::rename(temp_path.c_str(), path.c_str()) != 0) {
+        if (had_existing) std::rename(backup_path.c_str(), path.c_str());
+        std::remove(temp_path.c_str());
+        return false;
+    }
+    if (had_existing) std::remove(backup_path.c_str());
+    diagnosticLog("ps-console-repository", "Saved PSN device cache count=%zu", consoles.size());
+    return true;
+}
+
+void PsConsoleRepository::clearPsnCache() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        psn_consoles_.clear();
+    }
+    std::remove(lunar::get_ps_console_cache_path());
+    std::remove((std::string(lunar::get_ps_console_cache_path()) + ".tmp").c_str());
+    std::remove((std::string(lunar::get_ps_console_cache_path()) + ".bak").c_str());
 }
 
 bool PsConsoleRepository::startDiscovery(HostListCallback cb) {

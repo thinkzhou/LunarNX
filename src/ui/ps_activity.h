@@ -48,6 +48,7 @@ private:
     brls::Button* psn_button_ = nullptr;
     bool resumed_once_ = false;
     bool had_psn_session_ = false;
+    bool psn_cache_loaded_ = false;
     std::chrono::steady_clock::time_point back_navigation_ready_at_{};
     PsConsoleSource source_ = PsConsoleSource::Local;
     std::vector<ps::PsConsole> hosts_;

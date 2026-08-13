@@ -342,6 +342,7 @@
   "remote_desc": "已登入 PlayStation 帳戶綁定的 PS5 主機",
   "refresh_psn": "重新整理 PSN",
   "psn_not_checked": "PSN:未檢查",
+  "psn_cache_loaded": "已顯示儲存的主機，如需更新請重新尋找。",
   "local_desc": "在區域網路中搜尋、配對、喚醒和連線",
   "local_console_desc": "透過目前區域網路直接連線主機",
   "remote_console_desc": "透過 PlayStation Network 遠端連線",
