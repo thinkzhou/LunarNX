@@ -290,6 +290,9 @@
   "menu_show_performance": "Show performance",
   "menu_xbox_button": "Press Xbox button",
   "menu_ps_button": "Press PS button",
+  "menu_stream_settings": "Streaming settings",
+  "menu_button_mapping": "Button mapping",
+  "menu_resume": "Resume streaming",
   "menu_disconnect": "Disconnect stream",
   "menu_disconnect_confirm": "Tap again to disconnect"
  },

@@ -8,41 +8,37 @@ namespace lunar::ui {
 namespace {
 
 const UiPalette kDarkPalette{
-    .background = nvgRGB(27, 30, 35),
-    .surface = nvgRGB(35, 39, 46),
-    .surface_alt = nvgRGB(42, 47, 55),
-    .card = nvgRGB(38, 43, 50),
-    .card_muted = nvgRGB(48, 54, 63),
-    .accent = nvgRGB(0, 217, 195),
-    .accent_soft = nvgRGBA(0, 217, 195, 40),
-    .text = nvgRGB(244, 246, 248),
-    .text_muted = nvgRGB(154, 163, 173),
-    .border = nvgRGB(58, 65, 75),
-    .xbox_green = nvgRGB(16, 124, 16),
-    .ps_blue = nvgRGB(0, 112, 209),
-    .success = nvgRGB(76, 195, 138),
-    .warning = nvgRGB(224, 169, 75),
-    .error = nvgRGB(229, 96, 90),
-    .stream_overlay = nvgRGBA(8, 11, 14, 218),
+    .background = nvgRGB(10, 15, 12),
+    .surface = nvgRGB(15, 23, 18),
+    .surface_alt = nvgRGB(20, 31, 24),
+    .card = nvgRGB(18, 28, 22),
+    .card_muted = nvgRGB(24, 35, 29),
+    .accent = nvgRGB(105, 216, 92),
+    .accent_soft = nvgRGBA(75, 182, 66, 72),
+    .text = nvgRGB(244, 248, 243),
+    .text_muted = nvgRGB(159, 178, 164),
+    .border = nvgRGB(53, 72, 59),
+    .success = nvgRGB(105, 216, 92),
+    .warning = nvgRGB(244, 197, 74),
+    .error = nvgRGB(255, 124, 115),
+    .stream_overlay = nvgRGBA(7, 12, 9, 218),
 };
 
 const UiPalette kLightPalette{
-    .background = nvgRGB(241, 243, 245),
-    .surface = nvgRGB(248, 249, 250),
-    .surface_alt = nvgRGB(232, 236, 240),
-    .card = nvgRGB(252, 253, 254),
-    .card_muted = nvgRGB(236, 240, 244),
-    .accent = nvgRGB(0, 122, 110),
-    .accent_soft = nvgRGBA(0, 122, 110, 40),
-    .text = nvgRGB(30, 34, 39),
-    .text_muted = nvgRGB(105, 113, 122),
-    .border = nvgRGB(198, 205, 212),
-    .xbox_green = nvgRGB(16, 124, 16),
-    .ps_blue = nvgRGB(0, 112, 209),
-    .success = nvgRGB(20, 128, 74),
-    .warning = nvgRGB(161, 110, 0),
+    .background = nvgRGB(242, 246, 240),
+    .surface = nvgRGB(250, 252, 248),
+    .surface_alt = nvgRGB(231, 239, 228),
+    .card = nvgRGB(252, 254, 251),
+    .card_muted = nvgRGB(235, 242, 232),
+    .accent = nvgRGB(16, 124, 16),
+    .accent_soft = nvgRGBA(16, 124, 16, 42),
+    .text = nvgRGB(24, 31, 25),
+    .text_muted = nvgRGB(91, 108, 95),
+    .border = nvgRGB(190, 204, 191),
+    .success = nvgRGB(16, 124, 16),
+    .warning = nvgRGB(169, 117, 0),
     .error = nvgRGB(186, 43, 37),
-    .stream_overlay = nvgRGBA(8, 11, 14, 218),
+    .stream_overlay = nvgRGBA(8, 14, 10, 218),
 };
 
 void installThemeVariant(brls::Theme& theme, const UiPalette& p, bool dark) {
@@ -52,12 +48,12 @@ void installThemeVariant(brls::Theme& theme, const UiPalette& p, bool dark) {
     theme.addColor("brls/accent", p.accent);
     theme.addColor("brls/click_pulse", p.accent_soft);
     theme.addColor("brls/highlight/background", dark
-        ? nvgRGB(42, 47, 55)
-        : nvgRGB(226, 240, 236));
+        ? nvgRGB(24, 39, 29)
+        : nvgRGB(229, 245, 226));
     theme.addColor("brls/highlight/color1", p.accent);
     theme.addColor("brls/highlight/color2", dark
-        ? nvgRGB(108, 255, 240)
-        : nvgRGB(0, 160, 145));
+        ? nvgRGB(171, 246, 158)
+        : nvgRGB(74, 170, 68));
     theme.addColor("brls/applet_frame/separator", p.border);
     theme.addColor("brls/sidebar/background", p.surface);
     theme.addColor("brls/sidebar/active_item", p.accent);
@@ -65,9 +61,11 @@ void installThemeVariant(brls::Theme& theme, const UiPalette& p, bool dark) {
     theme.addColor("brls/header/border", p.border);
     theme.addColor("brls/header/rectangle", p.accent);
     theme.addColor("brls/header/subtitle", p.text_muted);
-    theme.addColor("brls/button/primary_enabled_background", p.accent);
+    theme.addColor("brls/button/primary_enabled_background", dark
+        ? nvgRGB(35, 132, 38)
+        : nvgRGB(16, 124, 16));
     theme.addColor("brls/button/primary_disabled_background", p.card_muted);
-    theme.addColor("brls/button/primary_enabled_text", nvgRGB(16, 22, 20));
+    theme.addColor("brls/button/primary_enabled_text", nvgRGB(255, 255, 255));
     theme.addColor("brls/button/primary_disabled_text", p.text_muted);
     theme.addColor("brls/button/default_enabled_background", p.card_muted);
     theme.addColor("brls/button/default_disabled_background", p.surface_alt);
@@ -106,7 +104,7 @@ brls::Box* makeUiCard(brls::Axis axis) {
     card->setBackgroundColor(p.card);
     card->setBorderThickness(1);
     card->setBorderColor(p.border);
-    card->setCornerRadius(8);
+    card->setCornerRadius(16);
     card->setPadding(18, 20, 18, 20);
     return card;
 }
@@ -119,19 +117,19 @@ brls::Box* makeSectionHeader(const std::string& title,
     row->setAlignItems(brls::AlignItems::CENTER);
 
     auto* accent = new brls::Box();
-    accent->setWidth(4);
+    accent->setWidth(5);
     accent->setHeight(subtitle.empty() ? 24 : 34);
-    accent->setCornerRadius(2);
+    accent->setCornerRadius(3);
     accent->setBackgroundColor(p.accent);
     row->addView(accent);
 
     auto* text = new brls::Box(brls::Axis::COLUMN);
     text->setGrow(1.0f);
-    text->setPadding(0, 0, 0, 12);
+    text->setPadding(0, 0, 0, 14);
 
     auto* title_label = new brls::Label();
     title_label->setText(title);
-    title_label->setFontSize(21);
+    title_label->setFontSize(22);
     title_label->setTextColor(p.text);
     text->addView(title_label);
 
@@ -158,52 +156,23 @@ void stylePrimaryButton(brls::Button* button) {
     if (!button) return;
     button->setStyle(&brls::BUTTONSTYLE_PRIMARY);
     button->setHeight(48);
-    button->setCornerRadius(8);
-    button->setHighlightCornerRadius(10);
+    button->setCornerRadius(12);
+    button->setHighlightCornerRadius(14);
 }
 
 void styleSecondaryButton(brls::Button* button) {
     if (!button) return;
     button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
     button->setHeight(48);
-    button->setCornerRadius(8);
-    button->setHighlightCornerRadius(10);
+    button->setCornerRadius(12);
+    button->setHighlightCornerRadius(14);
 }
 
 void styleQuietButton(brls::Button* button) {
     if (!button) return;
     button->setStyle(&brls::BUTTONSTYLE_BORDERLESS);
     button->setHeight(44);
-    button->setHighlightCornerRadius(10);
-}
-
-brls::Box* makeHintBar(const std::string& a_hint, const std::string& b_hint) {
-    const auto& p = uiPalette();
-    auto* bar = new brls::Box(brls::Axis::ROW);
-    bar->setHeight(44);
-    bar->setAlignItems(brls::AlignItems::CENTER);
-    bar->setPadding(24, 0, 24, 0);
-
-    if (!a_hint.empty()) {
-        auto* label = new brls::Label();
-        label->setText(brls::Hint::getKeyIcon(brls::ControllerButton::BUTTON_A) +
-                       "  " + a_hint);
-        label->setFontSize(15);
-        label->setTextColor(p.text_muted);
-        bar->addView(label);
-    }
-
-    if (!b_hint.empty()) {
-        auto* label = new brls::Label();
-        label->setText(brls::Hint::getKeyIcon(brls::ControllerButton::BUTTON_B) +
-                       "  " + b_hint);
-        label->setFontSize(15);
-        label->setTextColor(p.text_muted);
-        label->setMarginLeft(a_hint.empty() ? 0 : 28);
-        bar->addView(label);
-    }
-
-    return bar;
+    button->setHighlightCornerRadius(12);
 }
 
 ConsoleGlyphView::ConsoleGlyphView(std::string console_type, bool online)
@@ -229,7 +198,7 @@ void ConsoleGlyphView::draw(NVGcontext* vg, float x, float y,
     nvgGlobalAlpha(vg, alpha);
 
     nvgBeginPath(vg);
-    nvgRoundedRect(vg, x + 6, y + 6, width - 12, height - 12, 16);
+    nvgRoundedRect(vg, x + 6, y + 6, width - 12, height - 12, 18);
     nvgFillColor(vg, p.surface_alt);
     nvgFill(vg);
 
@@ -257,7 +226,7 @@ void ConsoleGlyphView::draw(NVGcontext* vg, float x, float y,
         nvgFill(vg);
         nvgBeginPath(vg);
         nvgRoundedRect(vg, tx + 5, ty + 5, tower_w - 10, 8, 4);
-        nvgFillColor(vg, p.xbox_green);
+        nvgFillColor(vg, p.accent);
         nvgFill(vg);
     } else if (is_ps) {
         // PlayStation glyph: tilted square with PS colors
@@ -270,7 +239,7 @@ void ConsoleGlyphView::draw(NVGcontext* vg, float x, float y,
 
         nvgBeginPath(vg);
         nvgRoundedRect(vg, ps_x, ps_y, ps_w, ps_h, 8);
-        nvgFillColor(vg, p.ps_blue);
+        nvgFillColor(vg, nvgRGB(0, 67, 156));
         nvgFill(vg);
 
         // "PS" text
@@ -287,7 +256,7 @@ void ConsoleGlyphView::draw(NVGcontext* vg, float x, float y,
             nvgFillColor(vg, nvgRGB(255, 255, 255));
             nvgFill(vg);
             nvgFontSize(vg, 12);
-            nvgFillColor(vg, p.ps_blue);
+            nvgFillColor(vg, nvgRGB(0, 67, 156));
             nvgText(vg, ps_x + ps_w - 10, ps_y + 11, "5", nullptr);
         } else {
             // Small "4" badge
@@ -296,7 +265,7 @@ void ConsoleGlyphView::draw(NVGcontext* vg, float x, float y,
             nvgFillColor(vg, nvgRGB(255, 255, 255));
             nvgFill(vg);
             nvgFontSize(vg, 12);
-            nvgFillColor(vg, p.ps_blue);
+            nvgFillColor(vg, nvgRGB(0, 67, 156));
             nvgText(vg, ps_x + ps_w - 10, ps_y + 11, "4", nullptr);
         }
     } else {

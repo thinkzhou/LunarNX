@@ -23,7 +23,7 @@ def main():
     require("menu_handle_" not in view and "menu_handle_" not in header,
             "stream view must not permanently cover video with a menu handle")
     require("quick_menu_->setVisibility" in view and
-            "quick_menu_visible_ || exit_pending_.load()" in view,
+            "quick_menu_visible_ || child_activity_visible_ || exit_pending_.load()" in view,
             "open menu must be visible and suppress game input")
     require("giveFocus(content_root_)" in view,
             "closing the menu must restore focus to the stream view")
@@ -36,6 +36,10 @@ def main():
     require("getStreamPlatform() == app::StreamPlatform::PlayStation" in view and
             "menu_ps_button" in view and "menu_xbox_button" in view,
             "platform home button must use PlayStation or Xbox labeling")
+    require("child_activity_visible_ = true" in view and
+            "void StreamView::onResume()" in view and
+            "child_activity_visible_ = false" in view,
+            "settings and mapping activities must suppress input until resume")
     require("kQuickDisconnectConfirmWindow" in view and
             "menu_disconnect_confirm" in view and
             "std::atomic<bool> disconnect_armed_" in header,
@@ -46,7 +50,8 @@ def main():
             "detailed performance visibility must remain internally consistent")
     for text in (zh, en):
         for key in ("menu_title", "menu_hint", "menu_open", "menu_xbox_button",
-                    "menu_ps_button",
+                    "menu_ps_button", "menu_stream_settings",
+                    "menu_button_mapping", "menu_resume",
                     "menu_hide_performance",
                     "menu_show_performance", "menu_disconnect",
                     "menu_disconnect_confirm"):

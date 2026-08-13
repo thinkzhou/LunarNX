@@ -22,13 +22,10 @@ PsRegistrationActivity::~PsRegistrationActivity() {
 brls::View* PsRegistrationActivity::createContentView() {
     const auto& p = uiPalette();
 
-    auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
-    root->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
-    root->setPadding(24, 48, 18, 48);
-    root->setBackgroundColor(p.background);
-    root->setAlignItems(brls::AlignItems::CENTER);
-    root->registerAction("Cancel", brls::ControllerButton::BUTTON_B,
+    auto* scroll = new brls::ScrollingFrame();
+    scroll->setBackgroundColor(p.background);
+    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
+    scroll->registerAction("Cancel", brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
             if (registering_->load()) {
                 manager_->cancelRegistration();
@@ -37,34 +34,22 @@ brls::View* PsRegistrationActivity::createContentView() {
             return true;
         });
 
-    auto* platform_mark = new brls::Label();
-    platform_mark->setWidth(64);
-    platform_mark->setHeight(52);
-    platform_mark->setText("PS");
-    platform_mark->setFontSize(18);
-    platform_mark->setTextColor(p.ps_blue);
-    platform_mark->setBackgroundColor(p.surface);
-    platform_mark->setCornerRadius(26);
-    platform_mark->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    platform_mark->setVerticalAlign(brls::VerticalAlign::CENTER);
-    root->addView(platform_mark);
+    auto* root = new brls::Box(brls::Axis::COLUMN);
+    root->setPadding(40, 80, 40, 20);
+    root->setAlignItems(brls::AlignItems::CENTER);
 
+    // Title
     auto* title = new brls::Label();
     title->setText(brls::getStr("lunarnx/ps/reg_title"));
-    title->setFontSize(30);
+    title->setFontSize(24);
     title->setTextColor(p.text);
-    title->setHeight(44);
-    title->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    title->setVerticalAlign(brls::VerticalAlign::CENTER);
+    title->setMargins(0, 0, 0, 8);
     root->addView(title);
 
-    auto* host_area = new brls::Box(brls::Axis::COLUMN);
-    host_area->setWidth(520);
-    host_area->setHeight(host_addr_.empty() ? 72 : 38);
-    host_area->setAlignItems(brls::AlignItems::CENTER);
     if (host_addr_.empty()) {
         auto* host_input = new brls::InputCell();
         host_input->setWidth(520);
+        host_input->setMargins(0, 0, 0, 24);
         auto alive = alive_;
         host_input->init(
             brls::getStr("lunarnx/ps/reg_ip_title"),
@@ -76,49 +61,35 @@ brls::View* PsRegistrationActivity::createContentView() {
             brls::getStr("lunarnx/ps/reg_ip_example"),
             64,
             0);
-        host_area->addView(host_input);
+        root->addView(host_input);
     } else {
         auto* host_label = new brls::Label();
-        host_label->setText(host_name_.empty()
-            ? host_addr_
-            : host_name_ + "  ·  " + host_addr_);
+        host_label->setText(host_name_ + " (" + host_addr_ + ")");
         host_label->setFontSize(14);
         host_label->setTextColor(p.text_muted);
-        host_label->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-        host_area->addView(host_label);
+        host_label->setMargins(0, 0, 0, 30);
+        root->addView(host_label);
     }
-    root->addView(host_area);
 
-    auto* card = makeUiCard(brls::Axis::COLUMN);
-    card->setWidth(460);
-    card->setHeight(448);
-    card->setPadding(24, 24, 20, 24);
-    card->setAlignItems(brls::AlignItems::CENTER);
-
+    // PIN display
     pin_display_ = new brls::Label();
     pin_display_->setText(brls::getStr("lunarnx/ps/reg_enter_pin"));
-    pin_display_->setWidth(412);
-    pin_display_->setHeight(64);
-    pin_display_->setFontSize(25);
+    pin_display_->setFontSize(28);
     pin_display_->setTextColor(p.text);
-    pin_display_->setBackgroundColor(p.card_muted);
-    pin_display_->setCornerRadius(8);
-    pin_display_->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    pin_display_->setVerticalAlign(brls::VerticalAlign::CENTER);
-    card->addView(pin_display_);
+    pin_display_->setMargins(0, 0, 0, 30);
+    root->addView(pin_display_);
 
+    // Number pad
     static const char* kRows[] = {"123", "456", "789", " 0 "};
     for (const auto* row : kRows) {
         auto* row_box = new brls::Box(brls::Axis::ROW);
-        row_box->setWidth(412);
-        row_box->setHeight(54);
         row_box->setJustifyContent(brls::JustifyContent::CENTER);
-        row_box->setMarginTop(8);
+        row_box->setMargins(0, 0, 0, 8);
 
         for (const char* c = row; *c; c++) {
             if (*c == ' ') {
-                auto* spacer = new brls::Box();
-                spacer->setDimensions(132, 54);
+                auto* spacer = new brls::Box(brls::Axis::ROW);
+                spacer->setDimensions(60, 50);
                 row_box->addView(spacer);
                 continue;
             }
@@ -126,9 +97,8 @@ brls::View* PsRegistrationActivity::createContentView() {
             char digit = *c;
             auto* btn = new brls::Button();
             btn->setText(std::string(1, digit));
-            btn->setWidth(132);
-            btn->setHeight(54);
-            if (c != row) btn->setMarginLeft(8);
+            btn->setWidth(60);
+            btn->setHeight(50);
             styleSecondaryButton(btn);
             btn->registerClickAction([this, digit](brls::View*) -> bool {
                 onDigit(digit);
@@ -136,19 +106,18 @@ brls::View* PsRegistrationActivity::createContentView() {
             });
             row_box->addView(btn);
         }
-        card->addView(row_box);
+        root->addView(row_box);
     }
 
+    // Action row
     auto* action_row = new brls::Box(brls::Axis::ROW);
-    action_row->setWidth(412);
-    action_row->setHeight(54);
     action_row->setJustifyContent(brls::JustifyContent::CENTER);
-    action_row->setMarginTop(14);
+    action_row->setMargins(0, 12, 0, 0);
 
     auto* back_btn = new brls::Button();
     back_btn->setText(brls::getStr("lunarnx/ps/reg_backspace"));
-    back_btn->setWidth(198);
-    styleSecondaryButton(back_btn);
+    back_btn->setWidth(120);
+    styleQuietButton(back_btn);
     back_btn->registerClickAction([this](brls::View*) -> bool {
         onBackspace();
         return true;
@@ -157,32 +126,26 @@ brls::View* PsRegistrationActivity::createContentView() {
 
     auto* submit_btn = new brls::Button();
     submit_btn->setText(brls::getStr("lunarnx/ps/reg_pair"));
-    submit_btn->setWidth(198);
+    submit_btn->setWidth(120);
     stylePrimaryButton(submit_btn);
     submit_btn->registerClickAction([this](brls::View*) -> bool {
         onSubmitPin();
         return true;
     });
-    submit_btn->setMarginLeft(16);
+    submit_btn->setMargins(20, 0, 0, 0);
     action_row->addView(submit_btn);
-    card->addView(action_row);
+    root->addView(action_row);
 
+    // Status
     status_ = new brls::Label();
     status_->setText(brls::getStr("lunarnx/ps/reg_instructions"));
     status_->setFontSize(12);
     status_->setTextColor(p.text_muted);
-    status_->setWidth(412);
-    status_->setHeight(28);
-    status_->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    status_->setVerticalAlign(brls::VerticalAlign::CENTER);
-    card->addView(status_);
-    root->addView(card);
+    status_->setMargins(0, 20, 0, 0);
+    root->addView(status_);
 
-    auto* footer = makeHintBar(brls::getStr("lunarnx/common/confirm"),
-                               brls::getStr("lunarnx/common/back"));
-    footer->setWidthPercentage(100.0f);
-    root->addView(footer);
-    return root;
+    scroll->setContentView(root);
+    return scroll;
 }
 
 void PsRegistrationActivity::onDigit(char digit) {

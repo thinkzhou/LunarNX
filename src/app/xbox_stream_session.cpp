@@ -576,8 +576,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                 gamepad_state = {};
                 guide_release_pending = false;
             } else if (callbacks.input_suppressed && callbacks.input_suppressed()) {
-                gamepad_state.view = false;
-                gamepad_state.menu = false;
+                gamepad_state = {};
             }
             const auto input_packet = xinput_.encode(gamepad_state);
             if (control_started && !first_input_logged) {

@@ -290,6 +290,9 @@
   "menu_show_performance": "顯示效能資訊",
   "menu_xbox_button": "按下 Xbox 鍵",
   "menu_ps_button": "按下 PS 鍵",
+  "menu_stream_settings": "串流設定",
+  "menu_button_mapping": "按鍵映射",
+  "menu_resume": "繼續串流",
   "menu_disconnect": "中斷串流",
   "menu_disconnect_confirm": "再次點擊確認中斷"
  },

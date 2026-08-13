@@ -312,9 +312,7 @@ brls::View* AuthActivity::createContentView() {
     btn_row->addView(cancel_btn_);
     sign_in->addView(btn_row);
 
-    auto* footer = makeMutedLabel(
-        brls::Hint::getKeyIcon(brls::ControllerButton::BUTTON_B) + "  " +
-        brls::getStr("lunarnx/common/exit"), 12);
+    auto* footer = makeMutedLabel(brls::getStr("lunarnx/auth/footer_exit"), 12);
     footer->setGrow(1.0f);
     footer->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
     footer->setVerticalAlign(brls::VerticalAlign::BOTTOM);

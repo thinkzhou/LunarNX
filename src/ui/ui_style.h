@@ -18,8 +18,6 @@ struct UiPalette {
     NVGcolor text;
     NVGcolor text_muted;
     NVGcolor border;
-    NVGcolor xbox_green;
-    NVGcolor ps_blue;
     NVGcolor success;
     NVGcolor warning;
     NVGcolor error;
@@ -36,10 +34,6 @@ brls::Label* makeMutedLabel(const std::string& text, float font_size = 14);
 void stylePrimaryButton(brls::Button* button);
 void styleSecondaryButton(brls::Button* button);
 void styleQuietButton(brls::Button* button);
-
-// A/B controller hint bar. Empty strings omit that hint.
-brls::Box* makeHintBar(const std::string& a_hint = "",
-                       const std::string& b_hint = "");
 
 class ConsoleGlyphView : public brls::View {
 public:

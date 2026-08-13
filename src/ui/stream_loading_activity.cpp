@@ -128,9 +128,10 @@ brls::View* StreamLoadingActivity::createContentView() {
     stage->setAlignItems(brls::AlignItems::CENTER);
 
     loading_card_ = makeUiCard(brls::Axis::COLUMN);
-    loading_card_->setWidth(500);
-    loading_card_->setHeight(340);
-    loading_card_->setPadding(28, 28, 24, 28);
+    loading_card_->setWidth(780);
+    loading_card_->setHeight(430);
+    loading_card_->setPadding(34, 46, 30, 46);
+    loading_card_->setCornerRadius(22);
     loading_card_->setAlignItems(brls::AlignItems::CENTER);
 
     auto* eyebrow = new brls::Label();
@@ -141,8 +142,8 @@ brls::View* StreamLoadingActivity::createContentView() {
     loading_card_->addView(eyebrow);
 
     auto* title = new brls::Label();
-    title->setWidth(444);
-    title->setHeight(48);
+    title->setWidth(688);
+    title->setHeight(52);
     title->setText(cloud
         ? brls::getStr("lunarnx/loading/launching", request_.display_name)
         : brls::getStr("lunarnx/loading/connecting_to", request_.display_name));
@@ -153,8 +154,8 @@ brls::View* StreamLoadingActivity::createContentView() {
     loading_card_->addView(title);
 
     auto* target = new brls::Label();
-    target->setWidth(444);
-    target->setHeight(28);
+    target->setWidth(688);
+    target->setHeight(30);
     target->setText(cloud
         ? brls::getStr("lunarnx/loading/creating_cloud")
         : brls::getStr("lunarnx/loading/waking_xbox"));
@@ -165,13 +166,13 @@ brls::View* StreamLoadingActivity::createContentView() {
     loading_card_->addView(target);
 
     auto* spinner = new brls::ProgressSpinner(brls::ProgressSpinnerSize::LARGE);
-    spinner->setWidth(64);
-    spinner->setHeight(64);
+    spinner->setWidth(88);
+    spinner->setHeight(88);
     loading_card_->addView(spinner);
 
     status_ = new brls::Label();
-    status_->setWidth(444);
-    status_->setHeight(42);
+    status_->setWidth(688);
+    status_->setHeight(48);
     status_->setText(cloud
         ? brls::getStr("lunarnx/loading/preparing_cloud")
         : brls::getStr("lunarnx/loading/preparing_remote"));
@@ -182,8 +183,8 @@ brls::View* StreamLoadingActivity::createContentView() {
     loading_card_->addView(status_);
 
     detail_ = new brls::Label();
-    detail_->setWidth(444);
-    detail_->setHeight(38);
+    detail_->setWidth(688);
+    detail_->setHeight(44);
     detail_->setText(brls::getStr("lunarnx/loading/pipeline"));
     detail_->setFontSize(14);
     detail_->setTextColor(p.accent);
@@ -192,7 +193,7 @@ brls::View* StreamLoadingActivity::createContentView() {
     loading_card_->addView(detail_);
 
     auto* wait_hint = new brls::Label();
-    wait_hint->setWidth(444);
+    wait_hint->setWidth(688);
     wait_hint->setText(brls::getStr("lunarnx/loading/first_connection"));
     wait_hint->setFontSize(13);
     wait_hint->setTextColor(p.text_muted);
@@ -200,9 +201,10 @@ brls::View* StreamLoadingActivity::createContentView() {
     loading_card_->addView(wait_hint);
 
     error_card_ = makeUiCard(brls::Axis::COLUMN);
-    error_card_->setWidth(500);
-    error_card_->setHeight(340);
-    error_card_->setPadding(28, 28, 24, 28);
+    error_card_->setWidth(780);
+    error_card_->setHeight(390);
+    error_card_->setPadding(30, 54, 30, 54);
+    error_card_->setCornerRadius(22);
     error_card_->setAlignItems(brls::AlignItems::CENTER);
     error_card_->setVisibility(brls::Visibility::GONE);
 
@@ -226,7 +228,7 @@ brls::View* StreamLoadingActivity::createContentView() {
     error_card_->addView(error_mark);
 
     auto* error_title = new brls::Label();
-    error_title->setWidth(444);
+    error_title->setWidth(672);
     error_title->setHeight(54);
     error_title->setText(brls::getStr("lunarnx/loading/error_title"));
     error_title->setFontSize(28);
@@ -236,8 +238,8 @@ brls::View* StreamLoadingActivity::createContentView() {
     error_card_->addView(error_title);
 
     error_detail_ = new brls::Label();
-    error_detail_->setWidth(444);
-    error_detail_->setHeight(92);
+    error_detail_->setWidth(672);
+    error_detail_->setHeight(104);
     error_detail_->setFontSize(15);
     error_detail_->setTextColor(p.text_muted);
     error_detail_->setHorizontalAlign(brls::HorizontalAlign::CENTER);
@@ -245,7 +247,7 @@ brls::View* StreamLoadingActivity::createContentView() {
     error_card_->addView(error_detail_);
 
     auto* error_hint = new brls::Label();
-    error_hint->setWidth(444);
+    error_hint->setWidth(672);
     error_hint->setText(brls::getStr("lunarnx/loading/error_hint"));
     error_hint->setFontSize(14);
     error_hint->setTextColor(p.accent);
@@ -261,8 +263,7 @@ brls::View* StreamLoadingActivity::createContentView() {
     footer_->setText(brls::getStr("lunarnx/loading/footer_cancel"));
     footer_->setFontSize(14);
     footer_->setTextColor(p.text_muted);
-    footer_->setBackgroundColor(p.surface);
-    footer_->setHorizontalAlign(brls::HorizontalAlign::LEFT);
+    footer_->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
     footer_->setVerticalAlign(brls::VerticalAlign::CENTER);
     root->addView(footer_);
 

@@ -296,63 +296,7 @@ StreamSettingsActivity::StreamSettingsActivity(
 
 brls::View* StreamSettingsActivity::createContentView() {
     const auto& p = uiPalette();
-
-    auto* page = new brls::Box(brls::Axis::COLUMN);
-    page->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
-    page->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
-    page->setBackgroundColor(p.background);
-    page->registerAction(brls::getStr("lunarnx/settings/back_action"),
-        brls::ControllerButton::BUTTON_B,
-        [this](brls::View*) -> bool {
-            closeSettings();
-            return true;
-        });
-
-    auto* body = new brls::Box(brls::Axis::ROW);
-    body->setGrow(1.0f);
-
-    auto* sidebar = new brls::Box(brls::Axis::COLUMN);
-    sidebar->setWidth(210);
-    sidebar->setPadding(26, 22, 26, 22);
-    sidebar->setBackgroundColor(p.surface);
-    auto* wordmark = new brls::Label();
-    wordmark->setText("LunarNX");
-    wordmark->setFontSize(24);
-    wordmark->setTextColor(p.accent);
-    sidebar->addView(wordmark);
-    auto* side_title = new brls::Label();
-    side_title->setText(brls::getStr("lunarnx/settings/title"));
-    side_title->setFontSize(25);
-    side_title->setTextColor(p.text);
-    side_title->setMarginTop(8);
-    sidebar->addView(side_title);
-    sidebar->addView(makeMutedLabel(
-        brls::getStr("lunarnx/settings/intro_title"), 11));
-
-    auto add_nav = [sidebar, &p](const std::string& label, bool active) {
-        auto* item = new brls::Box(brls::Axis::ROW);
-        item->setHeight(52);
-        item->setBackgroundColor(active ? p.accent_soft : p.surface);
-        item->setCornerRadius(8);
-        item->setPadding(0, 14, 0, 14);
-        item->setAlignItems(brls::AlignItems::CENTER);
-        item->setMarginTop(active ? 32 : 6);
-        auto* item_label = new brls::Label();
-        item_label->setText(label);
-        item_label->setFontSize(15);
-        item_label->setTextColor(active ? p.accent : p.text_muted);
-        item->addView(item_label);
-        sidebar->addView(item);
-    };
-    add_nav(brls::getStr("lunarnx/settings/app_section"), true);
-    add_nav(brls::getStr("lunarnx/settings/video_section"), false);
-    add_nav(brls::getStr("lunarnx/settings/image_section"), false);
-    add_nav(brls::getStr("lunarnx/settings/controller_section"), false);
-    add_nav(brls::getStr("lunarnx/settings/region_section"), false);
-    body->addView(sidebar);
-
     auto* scroll = new brls::ScrollingFrame();
-    scroll->setGrow(1.0f);
     scroll->setBackgroundColor(p.background);
     scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
     scroll->registerAction(brls::getStr("lunarnx/settings/back_action"),
@@ -363,31 +307,27 @@ brls::View* StreamSettingsActivity::createContentView() {
         });
 
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(24, 44, 32, 44);
+    root->setPadding(28, 64, 40, 64);
+    root->setBackgroundColor(p.background);
     scroll->setContentView(root);
-    body->addView(scroll);
-    page->addView(body);
 
     auto* top = new brls::Box(brls::Axis::ROW);
     top->setHeight(72);
     top->setAlignItems(brls::AlignItems::CENTER);
 
+    auto* brand = new brls::Label();
+    brand->setText("LUNARNX");
+    brand->setFontSize(18);
+    brand->setTextColor(p.accent);
+    top->addView(brand);
+
     auto* title = new brls::Label();
     title->setText(brls::getStr("lunarnx/settings/title"));
     title->setFontSize(30);
     title->setTextColor(p.text);
+    title->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
     title->setGrow(1.0f);
     top->addView(title);
-
-    auto* close = new brls::Button();
-    close->setWidth(150);
-    close->setText(brls::getStr("lunarnx/common/done"));
-    stylePrimaryButton(close);
-    close->registerClickAction([this](brls::View*) -> bool {
-        closeSettings();
-        return true;
-    });
-    top->addView(close);
     root->addView(top);
 
     auto* intro = makeUiCard();
@@ -607,12 +547,21 @@ brls::View* StreamSettingsActivity::createContentView() {
     cloud_card->addView(region);
     root->addView(cloud_card);
 
-    auto* footer = makeHintBar(brls::getStr("lunarnx/common/confirm"),
-                               brls::getStr("lunarnx/common/back"));
-    footer->setWidthPercentage(100.0f);
-    footer->setBackgroundColor(p.surface);
-    page->addView(footer);
-    return page;
+    auto* close = new brls::Button();
+    close->setText(brls::getStr("lunarnx/common/done"));
+    stylePrimaryButton(close);
+    close->setMarginTop(28);
+    close->registerClickAction([this](brls::View*) -> bool {
+        closeSettings();
+        return true;
+    });
+    root->addView(close);
+
+    auto* hint = makeMutedLabel(brls::getStr("lunarnx/settings/footer_back"), 13);
+    hint->setHeight(34);
+    hint->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
+    root->addView(hint);
+    return scroll;
 }
 
 void StreamSettingsActivity::closeSettings() {

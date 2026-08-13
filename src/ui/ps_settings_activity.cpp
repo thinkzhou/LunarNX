@@ -73,65 +73,25 @@ PsSettingsActivity::PsSettingsActivity(PsSettingsSnapshot settings, CompletionCa
 
 brls::View* PsSettingsActivity::createContentView() {
     const auto& p = uiPalette();
-
-    auto* page = new brls::Box(brls::Axis::COLUMN);
-    page->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
-    page->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
-    page->setBackgroundColor(p.background);
-    page->registerAction(brls::getStr("lunarnx/settings/back_action"),
-        brls::ControllerButton::BUTTON_B,
-        [this](brls::View*) -> bool {
-            closeSettings();
-            return true;
-        });
-
     auto* scroll = new brls::ScrollingFrame();
-    scroll->setGrow(1.0f);
     scroll->setBackgroundColor(p.background);
-    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
-
+    scroll->registerAction(brls::getStr("lunarnx/settings/back_action"), brls::ControllerButton::BUTTON_B,
+        [this](brls::View*) -> bool { closeSettings(); return true; });
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(26, 48, 30, 48);
-
+    root->setPadding(28, 64, 40, 64);
     auto* header = new brls::Box(brls::Axis::ROW);
-    header->setHeight(76);
-    header->setAlignItems(brls::AlignItems::CENTER);
-    auto* brand = new brls::Label();
-    brand->setText("LUNARNX");
-    brand->setFontSize(26);
-    brand->setTextColor(p.accent);
-    brand->setGrow(1.0f);
-    header->addView(brand);
-    auto* title = new brls::Label();
-    title->setText(brls::getStr("lunarnx/ps/settings_title"));
-    title->setFontSize(30);
-    title->setTextColor(p.text);
-    title->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
-    header->addView(title);
-    root->addView(header);
-
-    root->addView(makeSectionHeader(
-        brls::getStr("lunarnx/ps/settings_video_section"),
-        brls::getStr("lunarnx/ps/settings_video_detail")));
-    auto* card = makeUiCard();
-    card->setPadding(4, 8, 4, 8);
+    header->setHeight(72);
+    auto* brand = new brls::Label(); brand->setText("LUNARNX"); brand->setFontSize(18); brand->setTextColor(p.accent); header->addView(brand);
+    auto* title = new brls::Label(); title->setText(brls::getStr("lunarnx/ps/settings_title")); title->setFontSize(30); title->setTextColor(p.text); title->setGrow(1.0f); title->setHorizontalAlign(brls::HorizontalAlign::RIGHT); header->addView(title); root->addView(header);
+    root->addView(makeSectionHeader(brls::getStr("lunarnx/ps/settings_video_section"), brls::getStr("lunarnx/ps/settings_video_detail")));
+    auto* card = makeUiCard(); card->setPadding(4, 8, 4, 8);
     auto* resolution = new brls::SelectorCell();
-    resolution->init(brls::getStr("lunarnx/settings/resolution"),
-        {"720p", "1080p"}, settings_.height >= 1080 ? 1 : 0,
-        [this](int selected) {
-            settings_.width = selected ? 1920 : 1280;
-            settings_.height = selected ? 1080 : 720;
-        });
+    resolution->init(brls::getStr("lunarnx/settings/resolution"), {"720p", "1080p"}, settings_.height >= 1080 ? 1 : 0,
+        [this](int selected) { settings_.width = selected ? 1920 : 1280; settings_.height = selected ? 1080 : 720; });
     card->addView(resolution);
     auto* bitrate = new brls::SelectorCell();
-    bitrate->init(brls::getStr("lunarnx/ps/settings_bitrate"),
-        {"10 Mbps", "20 Mbps", "30 Mbps"},
-        settings_.bitrate_kbps >= 30000 ? 2
-            : settings_.bitrate_kbps >= 20000 ? 1 : 0,
-        [this](int selected) {
-            settings_.bitrate_kbps = selected >= 2 ? 30000
-                : selected == 1 ? 20000 : 10000;
-        });
+    bitrate->init(brls::getStr("lunarnx/ps/settings_bitrate"), {"10 Mbps", "20 Mbps", "30 Mbps"}, settings_.bitrate_kbps >= 30000 ? 2 : settings_.bitrate_kbps >= 20000 ? 1 : 0,
+        [this](int selected) { settings_.bitrate_kbps = selected >= 2 ? 30000 : selected == 1 ? 20000 : 10000; });
     card->addView(bitrate);
     auto* codec = new brls::SelectorCell();
     codec->init(brls::getStr("lunarnx/ps/settings_codec"),
@@ -143,12 +103,10 @@ brls::View* PsSettingsActivity::createContentView() {
         });
     card->addView(codec);
     root->addView(card);
-
     root->addView(makeSectionHeader(
         brls::getStr("lunarnx/ps/settings_controller_section"),
         brls::getStr("lunarnx/ps/settings_controller_detail")));
-    auto* controller_card = makeUiCard();
-    controller_card->setPadding(4, 8, 4, 8);
+    auto* controller_card = makeUiCard(); controller_card->setPadding(4, 8, 4, 8);
     auto* button_mapping = new brls::DetailCell();
     button_mapping->setText(brls::getStr("lunarnx/settings/button_mapping"));
     button_mapping->setDetailText(brls::getStr("lunarnx/settings/button_mapping_detail"));
@@ -157,32 +115,9 @@ brls::View* PsSettingsActivity::createContentView() {
             input::ButtonMappingProfile::PlayStation));
         return true;
     });
-    controller_card->addView(button_mapping);
-    root->addView(controller_card);
-
-    auto* action_row = new brls::Box(brls::Axis::ROW);
-    action_row->setHeight(72);
-    action_row->setJustifyContent(brls::JustifyContent::FLEX_END);
-    action_row->setAlignItems(brls::AlignItems::CENTER);
-    auto* done = new brls::Button();
-    done->setWidth(170);
-    done->setText(brls::getStr("lunarnx/common/done"));
-    stylePrimaryButton(done);
-    done->registerClickAction([this](brls::View*) -> bool {
-        closeSettings();
-        return true;
-    });
-    action_row->addView(done);
-    root->addView(action_row);
-
-    scroll->setContentView(root);
-    page->addView(scroll);
-    auto* footer = makeHintBar(brls::getStr("lunarnx/common/confirm"),
-                               brls::getStr("lunarnx/common/back"));
-    footer->setWidthPercentage(100.0f);
-    footer->setBackgroundColor(p.surface);
-    page->addView(footer);
-    return page;
+    controller_card->addView(button_mapping); root->addView(controller_card);
+    auto* done = new brls::Button(); done->setText(brls::getStr("lunarnx/common/done")); stylePrimaryButton(done); done->setMarginTop(28); done->registerClickAction([this](brls::View*) -> bool { closeSettings(); return true; }); root->addView(done);
+    scroll->setContentView(root); return scroll;
 }
 
 void PsSettingsActivity::closeSettings() {
