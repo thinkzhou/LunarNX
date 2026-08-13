@@ -21,11 +21,11 @@ def main():
             'makeSidebarButton(brls::getStr("lunarnx/ps/pair_by_ip"))' in ui and
             'lunarnx/ps/account_network' in ui,
             "PS page must use the platform workspace shell and explicit source navigation")
-    require('lunarnx/common/settings' in ui and
+    require('lunarnx/common/playstation_settings' in ui and
             'new PsSettingsActivity(' in ui and
             'lunarnx/common/about' in ui and
             'new AboutActivity()' in ui,
-            "PS page must expose the shared settings and about activities")
+            "PS page must expose scoped settings and the shared About activity")
     require('back_navigation_ready_at_' in ui and
             'now < back_navigation_ready_at_' in ui,
             "PS page must consume a held Back input after returning from streaming")
