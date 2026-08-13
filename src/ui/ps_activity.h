@@ -31,6 +31,8 @@ private:
         std::make_shared<std::atomic<bool>>(false);
     std::shared_ptr<std::atomic<bool>> identity_fetching_ =
         std::make_shared<std::atomic<bool>>(false);
+    std::shared_ptr<std::atomic<uint64_t>> wake_generation_ =
+        std::make_shared<std::atomic<uint64_t>>(0);
 
     brls::Box* console_list_ = nullptr;
     brls::Box* local_actions_ = nullptr;
@@ -49,6 +51,7 @@ private:
     std::chrono::steady_clock::time_point back_navigation_ready_at_{};
     PsConsoleSource source_ = PsConsoleSource::Local;
     std::vector<ps::PsConsole> hosts_;
+    std::string pending_wake_mac_;
 
     void startLanDiscovery();
     void fetchPsnConsoles();
@@ -57,6 +60,7 @@ private:
     void setConsoleSource(PsConsoleSource source);
     void updateSourceUi();
     void rebuildConsoleList(const std::vector<ps::PsConsole>& hosts);
+    bool completePendingWake(const std::vector<ps::PsConsole>& hosts);
     void pairConsole(const ps::PsConsole& host);
     void wakeupConsole(const ps::PsConsole& host);
     void connectToConsole(const ps::PsConsole& host);

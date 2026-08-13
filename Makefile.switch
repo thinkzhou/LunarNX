@@ -151,7 +151,7 @@ CXX_SRCS = src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_proces
     src/ui/perf_overlay.cpp src/ui/stream_overlay.cpp \
     src/ui/platform_activity.cpp src/ui/ps_activity.cpp src/ui/ps_settings_activity.cpp src/ui/ps_registration_activity.cpp src/ui/psn_login_activity.cpp src/ui/about_activity.cpp \
     src/input/button_mapping.cpp src/input/gamepad_reader.cpp src/input/xinput_encoder.cpp src/input/rumble_controller.cpp \
-    src/auth/token_store.cpp src/auth/xbox_signing.cpp src/auth/auth_manager.cpp src/auth/xbox_auth_errors.cpp \
+    src/auth/token_store.cpp src/auth/xbox_signing.cpp src/auth/auth_manager.cpp src/auth/xbox_auth_errors.cpp src/auth/xbox_login_server.cpp \
     src/api/http_client.cpp src/api/xbox_api_client.cpp \
     src/platform/network_worker.cpp src/platform/chiaki_curl_compat.cpp \
     src/ps/chiaki_log_adapter.cpp src/ps/ps_credentials.cpp \

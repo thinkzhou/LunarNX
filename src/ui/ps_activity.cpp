@@ -14,6 +14,7 @@
 #include "../ps/psn_auth_manager.h"
 #include <algorithm>
 #include <cstdio>
+#include <thread>
 
 namespace lunar::ui {
 namespace {
@@ -302,8 +303,9 @@ PsActivity::PsActivity() {
 }
 
 PsActivity::~PsActivity() {
-    stopDiscovery();
     alive_->store(false);
+    wake_generation_->fetch_add(1);
+    stopDiscovery();
 }
 
 brls::View* PsActivity::createContentView() {
@@ -593,6 +595,7 @@ void PsActivity::startLanDiscovery() {
     auto alive = alive_;
     const bool started = ps_manager_->startDiscovery([this, alive](const std::vector<ps::PsConsole>& hosts) {
         if (!alive->load()) return;
+        if (completePendingWake(hosts)) return;
         rebuildConsoleList(hosts);
         if (lan_state_) {
             size_t local_count = 0;
@@ -856,6 +859,28 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
     }
 }
 
+bool PsActivity::completePendingWake(const std::vector<ps::PsConsole>& hosts) {
+    if (pending_wake_mac_.empty()) return false;
+    const auto ready = std::find_if(hosts.begin(), hosts.end(),
+        [this](const ps::PsConsole& host) {
+            return host.server_mac == pending_wake_mac_ && host.local.has_value() &&
+                   host.local->state == ps::PsConsoleState::Ready;
+        });
+    if (ready == hosts.end()) return false;
+
+    const ps::PsConsole host = *ready;
+    pending_wake_mac_.clear();
+    wake_generation_->fetch_add(1);
+    diagnosticLog("ui-ps", "wake target ready mac=%s ip=%s",
+                  host.server_mac.c_str(), host.local->ip.c_str());
+    if (action_status_) {
+        action_status_->setText(brls::getStr("lunarnx/ps/wake_ready"));
+    }
+    rebuildConsoleList(hosts);
+    connectToConsole(host);
+    return true;
+}
+
 void PsActivity::pairConsole(const ps::PsConsole& host) {
     int target = host.target >= 1000000 ? 1000100 : 900;
     std::string addr = host.local.has_value() ? host.local->ip : "";
@@ -867,24 +892,50 @@ void PsActivity::pairConsole(const ps::PsConsole& host) {
 
 void PsActivity::wakeupConsole(const ps::PsConsole& host) {
     if (!host.local.has_value() || host.server_mac.empty()) return;
+    const auto normalized_mac = ps::normalizeMac(host.server_mac);
+    if (!normalized_mac) return;
+    const uint64_t generation = wake_generation_->fetch_add(1) + 1;
+    pending_wake_mac_ = *normalized_mac;
     if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/waking", host.nickname));
     auto alive = alive_;
     auto manager = ps_manager_;
-    lunar::platform::startNetworkWorker("ps-wakeup",
-        [this, manager, host, alive]() {
+    auto wake_generation = wake_generation_;
+    const bool started = lunar::platform::startNetworkWorker("ps-wakeup",
+        [this, manager, host, alive, wake_generation, generation]() {
             manager->wakeupHost(host.local->ip, host.server_mac,
                 host.target >= 1000000,
-                [this, alive, host](bool ok, const std::string& error) {
-                    brls::sync([this, alive, host, ok, error]() {
-                        if (!alive->load()) return;
+                [this, alive, host, wake_generation, generation](
+                    bool ok, const std::string& error) {
+                    brls::sync([this, alive, host, wake_generation, generation,
+                                ok, error]() {
+                        if (!alive->load() || wake_generation->load() != generation) return;
                         if (!ok) {
+                            pending_wake_mac_.clear();
+                            wake_generation->fetch_add(1);
                             if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/wake_failed", error));
                             return;
                         }
-                        if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/wake_sent"));
+                        if (action_status_) action_status_->setText(
+                            brls::getStr("lunarnx/ps/wake_waiting"));
                     });
                 });
+            if (wake_generation->load() != generation) return;
+            std::this_thread::sleep_for(std::chrono::seconds(25));
+            brls::sync([this, alive, wake_generation, generation]() {
+                if (!alive->load() || wake_generation->load() != generation) return;
+                pending_wake_mac_.clear();
+                wake_generation->fetch_add(1);
+                diagnosticLog("ui-ps", "wake target timed out");
+                if (action_status_) action_status_->setText(
+                    brls::getStr("lunarnx/ps/wake_timeout"));
+            });
         });
+    if (!started) {
+        pending_wake_mac_.clear();
+        wake_generation_->fetch_add(1);
+        if (action_status_) action_status_->setText(
+            brls::getStr("lunarnx/ps/wake_failed", "Could not start wake worker"));
+    }
 }
 
 void PsActivity::connectToConsole(const ps::PsConsole& host) {

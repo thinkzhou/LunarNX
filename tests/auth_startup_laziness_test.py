@@ -22,10 +22,6 @@ def main() -> None:
     )
     create_body = source[create_start:create_end]
 
-    callback_start = create_body.index("start_btn_->registerClickAction")
-    callback_end = create_body.index("btn_row->addView(start_btn_)", callback_start)
-    start_callback = create_body[callback_start:callback_end]
-
     require(
         "resumeSavedSessionIfPresent();" not in create_body,
         "auth view construction must not restore a saved session",
@@ -34,14 +30,25 @@ def main() -> None:
         "controller()" not in create_body,
         "auth view construction must not create the application controller",
     )
+
+    available_start = source.index("void AuthActivity::onContentAvailable()")
+    available_end = source.index(
+        "std::shared_ptr<app::StreamController> AuthActivity::createConfiguredController()",
+        available_start,
+    )
+    available_body = source[available_start:available_end]
     require(
-        "if (resumeSavedSessionIfPresent())" in start_callback,
-        "Start must try saved-session restoration before device-code auth",
+        "if (resumeSavedSessionIfPresent())" in available_body,
+        "the ready auth screen must try saved-session restoration before device-code auth",
     )
     require(
-        start_callback.index("resumeSavedSessionIfPresent")
-        < start_callback.index("beginAuthRequest"),
-        "saved-session restoration must precede device-code auth",
+        available_body.index("resumeSavedSessionIfPresent")
+        < available_body.index("beginAuthRequest"),
+        "saved-session restoration must precede automatic device-code auth",
+    )
+    require(
+        "void onContentAvailable() override;" in header,
+        "AuthActivity must start sign-in only after its content is available",
     )
     require(
         "bool AuthActivity::resumeSavedSessionIfPresent()" in source,

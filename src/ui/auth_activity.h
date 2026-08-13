@@ -2,6 +2,7 @@
 #ifdef __SWITCH__
 #include <borealis.hpp>
 #include "../app/stream_controller.h"
+#include "../auth/xbox_login_server.h"
 #include <thread>
 #include <atomic>
 #include <string>
@@ -16,6 +17,7 @@ public:
     explicit AuthActivity(std::shared_ptr<app::StreamController> ctrl = nullptr);
     ~AuthActivity();
     brls::View* createContentView() override;
+    void onContentAvailable() override;
     void onResume() override;
     static std::shared_ptr<app::StreamController> createConfiguredController();
 
@@ -37,6 +39,8 @@ private:
     brls::Label* status_label_ = nullptr;
     std::thread auth_request_thread_;
     std::thread poll_thread_;
+    std::shared_ptr<auth::XboxLoginServer> xbox_login_server_ =
+        std::make_shared<auth::XboxLoginServer>();
 
     std::shared_ptr<app::StreamController> controller();
     void resetSignedOutUi();
