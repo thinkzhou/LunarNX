@@ -297,7 +297,8 @@ brls::View* PsActivity::createContentView() {
     });
     sidebar->addView(pair_tab_);
 
-    auto* settings_button = makeSidebarButton(brls::getStr("lunarnx/common/settings"));
+    auto* settings_button = makeSidebarButton(
+        brls::getStr("lunarnx/common/playstation_settings"));
     settings_button->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new PsSettingsActivity(loadPsSettings()),

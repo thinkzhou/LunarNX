@@ -42,6 +42,7 @@ ChiakiControllerState PsInputMapper::map(const input::GamepadState& state) {
     if (state.view)  s.buttons |= CHIAKI_CONTROLLER_BUTTON_SHARE;
     if (state.menu)  s.buttons |= CHIAKI_CONTROLLER_BUTTON_OPTIONS;
     if (state.guide) s.buttons |= CHIAKI_CONTROLLER_BUTTON_PS;
+    if (state.touchpad) s.buttons |= CHIAKI_CONTROLLER_BUTTON_TOUCHPAD;
 
     // Analog sticks use the same range but opposite Y-axis conventions.
     s.left_x = state.left_stick_x;

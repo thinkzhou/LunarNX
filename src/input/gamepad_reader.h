@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../common.h"
+#include "button_mapping.h"
 #include <cstdint>
 
 namespace lunar::input {
@@ -15,6 +16,7 @@ struct GamepadState {
     bool l3 = false, r3 = false;           // stick clicks
     bool view = false, menu = false;       // back/start
     bool guide = false;                    // Xbox button
+    bool touchpad = false;                 // PlayStation touchpad click
 
     // Analog sticks (-32768 to 32767)
     int16_t left_stick_x = 0, left_stick_y = 0;
@@ -25,27 +27,23 @@ struct GamepadState {
     uint16_t right_trigger = 0;
 };
 
-// L + R + Plus is reserved as the Xbox Guide chord while streaming. Suppress
-// the component buttons so the console receives one unambiguous Nexus press.
-inline void applyGuideChord(GamepadState& state) {
-    if (!state.lb || !state.rb || !state.menu) return;
-
-    state.guide = true;
-    state.lb = false;
-    state.rb = false;
-    state.menu = false;
-}
-
 class GamepadReader {
 public:
-    GamepadReader();
+    explicit GamepadReader(
+        ButtonMappingProfile profile = ButtonMappingProfile::Xbox);
     ~GamepadReader();
 
     bool initialize();
+    void reloadButtonMapping();
     GamepadState read();
     bool isConnected() const;
 
 private:
+#ifdef __SWITCH__
+    ButtonMappingProfile mapping_profile_ = ButtonMappingProfile::Xbox;
+    ButtonMapping button_mapping_ =
+        defaultButtonMapping(ButtonMappingProfile::Xbox);
+#endif
     bool initialized_ = false;
 #ifdef __SWITCH__
     void* pad_state_ = nullptr;  // PadState*

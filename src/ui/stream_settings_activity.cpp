@@ -1,6 +1,7 @@
 #ifdef __SWITCH__
 #include "stream_settings_activity.h"
 
+#include "button_mapping_activity.h"
 #include "i18n.h"
 #include "ui_style.h"
 #include "../common.h"
@@ -450,6 +451,17 @@ brls::View* StreamSettingsActivity::createContentView() {
             }
         });
     addFlatRow(controller_card, rumble_strength);
+
+    auto* button_mapping = new brls::DetailCell();
+    button_mapping->setText(brls::getStr("lunarnx/settings/button_mapping"));
+    button_mapping->setDetailText(
+        brls::getStr("lunarnx/settings/button_mapping_detail"));
+    button_mapping->registerClickAction([](brls::View*) -> bool {
+        brls::Application::pushActivity(new ButtonMappingActivity(
+            input::ButtonMappingProfile::Xbox));
+        return true;
+    });
+    addFlatRow(controller_card, button_mapping);
     root->addView(controller_card);
 
     auto* cloud_card = makeFlatSection(

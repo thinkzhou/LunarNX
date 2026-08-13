@@ -32,6 +32,7 @@ def main() -> None:
     psn_login_source = read("src/ui/psn_login_activity.cpp")
     registration_source = read("src/ui/ps_registration_activity.cpp")
     about_source = read("src/ui/about_activity.cpp")
+    mapping_source = read("src/ui/button_mapping_activity.cpp")
     stream_overlay = read("src/ui/stream_overlay.cpp")
     perf_overlay = read("src/ui/perf_overlay.cpp")
     stream_view = read("src/ui/stream_view.cpp")
@@ -68,7 +69,7 @@ def main() -> None:
         ("PlayStation", ps_source), ("global settings", settings_source),
         ("PS settings", ps_settings_source), ("Xbox auth", auth_source),
         ("PSN login", psn_login_source), ("PS registration", registration_source),
-        ("About", about_source),
+        ("About", about_source), ("button mapping", mapping_source),
     ):
         require("makeAppFrame" in source,
                 f"{name} Activity must use the shared AppletFrame shell")
@@ -81,6 +82,16 @@ def main() -> None:
             "settings groups must be flat continuous lists, not cards")
     require("makeUiCard" not in ps_settings_source,
             "PlayStation settings groups must be flat lists, not cards")
+    require("makeUiCard" not in mapping_source and
+            "makeFlatSection" in mapping_source and "addFlatRow" in mapping_source,
+            "button mapping must use the shared flat list hierarchy")
+    require("ButtonMappingProfile::Xbox" in settings_source and
+            "ButtonMappingProfile::PlayStation" in ps_settings_source,
+            "settings must keep Xbox and PlayStation mapping profiles separate")
+    require('"lunarnx/common/global_settings"' in platform_source and
+            '"lunarnx/common/xbox_settings"' in main_source and
+            '"lunarnx/common/playstation_settings"' in ps_source,
+            "navigation must make global Xbox and PlayStation settings scope explicit")
     require("Console Type" in registration_source and
             "PlayStation 5" in registration_source and
             "PlayStation 4" in registration_source,

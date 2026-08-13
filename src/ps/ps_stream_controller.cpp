@@ -150,7 +150,8 @@ bool PsStreamController::startStream() {
     // does not time out waiting for regist/request messages on the CTRL channel).
     stream_backend_ = stream::StreamBackendProvider::createDefault();
     media_ = std::make_unique<stream::MediaPipeline>(*stream_backend_);
-    gamepad_ = std::make_unique<input::GamepadReader>();
+    gamepad_ = std::make_unique<input::GamepadReader>(
+        input::ButtonMappingProfile::PlayStation);
     input_mapper_ = std::make_unique<PsInputMapper>();
     if (gamepad_) gamepad_->initialize();
 

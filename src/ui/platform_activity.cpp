@@ -96,7 +96,8 @@ brls::View* PlatformActivity::createContentView() {
     sidebar->addView(makeSidebarButton(
         brls::getStr("lunarnx/platform/subtitle"), true));
 
-    auto* settings = makeSidebarButton(brls::getStr("lunarnx/common/settings"));
+    auto* settings = makeSidebarButton(
+        brls::getStr("lunarnx/common/global_settings"));
     settings->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new StreamSettingsActivity(nullptr, loadStreamSettings(), {}),

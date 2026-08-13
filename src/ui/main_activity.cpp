@@ -107,7 +107,8 @@ brls::View* MainActivity::createContentView() {
     });
     sidebar->addView(source_cloud_);
 
-    auto* settings_btn = makeSidebarButton(brls::getStr("lunarnx/common/settings"));
+    auto* settings_btn = makeSidebarButton(
+        brls::getStr("lunarnx/common/xbox_settings"));
     settings_btn->registerClickAction([this](brls::View*) -> bool {
         openStreamSettings();
         return true;

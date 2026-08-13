@@ -68,7 +68,8 @@ void StreamController::ensureStreamingComponents() {
         media_ = std::make_unique<stream::MediaPipeline>(*stream_backend_);
     }
     if (!gamepad_) {
-        gamepad_ = std::make_unique<input::GamepadReader>();
+        gamepad_ = std::make_unique<input::GamepadReader>(
+            input::ButtonMappingProfile::Xbox);
     }
     if (!xinput_) {
         xinput_ = std::make_unique<input::XInputEncoder>();

@@ -12,7 +12,14 @@
 
 namespace lunar::input {
 
-GamepadReader::GamepadReader() = default;
+GamepadReader::GamepadReader(ButtonMappingProfile profile) {
+#ifdef __SWITCH__
+    mapping_profile_ = profile;
+    button_mapping_ = defaultButtonMapping(profile);
+#else
+    (void)profile;
+#endif
+}
 GamepadReader::~GamepadReader() {
 #ifdef __SWITCH__
     delete static_cast<PadState*>(pad_state_);
@@ -21,6 +28,7 @@ GamepadReader::~GamepadReader() {
 
 bool GamepadReader::initialize() {
 #ifdef __SWITCH__
+    reloadButtonMapping();
     initialized_ = false;
     delete static_cast<PadState*>(pad_state_);
     pad_state_ = nullptr;
@@ -42,6 +50,12 @@ bool GamepadReader::initialize() {
     return true;
 }
 
+void GamepadReader::reloadButtonMapping() {
+#ifdef __SWITCH__
+    button_mapping_ = loadButtonMapping(mapping_profile_);
+#endif
+}
+
 GamepadState GamepadReader::read() {
     GamepadState state = {};
 
@@ -50,26 +64,44 @@ GamepadState GamepadReader::read() {
     padUpdate(pad);
     u64 btns = padGetButtons(pad);
 
-    state.b = (btns & HidNpadButton_A) != 0;
-    state.a = (btns & HidNpadButton_B) != 0;
-    state.y = (btns & HidNpadButton_X) != 0;
-    state.x = (btns & HidNpadButton_Y) != 0;
+    const bool quick_menu_chord =
+        (btns & HidNpadButton_Minus) && (btns & HidNpadButton_Plus);
+    if (quick_menu_chord) {
+        btns &= ~(HidNpadButton_Minus | HidNpadButton_Plus);
+    }
 
-    state.dpad_up    = (btns & HidNpadButton_Up) != 0;
-    state.dpad_down  = (btns & HidNpadButton_Down) != 0;
-    state.dpad_left  = (btns & HidNpadButton_Left) != 0;
-    state.dpad_right = (btns & HidNpadButton_Right) != 0;
+    uint64_t consumed = 0;
+    for (uint64_t mapping : button_mapping_) {
+        if (mapping != 0 && (mapping & (mapping - 1)) != 0 &&
+            (btns & mapping) == mapping) {
+            consumed |= mapping;
+        }
+    }
+    auto mapped = [this, btns, consumed](RemoteButton button) {
+        const uint64_t mapping = button_mapping_[static_cast<size_t>(button)];
+        if (mapping == 0 || (btns & mapping) != mapping) return false;
+        const bool combo = (mapping & (mapping - 1)) != 0;
+        return combo || (consumed & mapping) == 0;
+    };
 
-    state.lb = (btns & HidNpadButton_L) != 0;
-    state.rb = (btns & HidNpadButton_R) != 0;
-    state.lt = (btns & HidNpadButton_ZL) != 0;
-    state.rt = (btns & HidNpadButton_ZR) != 0;
-
-    state.l3 = (btns & HidNpadButton_StickL) != 0;
-    state.r3 = (btns & HidNpadButton_StickR) != 0;
-
-    state.view  = (btns & HidNpadButton_Minus) != 0;
-    state.menu  = (btns & HidNpadButton_Plus) != 0;
+    state.a = mapped(RemoteButton::A);
+    state.b = mapped(RemoteButton::B);
+    state.x = mapped(RemoteButton::X);
+    state.y = mapped(RemoteButton::Y);
+    state.dpad_up = mapped(RemoteButton::DpadUp);
+    state.dpad_down = mapped(RemoteButton::DpadDown);
+    state.dpad_left = mapped(RemoteButton::DpadLeft);
+    state.dpad_right = mapped(RemoteButton::DpadRight);
+    state.lb = mapped(RemoteButton::Lb);
+    state.rb = mapped(RemoteButton::Rb);
+    state.lt = mapped(RemoteButton::Lt);
+    state.rt = mapped(RemoteButton::Rt);
+    state.l3 = mapped(RemoteButton::L3);
+    state.r3 = mapped(RemoteButton::R3);
+    state.view = mapped(RemoteButton::View);
+    state.menu = mapped(RemoteButton::Menu);
+    state.guide = mapped(RemoteButton::Guide);
+    state.touchpad = mapped(RemoteButton::Touchpad);
 
     HidAnalogStickState left = padGetStickPos(pad, 0);
     HidAnalogStickState right = padGetStickPos(pad, 1);
@@ -128,7 +160,6 @@ GamepadState GamepadReader::read() {
     state.left_trigger  = keys[SDL_SCANCODE_Q] ? 65535 : 0;
     state.right_trigger = keys[SDL_SCANCODE_E] ? 65535 : 0;
 #endif
-    applyGuideChord(state);
     return state;
 }
 
