@@ -76,8 +76,13 @@ void schedulePsConnectCleanup(
 class PsConnectActivity : public brls::Activity {
 public:
     PsConnectActivity(std::shared_ptr<ps::PsStreamController> controller,
+                      std::shared_ptr<ps::PsManager> manager,
+                      bool remote,
                       std::string console_name)
-        : controller_(std::move(controller)), console_name_(std::move(console_name)) {
+        : controller_(std::move(controller))
+        , manager_(std::move(manager))
+        , remote_(remote)
+        , console_name_(std::move(console_name)) {
         diagnosticLog("ui-ps-connect", "constructor name=%s", console_name_.c_str());
     }
 
@@ -145,6 +150,8 @@ public:
         diagnosticLog("ui-ps-connect", "onContentAvailable begin");
         auto context = context_;
         auto controller = controller_;
+        auto manager = manager_;
+        const bool remote = remote_;
         controller_->setLoginPinCallback([this, context](bool incorrect) {
             brls::sync([this, context, incorrect]() {
                 if (!context->alive.load()) return;
@@ -159,7 +166,7 @@ public:
                 if (state == app::StreamState::Streaming) openStream();
             });
         });
-        brls::sync([this, context, controller]() {
+        brls::sync([this, context, controller, manager, remote]() {
             if (!context->alive.load() || started_.exchange(true)) return;
             if (context->cancel_requested.load()) {
                 context->connect_worker_done = true;
@@ -168,9 +175,38 @@ public:
             }
             auto* status = status_;
             bool worker = lunar::platform::startNetworkWorker("ps-connect",
-                [context, controller, status]() {
-                    bool ok = controller->startStream();
-                    std::string error = controller->lastError();
+                [context, controller, manager, remote, status]() {
+                    bool ok = true;
+                    std::string error;
+                    ps::PsnAuthErrorKind auth_error_kind = ps::PsnAuthErrorKind::None;
+                    if (remote) {
+                        bool token_refreshed = false;
+                        ok = manager->psnAuth().ensureValidToken({}, &token_refreshed);
+                        if (!ok) {
+                            error = manager->psnAuth().getAuthError();
+                            auth_error_kind = manager->psnAuth().getAuthErrorKind();
+                            if (auth_error_kind == ps::PsnAuthErrorKind::SessionExpired) {
+                                manager->psnAuth().signOut();
+                                std::remove(lunar::get_psn_token_path());
+                            }
+                        } else if (token_refreshed &&
+                                   !manager->psnAuth().saveToken(
+                                       lunar::get_psn_token_path())) {
+                            ok = false;
+                            error = "PSN session refreshed but could not be saved";
+                        } else if (!controller->setPsnCredentials(
+                                       manager->getPsnAccessToken(),
+                                       manager->getPsnAccountId())) {
+                            ok = false;
+                            error = "PSN credentials could not be applied";
+                        }
+                    }
+                    if (ok && !context->cancel_requested.load()) {
+                        ok = controller->startStream();
+                        if (!ok) error = controller->lastError();
+                    } else if (context->cancel_requested.load()) {
+                        ok = false;
+                    }
                     context->connect_worker_done = true;
                     diagnosticLog("ui-ps-connect",
                                   "connect worker done ok=%d cancelled=%d",
@@ -178,11 +214,18 @@ public:
                                   context->cancel_requested.load() ? 1 : 0);
                     schedulePsConnectCleanup(context, controller);
                     if (!ok) {
-                        brls::sync([context, status, error = std::move(error)]() {
+                        brls::sync([context, manager, remote, status, auth_error_kind,
+                                    error = std::move(error)]() {
                             if (!context->alive.load() ||
                                 context->cancel_requested.load()) return;
                             if (status) status->setText(
                                 brls::getStr("lunarnx/ps/connect_failed", error));
+                            if (remote &&
+                                auth_error_kind == ps::PsnAuthErrorKind::SessionExpired) {
+                                brls::Application::pushActivity(
+                                    new PsnLoginActivity(manager->psnAuth()),
+                                    brls::TransitionAnimation::NONE);
+                            }
                         });
                     }
                 }, 8 * 1024 * 1024);
@@ -232,6 +275,8 @@ private:
     }
 
     std::shared_ptr<ps::PsStreamController> controller_;
+    std::shared_ptr<ps::PsManager> manager_;
+    bool remote_ = false;
     std::string console_name_;
     brls::Label* status_ = nullptr;
     std::shared_ptr<PsConnectContext> context_ =
@@ -592,10 +637,23 @@ void PsActivity::fetchPsnConsoles() {
             if (!ok) {
                 std::string error = manager->getPsnDeviceError();
                 if (error.empty()) error = manager->psnAuth().getAuthError();
-                brls::sync([this, alive, error = std::move(error)]() {
+                auto error_kind = manager->psnAuth().getAuthErrorKind();
+                brls::sync([this, alive, manager, error_kind,
+                            error = std::move(error)]() {
                     if (!alive->load()) return;
-                    if (psn_state_) psn_state_->setText(brls::getStr("lunarnx/ps/psn_unavailable", error));
-                    updateAccountUi();
+                    if (error_kind == ps::PsnAuthErrorKind::SessionExpired) {
+                        manager->psnAuth().signOut();
+                        std::remove(lunar::get_psn_token_path());
+                        if (psn_state_) psn_state_->setText(
+                            brls::getStr("lunarnx/ps/psn_session_expired", error));
+                        brls::Application::pushActivity(
+                            new PsnLoginActivity(manager->psnAuth()),
+                            brls::TransitionAnimation::NONE);
+                    } else {
+                        if (psn_state_) psn_state_->setText(
+                            brls::getStr("lunarnx/ps/psn_unavailable", error));
+                        updateAccountUi();
+                    }
                 });
             }
         });
@@ -839,7 +897,7 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
     else selected.local.reset();
 
     const bool remote_enabled = selected.remote.has_value() &&
-        selected.remote->remoteplay_enabled && ps_manager_->hasPsnToken();
+        selected.remote->remoteplay_enabled && ps_manager_->hasStoredPsnSession();
     if (!selected.credentials.has_value() && !remote_enabled) {
         diagnosticLog("ui-ps", "connect blocked: no usable route credentials=%s remote_enabled=%s",
                       selected.credentials.has_value() ? "true" : "false",
@@ -847,13 +905,15 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
         if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/no_route"));
         return;
     }
-    auto route = ps_manager_->resolveRoute(selected);
+    auto route = ps::PsConsoleResolver::resolve(
+        selected, ps_manager_->hasStoredPsnSession());
     if (route.type == ps::ResolvedRouteType::None) {
         diagnosticLog("ui-ps", "connect blocked by resolver error=%s", route.error.c_str());
         if (action_status_) action_status_->setText(route.error);
         return;
     }
     diagnosticLog("ui-ps", "connect route resolved type=%d", static_cast<int>(route.type));
+    const bool requested_remote = route.type == ps::ResolvedRouteType::Remote;
     if (action_status_) action_status_->setText(ps::PsConsoleResolver::routeDescription(route));
 
     const auto settings = loadPsSettings();
@@ -864,7 +924,7 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
         settings.width, settings.height, 60, settings.bitrate_kbps);
     diagnosticLog("ui-ps", "pushing PsConnectActivity");
     brls::Application::pushActivity(
-        new PsConnectActivity(controller,
+        new PsConnectActivity(controller, ps_manager_, requested_remote,
             selected.nickname.empty() ? brls::getStr("lunarnx/ps/console_default") : selected.nickname),
         brls::TransitionAnimation::NONE);
     diagnosticLog("ui-ps", "PsConnectActivity push complete");
@@ -937,19 +997,33 @@ void PsActivity::signInToPsn() {
         auto alive = alive_;
         bool started = lunar::platform::startNetworkWorker("psn-session-refresh",
             [this, manager, alive]() {
-                bool ok = manager->psnAuth().ensureValidToken();
-                if (ok) manager->psnAuth().saveToken(lunar::get_psn_token_path());
+                bool token_refreshed = false;
+                bool ok = manager->psnAuth().ensureValidToken({}, &token_refreshed);
+                if (ok && token_refreshed) {
+                    ok = manager->psnAuth().saveToken(lunar::get_psn_token_path());
+                }
                 std::string error = manager->psnAuth().getAuthError();
-                brls::sync([this, manager, alive, ok, error = std::move(error)]() {
+                auto error_kind = manager->psnAuth().getAuthErrorKind();
+                brls::sync([this, manager, alive, ok, error_kind,
+                            error = std::move(error)]() {
                     if (!alive->load()) return;
                     if (ok) {
                         updateAccountUi();
                         fetchPsnConsoles();
                     } else {
-                        if (psn_state_) psn_state_->setText(brls::getStr("lunarnx/ps/psn_session_expired", error));
-                        brls::Application::pushActivity(
-                            new PsnLoginActivity(manager->psnAuth()),
-                            brls::TransitionAnimation::NONE);
+                        if (error_kind == ps::PsnAuthErrorKind::SessionExpired) {
+                            manager->psnAuth().signOut();
+                            std::remove(lunar::get_psn_token_path());
+                            if (psn_state_) psn_state_->setText(
+                                brls::getStr("lunarnx/ps/psn_session_expired", error));
+                            brls::Application::pushActivity(
+                                new PsnLoginActivity(manager->psnAuth()),
+                                brls::TransitionAnimation::NONE);
+                        } else {
+                            if (psn_state_) psn_state_->setText(
+                                brls::getStr("lunarnx/ps/psn_unavailable", error));
+                            updateAccountUi();
+                        }
                     }
                 });
             });

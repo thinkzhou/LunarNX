@@ -10,6 +10,9 @@ void configureAppLocale();
 /// Returns auto, en-US, zh-Hans, or zh-Hant. Invalid values fall back to auto.
 std::string getConfiguredLanguage();
 
+/// Returns the concrete locale currently used by the app.
+std::string getResolvedAppLocale();
+
 /// Persists a validated language override while preserving other config keys.
 bool saveConfiguredLanguage(const std::string& language);
 

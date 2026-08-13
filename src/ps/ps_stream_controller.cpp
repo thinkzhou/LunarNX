@@ -45,6 +45,15 @@ PsStreamController::~PsStreamController() {
     media_.reset();
 }
 
+bool PsStreamController::setPsnCredentials(std::string access_token,
+                                            std::string account_id) {
+    std::unique_lock<std::shared_mutex> operation_lock(stream_operation_mutex_);
+    if (state_.load() != app::StreamState::Idle) return false;
+    psn_access_token_ = std::move(access_token);
+    psn_account_id_ = std::move(account_id);
+    return true;
+}
+
 bool PsStreamController::startStream() {
     std::unique_lock<std::shared_mutex> operation_lock(stream_operation_mutex_);
     if (state_.load() != app::StreamState::Idle) return false;

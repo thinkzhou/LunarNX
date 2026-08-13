@@ -12,6 +12,7 @@
 namespace lunar::ps {
 
 enum class PsnAuthState { Idle, WaitingForCode, ExchangingCode, Authenticated, Error };
+enum class PsnAuthErrorKind { None, Cancelled, Transient, SessionExpired, Fatal };
 
 class PsnAuthManager {
 public:
@@ -37,7 +38,7 @@ public:
     bool isAuthenticated() const { return state_.load() == PsnAuthState::Authenticated; }
     bool hasValidToken() const;
     bool hasStoredSession() const;
-    bool ensureValidToken(StateCallback cb = {});
+    bool ensureValidToken(StateCallback cb = {}, bool* refreshed = nullptr);
     bool refreshToken(StateCallback cb = {});
     bool refreshIdentity();  // re-fetch accountId + onlineId with the current token
     bool loadToken(const std::string& path);
@@ -49,6 +50,7 @@ public:
     std::string getOnlineId() const;
     std::string getDuid() const;
     std::string getAuthError() const;
+    PsnAuthErrorKind getAuthErrorKind() const;
     PsnAuthState getState() const { return state_.load(); }
     std::string getLoginUrl() const;
 
@@ -57,7 +59,8 @@ private:
     bool refreshAccessToken();
     bool requestToken(const std::map<std::string, std::string>& params,
                       bool preserve_refresh_token);
-    bool fail(const std::string& message, StateCallback cb = {});
+    bool fail(const std::string& message, StateCallback cb = {},
+              PsnAuthErrorKind kind = PsnAuthErrorKind::Fatal);
 
     mutable std::mutex mutex_;
     std::mutex request_mutex_;
@@ -71,6 +74,7 @@ private:
 
     std::atomic<PsnAuthState> state_{PsnAuthState::Idle};
     std::string error_;
+    PsnAuthErrorKind error_kind_ = PsnAuthErrorKind::None;
     std::string login_url_;
 };
 

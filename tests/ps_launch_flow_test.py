@@ -51,9 +51,19 @@ def main():
             "loading UI must defer cleanup until the connect worker exits")
     connect_worker = ui.split('startNetworkWorker("ps-connect"', 1)[1].split(
         '}, 8 * 1024 * 1024)', 1)[0]
-    require("[context, controller, status]" in connect_worker and
+    require("[context, controller, manager, remote, status]" in connect_worker and
             "[this" not in connect_worker,
             "detached PS connect worker must not retain the loading activity")
+    require("ensureValidToken({}, &token_refreshed)" in connect_worker and
+            "token_refreshed &&" in connect_worker and
+            "manager->psnAuth().saveToken(" in connect_worker and
+            "controller->setPsnCredentials(" in connect_worker and
+            "controller->startStream()" in connect_worker,
+            "remote loading must validate and persist PSN credentials before streaming")
+    require("PsnAuthErrorKind::SessionExpired" in connect_worker and
+            "manager->psnAuth().signOut()" in connect_worker and
+            "new PsnLoginActivity(manager->psnAuth())" in connect_worker,
+            "rejected refresh credentials must be cleared and return to PSN login")
     require("setLaunchCallback({})" in ui and "setLoginPinCallback({})" in ui,
             "PS loading callbacks must be cleared before stop or destruction")
     require("void requestCancel()" in controller and
@@ -70,6 +80,9 @@ def main():
             "settings.width, settings.height, 60, settings.bitrate_kbps" in connect_body and
             "1280, 720, 60, 10000" not in connect_body,
             "PS launch must use the shared saved resolution and bitrate settings")
+    require("hasStoredPsnSession()" in connect_body and
+            "hasPsnToken()" not in connect_body,
+            "an expired but refreshable PSN session must reach the loading-page preflight")
 
     print("PS launch flow tests passed")
 

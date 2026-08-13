@@ -3,11 +3,14 @@
 
 #include <borealis.hpp>
 #include "../ps/psn_auth_manager.h"
+#include "../ps/psn_callback_server.h"
 #include <atomic>
 #include <memory>
 #include <string>
 
 namespace lunar::ui {
+
+class QrCodeView;
 
 class PsnLoginActivity : public brls::Activity {
 public:
@@ -20,14 +23,12 @@ private:
     ps::PsnAuthManager& auth_;
     std::shared_ptr<std::atomic<bool>> alive_ =
         std::make_shared<std::atomic<bool>>(true);
+    ps::PsnCallbackServer callback_server_;
 
     brls::Label* status_ = nullptr;
-    brls::Box* manual_body_ = nullptr;
-    brls::Button* manual_toggle_ = nullptr;
-    bool manual_expanded_ = false;
+    QrCodeView* qr_view_ = nullptr;
 
-    void openBrowser();
-    void importCallbackFile();
+    void startPhoneLogin();
     void exchangeInBackground(std::string input);
 };
 

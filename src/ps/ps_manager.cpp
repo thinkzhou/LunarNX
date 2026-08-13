@@ -41,7 +41,15 @@ std::vector<PsConsole> PsManager::getDiscoveredHosts() const {
 }
 
 bool PsManager::fetchPsnDevices(HostListCallback cb) {
-    if (!psn_auth_.ensureValidToken()) return false;
+    bool token_refreshed = false;
+    if (!psn_auth_.ensureValidToken({}, &token_refreshed)) {
+        psn_device_error_ = psn_auth_.getAuthError();
+        return false;
+    }
+    if (token_refreshed && !psn_auth_.saveToken(get_psn_token_path())) {
+        psn_device_error_ = "PSN session refreshed but could not be saved";
+        return false;
+    }
 
     std::string error;
     bool ok = repository_->fetchPsnDevices(
@@ -49,8 +57,12 @@ bool PsManager::fetchPsnDevices(HostListCallback cb) {
     if (!ok && repository_->getLastPsnStatusCode() == 401) {
         diagnosticLog("ps-manager", "PSN device token rejected; refreshing and retrying");
         if (psn_auth_.refreshToken()) {
-            ok = repository_->fetchPsnDevices(
-                psn_auth_.getAccessToken(), std::move(cb), &error);
+            if (!psn_auth_.saveToken(get_psn_token_path())) {
+                error = "PSN session refreshed but could not be saved";
+            } else {
+                ok = repository_->fetchPsnDevices(
+                    psn_auth_.getAccessToken(), std::move(cb), &error);
+            }
         } else {
             error = psn_auth_.getAuthError();
         }
@@ -61,7 +73,6 @@ bool PsManager::fetchPsnDevices(HostListCallback cb) {
         return false;
     }
 
-    psn_auth_.saveToken(get_psn_token_path());
     psn_device_error_.clear();
     return true;
 }

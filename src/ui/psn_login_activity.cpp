@@ -2,17 +2,20 @@
 #include "psn_login_activity.h"
 #include "qr_code.h"
 #include "qr_code_view.h"
+#include "i18n.h"
 #include "ui_style.h"
 #include "../diagnostics.h"
 #include "../common.h"
 #include "../platform/network_worker.h"
-#include <borealis/views/cells/cell_input.hpp>
-#include <cstdio>
 
 namespace lunar::ui {
 
 PsnLoginActivity::PsnLoginActivity(ps::PsnAuthManager& auth) : auth_(auth) {}
-PsnLoginActivity::~PsnLoginActivity() { alive_->store(false); }
+
+PsnLoginActivity::~PsnLoginActivity() {
+    alive_->store(false);
+    callback_server_.stop();
+}
 
 brls::View* PsnLoginActivity::createContentView() {
     const auto& p = uiPalette();
@@ -26,246 +29,157 @@ brls::View* PsnLoginActivity::createContentView() {
         });
 
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(30, 40, 30, 20);
+    root->setPadding(26, 34, 30, 18);
     root->setAlignItems(brls::AlignItems::CENTER);
 
     auto* title = new brls::Label();
-    title->setText("Sign in to PlayStation Network");
-    title->setFontSize(20);
+    title->setText(brls::getStr("lunarnx/ps/login_title"));
+    title->setFontSize(22);
     title->setTextColor(p.text);
-    title->setMargins(0, 0, 0, 24);
+    title->setMargins(0, 0, 0, 8);
     root->addView(title);
 
-    // ── Primary: Switch browser ────────────────────────────────────────
+    auto* subtitle = new brls::Label();
+    subtitle->setText(brls::getStr("lunarnx/ps/login_subtitle"));
+    subtitle->setFontSize(14);
+    subtitle->setTextColor(p.text_muted);
+    subtitle->setIsWrapping(true);
+    subtitle->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    subtitle->setWidth(650);
+    subtitle->setMargins(0, 0, 0, 18);
+    root->addView(subtitle);
 
-    auto* browser_card = makeUiCard(brls::Axis::COLUMN);
-    browser_card->setWidth(540);
-    browser_card->setPadding(18, 20, 18, 20);
-    browser_card->setMarginBottom(16);
+    auto* content = new brls::Box(brls::Axis::ROW);
+    content->setWidth(1050);
+    content->setJustifyContent(brls::JustifyContent::CENTER);
+    content->setAlignItems(brls::AlignItems::CENTER);
 
-    auto* browser_title = new brls::Label();
-    browser_title->setText("Sign in with Switch Browser");
-    browser_title->setFontSize(17);
-    browser_title->setTextColor(p.text);
-    browser_card->addView(browser_title);
+    auto* qr_card = makeUiCard(brls::Axis::COLUMN);
+    qr_card->setWidth(390);
+    qr_card->setPadding(18, 18, 18, 18);
+    qr_card->setAlignItems(brls::AlignItems::CENTER);
 
-    auto* browser_hint = new brls::Label();
-    browser_hint->setText("The Switch system browser will open Sony's sign-in page. "
-                          "After you sign in, the app captures your login automatically. "
-                          "No phone or manual code entry needed.");
-    browser_hint->setFontSize(13);
-    browser_hint->setTextColor(p.text_muted);
-    browser_hint->setIsWrapping(true);
-    browser_hint->setWidth(500);
-    browser_hint->setMargins(0, 6, 0, 14);
-    browser_card->addView(browser_hint);
+    auto* scan_title = new brls::Label();
+    scan_title->setText(brls::getStr("lunarnx/ps/login_step1"));
+    scan_title->setFontSize(17);
+    scan_title->setTextColor(p.text);
+    scan_title->setMargins(0, 0, 0, 10);
+    qr_card->addView(scan_title);
 
-    auto* browser_btn = new brls::Button();
-    browser_btn->setText("Open Browser");
-    browser_btn->setWidth(280);
-    stylePrimaryButton(browser_btn);
-    browser_btn->registerClickAction([this](brls::View*) -> bool {
-        openBrowser();
-        return true;
-    });
-    browser_card->addView(browser_btn);
-    root->addView(browser_card);
+    qr_view_ = new QrCodeView(340.0f);
+    qr_card->addView(qr_view_);
 
-    // ── Secondary: manual code entry ───────────────────────────────────
+    auto* scan_note = new brls::Label();
+    scan_note->setText(brls::getStr("lunarnx/ps/login_same_network"));
+    scan_note->setFontSize(12);
+    scan_note->setTextColor(p.text_muted);
+    scan_note->setIsWrapping(true);
+    scan_note->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    scan_note->setWidth(340);
+    scan_note->setMargins(0, 10, 0, 0);
+    qr_card->addView(scan_note);
+    content->addView(qr_card);
 
-    auto* manual_section = new brls::Box(brls::Axis::COLUMN);
-    manual_section->setWidth(540);
+    auto* guide = new brls::Box(brls::Axis::COLUMN);
+    guide->setWidth(550);
+    guide->setMarginLeft(28);
 
-    auto toggle_expand = [this]() {
-        manual_expanded_ = !manual_expanded_;
-        if (manual_body_) {
-            manual_body_->setVisibility(manual_expanded_
-                ? brls::Visibility::VISIBLE
-                : brls::Visibility::GONE);
-        }
-        if (manual_toggle_) {
-            manual_toggle_->setText(manual_expanded_ ? "Hide manual entry ▲" : "Manual entry (QR code / paste URL) ▼");
-        }
+    auto add_step = [guide, &p](const std::string& heading,
+                                const std::string& detail) {
+        auto* step = new brls::Box(brls::Axis::COLUMN);
+        step->setWidth(550);
+        step->setPadding(4, 0, 12, 0);
+        step->setMarginBottom(14);
+
+        auto* step_title = new brls::Label();
+        step_title->setText(heading);
+        step_title->setFontSize(17);
+        step_title->setTextColor(p.text);
+        step_title->setWidth(540);
+        step_title->setMarginBottom(8);
+        step->addView(step_title);
+
+        auto* step_detail = new brls::Label();
+        step_detail->setText(detail);
+        step_detail->setFontSize(13);
+        step_detail->setTextColor(p.text_muted);
+        step_detail->setIsWrapping(true);
+        step_detail->setWidth(540);
+        step->addView(step_detail);
+        guide->addView(step);
     };
 
-    manual_toggle_ = new brls::Button();
-    manual_toggle_->setText("Manual entry (QR code / paste URL) ▼");
-    manual_toggle_->setWidth(420);
-    manual_toggle_->setMargins(0, 0, 0, 12);
-    styleSecondaryButton(manual_toggle_);
-    manual_toggle_->registerClickAction([toggle_expand](brls::View*) -> bool {
-        toggle_expand();
-        return true;
-    });
-    manual_section->addView(manual_toggle_);
-
-    manual_body_ = new brls::Box(brls::Axis::COLUMN);
-    manual_body_->setVisibility(brls::Visibility::GONE);
-
-    auto* manual_card = makeUiCard(brls::Axis::COLUMN);
-    manual_card->setWidth(540);
-    manual_card->setPadding(16, 16, 16, 16);
-    manual_card->setMarginBottom(14);
-
-    auto* scan_hint = new brls::Label();
-    scan_hint->setText("1. Scan the QR code and sign in on your phone.\n"
-                       "2. Copy the final redirect URL, even if the page does not load.\n"
-                       "3. Select the input field below and paste the URL or code.");
-    scan_hint->setFontSize(13);
-    scan_hint->setTextColor(p.text_muted);
-    scan_hint->setIsWrapping(true);
-    scan_hint->setWidth(500);
-    scan_hint->setMargins(0, 0, 0, 14);
-    manual_card->addView(scan_hint);
-
-    std::string url = auth_.startAuth();
-    lunar::diagnosticLog("ui-psn-login", "auth URL length=%zu", url.size());
-
-    auto* qr_view = new QrCodeView(200.0f);
-    qr_view->setMargins(0, 0, 0, 14);
-    if (!url.empty()) {
-        lunar::diagnosticLog("ui-psn-login", "QR encode begin");
-        QrCode qr = makeQrCode(url);
-        lunar::diagnosticLog("ui-psn-login", "QR encode done size=%d", qr.size);
-        qr_view->setQrCode(std::move(qr));
-        lunar::diagnosticLog("ui-psn-login", "QR view ready");
-    }
-    manual_card->addView(qr_view);
-
-    auto alive = alive_;
-    auto* callback_input = new brls::InputCell();
-    callback_input->setWidth(500);
-    callback_input->init(
-        "Enter Code / URL",
-        "",
-        [this, alive](std::string text) {
-            lunar::diagnosticLog("ui-psn-login", "manual callback length=%zu", text.size());
-            if (!alive->load() || text.empty()) {
-                if (status_) status_->setText("No callback code was entered.");
-                return;
-            }
-            if (status_) {
-                status_->setTextColor(uiPalette().text_muted);
-                status_->setText("Code received. Verifying...");
-            }
-            exchangeInBackground(std::move(text));
-        },
-        "Select to paste callback",
-        "Paste the full redirect URL or the value after code=",
-        512,
-        0);
-    callback_input->setMargins(0, 0, 0, 10);
-    manual_card->addView(callback_input);
-
-    auto* import_btn = new brls::Button();
-    styleSecondaryButton(import_btn);
-    import_btn->setText("Import from SD Card");
-    import_btn->setWidth(260);
-    import_btn->registerClickAction([this](brls::View*) -> bool {
-        importCallbackFile();
-        return true;
-    });
-    manual_card->addView(import_btn);
-
-    manual_body_->addView(manual_card);
-    manual_section->addView(manual_body_);
-    root->addView(manual_section);
-
-    // ── Status ─────────────────────────────────────────────────────────
+    add_step(brls::getStr("lunarnx/ps/login_step2"),
+             brls::getStr("lunarnx/ps/login_step2_detail"));
+    add_step(brls::getStr("lunarnx/ps/login_step3"),
+             brls::getStr("lunarnx/ps/login_step3_detail"));
+    add_step(brls::getStr("lunarnx/ps/login_step4"),
+             brls::getStr("lunarnx/ps/login_step4_detail"));
 
     status_ = new brls::Label();
-    status_->setFontSize(13);
+    status_->setFontSize(14);
     status_->setTextColor(p.text_muted);
     status_->setIsWrapping(true);
-    status_->setWidth(500);
-    status_->setMargins(0, 14, 0, 0);
-    status_->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    root->addView(status_);
+    status_->setWidth(540);
+    status_->setMargins(0, 4, 0, 0);
+    guide->addView(status_);
+    content->addView(guide);
+    root->addView(content);
 
-    if (url.empty() && status_) status_->setText("Failed: " + auth_.getAuthError());
-
+    startPhoneLogin();
     scroll->setContentView(root);
-    lunar::diagnosticLog("ui-psn-login", "content ready");
+    lunar::diagnosticLog("ui-psn-login", "phone sign-in content ready");
     return scroll;
 }
 
-void PsnLoginActivity::openBrowser() {
-    if (status_) {
-        status_->setTextColor(uiPalette().text_muted);
-        status_->setText("Opening Switch browser...");
-    }
-
-    // webConfigShow blocks until the browser applet exits. During that time
-    // the Switch display is fully occupied by the system browser and the
-    // Borealis UI is hidden. The call must stay on the main thread because
-    // it communicates with the applet host that was initialised there.
-    std::string code;
-    if (!auth_.openWebApplet(code)) {
+void PsnLoginActivity::startPhoneLogin() {
+    const std::string login_url = auth_.startAuth();
+    if (login_url.empty()) {
         if (status_) {
-            status_->setText("Browser login failed: " + auth_.getAuthError());
+            status_->setText("Could not prepare Sony sign-in: " + auth_.getAuthError());
             status_->setTextColor(uiPalette().error);
         }
         return;
     }
 
-    if (status_) {
-        status_->setTextColor(uiPalette().text_muted);
-        status_->setText("Signed in. Verifying...");
-    }
+    auto alive = alive_;
+    const bool started = callback_server_.start(login_url, getResolvedAppLocale(),
+        [this, alive](std::string callback_url) {
+            if (!alive->load()) return;
+            brls::sync([this, alive]() {
+                if (!alive->load() || !status_) return;
+                status_->setTextColor(uiPalette().text_muted);
+                status_->setText("Login address received. Verifying with Sony...");
+            });
+            exchangeInBackground(std::move(callback_url));
+        });
 
-    // Token exchange involves network requests — dispatch to a worker.
-    exchangeInBackground(std::move(code));
-}
-
-void PsnLoginActivity::importCallbackFile() {
-    const char* path = lunar::get_psn_callback_import_path();
-    lunar::diagnosticLog("ui-psn-login", "callback import requested path=%s", path);
-
-    FILE* file = std::fopen(path, "rb");
-    if (!file) {
+    if (!started) {
+        if (qr_view_) qr_view_->clearQrCode();
         if (status_) {
-            status_->setText("Import file not found:\n"
-                             "sdcard/switch/LunarNX/psn_callback.txt");
+            status_->setText("Could not start phone sign-in: " + callback_server_.getError() +
+                             ". Check that the Switch is connected to Wi-Fi.");
             status_->setTextColor(uiPalette().error);
         }
         return;
     }
 
-    std::string input;
-    char buffer[512];
-    while (input.size() < 4096) {
-        const size_t count = std::fread(buffer, 1, sizeof(buffer), file);
-        input.append(buffer, count);
-        if (count < sizeof(buffer)) break;
-    }
-    std::fclose(file);
-
-    while (!input.empty() &&
-           (input.back() == '\n' || input.back() == '\r' || input.back() == ' ' || input.back() == '\t')) {
-        input.pop_back();
-    }
-    size_t first = 0;
-    while (first < input.size() &&
-           (input[first] == '\n' || input[first] == '\r' || input[first] == ' ' || input[first] == '\t')) {
-        ++first;
-    }
-    if (first > 0) input.erase(0, first);
-
-    if (input.empty()) {
+    const std::string helper_url = callback_server_.getHelperUrl();
+    QrCode qr = makeQrCode(helper_url);
+    if (qr.empty()) {
+        callback_server_.stop();
         if (status_) {
-            status_->setText("psn_callback.txt is empty.");
+            status_->setText("Could not create the phone sign-in QR code.");
             status_->setTextColor(uiPalette().error);
         }
         return;
     }
-
-    std::remove(path);
-    lunar::diagnosticLog("ui-psn-login", "callback imported length=%zu file_removed=true", input.size());
+    if (qr_view_) qr_view_->setQrCode(std::move(qr));
     if (status_) {
         status_->setTextColor(uiPalette().text_muted);
-        status_->setText("Callback imported. Verifying...");
+        status_->setText(brls::getStr("lunarnx/ps/login_waiting"));
     }
-    exchangeInBackground(std::move(input));
+    lunar::diagnosticLog("ui-psn-login", "phone helper QR ready url_len=%zu", helper_url.size());
 }
 
 void PsnLoginActivity::exchangeInBackground(std::string input) {
@@ -285,13 +199,14 @@ void PsnLoginActivity::exchangeInBackground(std::string input) {
                 if (authenticated && saved) {
                     brls::Application::popActivity(brls::TransitionAnimation::NONE);
                 } else if (status_ptr) {
-                    status_ptr->setText("Failed: " + error);
+                    status_ptr->setText("Sign-in failed: " + error +
+                        ". Press B and try again to generate a new QR code.");
                     status_ptr->setTextColor(uiPalette().error);
                 }
             });
         });
     if (!started && status_) {
-        status_->setText("Failed to start PSN login worker");
+        status_->setText("Failed to start the PSN login worker.");
         status_->setTextColor(uiPalette().error);
     }
 }

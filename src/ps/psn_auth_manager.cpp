@@ -8,6 +8,7 @@
 #include <switch.h>
 #include <cJSON.h>
 #include <chrono>
+#include <cerrno>
 #include <cctype>
 #include <cstdlib>
 #include <cstdio>
@@ -83,10 +84,12 @@ namespace lunar::ps {
 PsnAuthManager::PsnAuthManager() = default;
 PsnAuthManager::~PsnAuthManager() = default;
 
-bool PsnAuthManager::fail(const std::string& message, StateCallback cb) {
+bool PsnAuthManager::fail(const std::string& message, StateCallback cb,
+                          PsnAuthErrorKind kind) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         error_ = message;
+        error_kind_ = kind;
     }
     state_.store(PsnAuthState::Error);
     diagnosticLog("psn-auth", "%s", message.c_str());
@@ -96,7 +99,12 @@ bool PsnAuthManager::fail(const std::string& message, StateCallback cb) {
 
 std::string PsnAuthManager::startAuth() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!login_url_.empty()) return login_url_;
+    if (!login_url_.empty()) {
+        error_.clear();
+        error_kind_ = PsnAuthErrorKind::None;
+        state_.store(PsnAuthState::WaitingForCode);
+        return login_url_;
+    }
 
     if (duid_.size() != kDuidLength) {
         char duid_buffer[CHIAKI_DUID_STR_SIZE]{};
@@ -109,6 +117,7 @@ std::string PsnAuthManager::startAuth() {
         size_t generated_length = strnlen(duid_buffer, sizeof(duid_buffer));
         if (err != CHIAKI_ERR_SUCCESS || generated_length != kDuidLength) {
             error_ = "Failed to generate a valid PSN device ID";
+            error_kind_ = PsnAuthErrorKind::Fatal;
             state_.store(PsnAuthState::Error);
             diagnosticLog("psn-auth", "DUID generation failed: err=%s length=%zu",
                           chiaki_error_string(err), generated_length);
@@ -134,6 +143,7 @@ std::string PsnAuthManager::startAuth() {
         "&duid=" + urlEncode(duid_);
 
     error_.clear();
+    error_kind_ = PsnAuthErrorKind::None;
     state_.store(PsnAuthState::WaitingForCode);
     diagnosticLog("psn-auth", "Auth URL ready");
     return login_url_;
@@ -144,6 +154,13 @@ bool PsnAuthManager::openWebApplet(std::string& authorization_code) {
     std::string login_url = getLoginUrl();
     if (login_url.empty()) return fail("Call startAuth() first");
 
+    AppletType applet_type = appletGetAppletType();
+    if (applet_type != AppletType_Application &&
+        applet_type != AppletType_SystemApplication) {
+        return fail("PSN login requires application mode. Launch Homebrew Menu "
+                    "with Title Override, then reopen LunarNX");
+    }
+
     WebCommonConfig config{};
     Result rc = webPageCreate(&config, login_url.c_str());
     if (R_FAILED(rc)) {
@@ -151,6 +168,9 @@ bool PsnAuthManager::openWebApplet(std::string& authorization_code) {
                     std::to_string(rc) + ")");
     }
 
+    // Atmosphere supplies the HBL whitelist from /atmosphere/hbl_html. The
+    // fixed-size URL, whitelist, and callback TLVs cannot all fit in libnx's
+    // 0x2000-byte WebApplet argument storage.
     rc = webConfigSetCallbackUrl(&config, kRedirectUri);
     if (R_FAILED(rc)) {
         return fail("Switch browser callback URL is unavailable (" +
@@ -160,15 +180,20 @@ bool PsnAuthManager::openWebApplet(std::string& authorization_code) {
     WebCommonReply reply{};
     rc = webConfigShow(&config, &reply);
     if (R_FAILED(rc)) {
-        return fail("Switch browser failed (webConfigShow " + std::to_string(rc) + ")");
+        return fail("Switch browser failed (webConfigShow " + std::to_string(rc) +
+                    "). Confirm Atmosphere hbl_html is installed");
     }
 
     WebExitReason reason = WebExitReason_UnknownE;
     rc = webReplyGetExitReason(&reply, &reason);
     if (R_FAILED(rc) || reason != WebExitReason_LastUrl) {
-        return fail(reason == WebExitReason_ExitButton || reason == WebExitReason_BackButton
+        const bool cancelled = reason == WebExitReason_ExitButton ||
+            reason == WebExitReason_BackButton;
+        return fail(cancelled
                         ? "Login cancelled"
-                        : "Switch browser closed before Sony returned a login code");
+                        : "Switch browser closed before Sony returned a login code",
+                    {}, cancelled ? PsnAuthErrorKind::Cancelled
+                                  : PsnAuthErrorKind::Fatal);
     }
 
     char last_url[0x1000]{};
@@ -202,9 +227,19 @@ bool PsnAuthManager::requestToken(const std::map<std::string, std::string>& para
 
     auto response = http.post(kTokenUrl, formEncode(params), headers);
     if (response.status_code < 200 || response.status_code >= 300) {
+        PsnAuthErrorKind kind = PsnAuthErrorKind::Fatal;
+        if (response.network_error || response.status_code == 408 ||
+            response.status_code == 429 || response.status_code >= 500) {
+            kind = PsnAuthErrorKind::Transient;
+        } else if (response.status_code == 400 || response.status_code == 401) {
+            cJSON* error_root = cJSON_Parse(response.body.c_str());
+            std::string oauth_error = error_root ? jsonString(error_root, "error") : std::string{};
+            if (error_root) cJSON_Delete(error_root);
+            if (oauth_error == "invalid_grant") kind = PsnAuthErrorKind::SessionExpired;
+        }
         std::string detail = response.network_error ? response.error_message
             : "HTTP " + std::to_string(response.status_code);
-        return fail("PSN token request failed: " + detail);
+        return fail("PSN token request failed: " + detail, {}, kind);
     }
 
     cJSON* root = cJSON_Parse(response.body.c_str());
@@ -227,6 +262,7 @@ bool PsnAuthManager::requestToken(const std::map<std::string, std::string>& para
         expires_in_ = expires_in;
         expires_at_ms_ = nowMilliseconds() + static_cast<uint64_t>(expires_in) * 1000ULL;
         error_.clear();
+        error_kind_ = PsnAuthErrorKind::None;
     }
     return true;
 }
@@ -245,7 +281,8 @@ bool PsnAuthManager::exchangeCodeForToken(const std::string& code, StateCallback
         return false;
     }
     if (!fetchAccountId()) {
-        return fail("Signed in, but failed to retrieve the PSN account ID", cb);
+        if (cb) cb(PsnAuthState::Error, getAuthError());
+        return false;
     }
 
     state_.store(PsnAuthState::Authenticated);
@@ -260,7 +297,10 @@ bool PsnAuthManager::refreshAccessToken() {
         std::lock_guard<std::mutex> lock(mutex_);
         refresh_token = refresh_token_;
     }
-    if (refresh_token.empty()) return fail("PSN session has no refresh token");
+    if (refresh_token.empty()) {
+        return fail("PSN session has no refresh token", {},
+                    PsnAuthErrorKind::SessionExpired);
+    }
 
     state_.store(PsnAuthState::ExchangingCode);
     std::map<std::string, std::string> params{
@@ -272,7 +312,7 @@ bool PsnAuthManager::refreshAccessToken() {
     if (!requestToken(params, true)) return false;
 
     if ((getAccountId().empty() || getOnlineId().empty()) && !fetchAccountId()) {
-        return fail("PSN token refreshed, but account ID lookup failed");
+        return false;
     }
     state_.store(PsnAuthState::Authenticated);
     diagnosticLog("psn-auth", "PSN access token refreshed");
@@ -283,8 +323,9 @@ bool PsnAuthManager::refreshIdentity() {
     return fetchAccountId();
 }
 
-bool PsnAuthManager::ensureValidToken(StateCallback cb) {
+bool PsnAuthManager::ensureValidToken(StateCallback cb, bool* refreshed) {
     std::lock_guard<std::mutex> request_lock(request_mutex_);
+    if (refreshed) *refreshed = false;
     if (hasValidToken()) {
         if (cb) cb(PsnAuthState::Authenticated, {});
         return true;
@@ -293,6 +334,7 @@ bool PsnAuthManager::ensureValidToken(StateCallback cb) {
         if (cb) cb(PsnAuthState::Error, getAuthError());
         return false;
     }
+    if (refreshed) *refreshed = true;
     if (cb) cb(PsnAuthState::Authenticated, {});
     return true;
 }
@@ -309,24 +351,37 @@ bool PsnAuthManager::refreshToken(StateCallback cb) {
 
 bool PsnAuthManager::fetchAccountId() {
     std::string token = getAccessToken();
-    if (token.empty()) return false;
+    if (token.empty()) {
+        return fail("PSN account lookup requires an access token", {},
+                    PsnAuthErrorKind::SessionExpired);
+    }
 
     api::HttpClient http;
     std::map<std::string, std::string> headers{{"Authorization", basicAuthorization()}};
-    auto response = http.get(std::string(kTokenUrl) + "/" + urlEncode(token), headers);
-    if (response.status_code < 200 || response.status_code >= 300) return false;
+    auto response = http.getSensitive(
+        std::string(kTokenUrl) + "/" + urlEncode(token), kTokenUrl, headers);
+    if (response.status_code < 200 || response.status_code >= 300) {
+        PsnAuthErrorKind kind = response.network_error || response.status_code == 408 ||
+            response.status_code == 429 || response.status_code >= 500
+            ? PsnAuthErrorKind::Transient : PsnAuthErrorKind::Fatal;
+        std::string detail = response.network_error ? response.error_message
+            : "HTTP " + std::to_string(response.status_code);
+        return fail("PSN account lookup failed: " + detail, {}, kind);
+    }
 
     cJSON* root = cJSON_Parse(response.body.c_str());
-    if (!root) return false;
+    if (!root) return fail("PSN account lookup returned invalid JSON");
     std::string user_id = jsonString(root, "user_id");
     std::string online_id = jsonString(root, "online_id");
     cJSON_Delete(root);
-    if (user_id.empty()) return false;
+    if (user_id.empty()) return fail("PSN account lookup returned no user ID");
 
     try {
         size_t consumed = 0;
         unsigned long long uid = std::stoull(user_id, &consumed, 10);
-        if (consumed != user_id.size()) return false;
+        if (consumed != user_id.size()) {
+            return fail("PSN account lookup returned an invalid user ID");
+        }
         uint8_t bytes[8]{};
         for (size_t i = 0; i < sizeof(bytes); ++i) {
             bytes[i] = static_cast<uint8_t>((uid >> (i * 8)) & 0xff);
@@ -334,9 +389,11 @@ bool PsnAuthManager::fetchAccountId() {
         std::lock_guard<std::mutex> lock(mutex_);
         account_id_ = base64Encode(bytes, sizeof(bytes));
         online_id_ = online_id;
+        error_.clear();
+        error_kind_ = PsnAuthErrorKind::None;
         return true;
     } catch (...) {
-        return false;
+        return fail("PSN account lookup returned an invalid user ID");
     }
 }
 
@@ -411,15 +468,38 @@ bool PsnAuthManager::saveToken(const std::string& path) const {
     char* json = cJSON_Print(root);
     cJSON_Delete(root);
     if (!json) return false;
-    FILE* file = std::fopen(path.c_str(), "w");
+    std::string temp_path = path + ".tmp";
+    FILE* file = std::fopen(temp_path.c_str(), "w");
     if (!file) {
         std::free(json);
         return false;
     }
     bool ok = std::fputs(json, file) >= 0;
+    ok = std::fflush(file) == 0 && ok;
     ok = std::fclose(file) == 0 && ok;
     std::free(json);
-    return ok;
+    if (!ok) {
+        std::remove(temp_path.c_str());
+        return false;
+    }
+    std::string backup_path = path + ".bak";
+    std::remove(backup_path.c_str());
+    errno = 0;
+    const bool had_existing = std::rename(path.c_str(), backup_path.c_str()) == 0;
+    if (!had_existing && errno != ENOENT) {
+        diagnosticLog("psn-auth", "PSN token backup failed errno=%d", errno);
+        std::remove(temp_path.c_str());
+        return false;
+    }
+    if (std::rename(temp_path.c_str(), path.c_str()) != 0) {
+        const int replace_errno = errno;
+        if (had_existing) std::rename(backup_path.c_str(), path.c_str());
+        std::remove(temp_path.c_str());
+        diagnosticLog("psn-auth", "PSN token replace failed errno=%d", replace_errno);
+        return false;
+    }
+    if (had_existing) std::remove(backup_path.c_str());
+    return true;
 }
 
 void PsnAuthManager::signOut() {
@@ -430,6 +510,7 @@ void PsnAuthManager::signOut() {
     online_id_.clear();
     login_url_.clear();
     error_.clear();
+    error_kind_ = PsnAuthErrorKind::None;
     expires_in_ = 3600;
     expires_at_ms_ = 0;
     state_.store(PsnAuthState::Idle);
@@ -458,6 +539,11 @@ std::string PsnAuthManager::getDuid() const {
 std::string PsnAuthManager::getAuthError() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return error_;
+}
+
+PsnAuthErrorKind PsnAuthManager::getAuthErrorKind() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return error_kind_;
 }
 
 std::string PsnAuthManager::getLoginUrl() const {

@@ -54,6 +54,7 @@ public:
     // PS-specific
     bool startStream();
     void requestCancel();
+    bool setPsnCredentials(std::string access_token, std::string account_id);
     std::string lastError() const { return last_error_; }
     void setLaunchCallback(LaunchCallback cb);
     void setLoginPinCallback(LoginPinCallback cb);
