@@ -272,6 +272,7 @@ brls::View* StreamView::createContentView() {
     settings_button->setText(
         brls::getStr("lunarnx/stream/menu_stream_settings"));
     settings_button->registerClickAction([this](brls::View*) -> bool {
+        child_activity_visible_ = true;
         setQuickMenuVisible(false);
         if (runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation) {
             brls::Application::pushActivity(
@@ -294,6 +295,7 @@ brls::View* StreamView::createContentView() {
     mapping_button->setHighlightCornerRadius(3);
     mapping_button->setText(brls::getStr("lunarnx/stream/menu_button_mapping"));
     mapping_button->registerClickAction([this](brls::View*) -> bool {
+        child_activity_visible_ = true;
         setQuickMenuVisible(false);
         brls::Application::pushActivity(new ButtonMappingActivity(
             runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation
@@ -424,7 +426,18 @@ void StreamView::setQuickMenuVisible(bool visible) {
 }
 
 void StreamView::updateInputSuppression() {
-    runtime_->setInputSuppressed(quick_menu_visible_ || exit_pending_.load());
+    runtime_->setInputSuppressed(
+        quick_menu_visible_ || child_activity_visible_ || exit_pending_.load());
+}
+
+void StreamView::onPause() {
+    if (child_activity_visible_) updateInputSuppression();
+}
+
+void StreamView::onResume() {
+    child_activity_visible_ = false;
+    updateInputSuppression();
+    if (content_root_) brls::Application::giveFocus(content_root_);
 }
 
 void StreamView::updatePerformanceVisibility() {
