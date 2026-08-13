@@ -7,7 +7,7 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-reader = Path("src/input/gamepad_reader.h").read_text()
+mapping = Path("src/input/button_mapping.cpp").read_text()
 reader_impl = Path("src/input/gamepad_reader.cpp").read_text()
 stream_view = Path("src/ui/stream_view.cpp").read_text()
 controller = Path("src/app/stream_controller.h").read_text()
@@ -15,16 +15,16 @@ controller_impl = Path("src/app/stream_controller.cpp").read_text()
 session_header = Path("src/app/xbox_stream_session.h").read_text()
 session = Path("src/app/xbox_stream_session.cpp").read_text()
 
-require("applyGuideChord" in reader and "applyGuideChord(state)" in reader_impl,
-        "GamepadReader must map a physical Switch chord to Xbox Guide")
-require("!state.lb || !state.rb || !state.menu" in reader,
-        "the Guide chord must be L + R + Plus")
-require("state.guide = true" in reader,
-        "the physical chord must set the Xbox Nexus/Guide state")
-require("state.lb = false" in reader and
-        "state.rb = false" in reader and
-        "state.menu = false" in reader,
-        "the Guide chord must not leak bumper/Menu presses to the Xbox")
+require("RemoteButton::Guide" in mapping and
+        "HidNpadButton_L | HidNpadButton_R | HidNpadButton_Plus" in mapping,
+        "the default Guide mapping must remain L + R + Plus")
+require("consumed |= mapping" in reader_impl and
+        "return combo || (consumed & mapping) == 0" in reader_impl,
+        "a mapped combination must consume its single-button components")
+require("btns &= ~(HidNpadButton_Minus | HidNpadButton_Plus)" in reader_impl and
+        reader_impl.index("btns &= ~(HidNpadButton_Minus | HidNpadButton_Plus)") <
+        reader_impl.index("auto mapped"),
+        "the physical quick-menu chord must be reserved before mapping")
 require("menu_xbox_button" in stream_view and
         "runtime_->requestPlatformHomeButton()" in stream_view,
         "the stream menu must expose an Xbox Guide button")

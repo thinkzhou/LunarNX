@@ -14,6 +14,9 @@ def main() -> None:
     settings_header = (ROOT / "src/ui/stream_settings_activity.h").read_text()
     settings_source = (ROOT / "src/ui/stream_settings_activity.cpp").read_text()
     controller_header = (ROOT / "src/app/stream_controller.h").read_text()
+    ps_controller_header = (ROOT / "src/ps/ps_stream_controller.h").read_text()
+    ps_controller_source = (ROOT / "src/ps/ps_stream_controller.cpp").read_text()
+    ps_activity = (ROOT / "src/ui/ps_activity.cpp").read_text()
     auth_source = (ROOT / "src/ui/auth_activity.cpp").read_text()
     config = (ROOT / "config/default_config.json").read_text()
 
@@ -33,6 +36,18 @@ def main() -> None:
     require("setRumbleEnabled" in controller_header and
             "setRumbleStrengthPercent" in controller_header,
             "stream controller must own runtime rumble preferences")
+    require("setRumbleEnabled" in ps_controller_header and
+            "setRumbleStrengthPercent" in ps_controller_header and
+            "setRumbleForwarder" in ps_controller_source and
+            "input_suppressed_.load()" in ps_controller_source and
+            "state_.load() != app::StreamState::Streaming" in ps_controller_source and
+            "rumble_->update()" in ps_controller_source and
+            "rumble_->stop()" in ps_controller_source,
+            "PS streams must forward Chiaki rumble through Switch HD rumble")
+    require("loadStreamSettings()" in ps_activity and
+            "controller->setRumbleEnabled" in ps_activity and
+            "controller->setRumbleStrengthPercent" in ps_activity,
+            "PS streams must apply the persisted global rumble settings")
     require('cJSON_GetObjectItem(root, "vibration")' in auth_source and
             'cJSON_GetObjectItem(root, "rumble_strength_percent")' in auth_source,
             "startup must restore persisted rumble preferences")

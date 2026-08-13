@@ -19,7 +19,8 @@ static inline int16_t invertYAxis(int16_t val) {
         : static_cast<int16_t>(-val);
 }
 
-ChiakiControllerState PsInputMapper::map(const input::GamepadState& state) {
+ChiakiControllerState PsInputMapper::map(const input::GamepadState& state,
+                                         const PsTouchpadState& touchpad) {
     ChiakiControllerState s{};
     chiaki_controller_state_set_idle(&s);
 
@@ -43,6 +44,25 @@ ChiakiControllerState PsInputMapper::map(const input::GamepadState& state) {
     if (state.menu)  s.buttons |= CHIAKI_CONTROLLER_BUTTON_OPTIONS;
     if (state.guide) s.buttons |= CHIAKI_CONTROLLER_BUTTON_PS;
 
+    for (size_t i = 0; i < touchpad.touches.size(); ++i) {
+        const auto& touch = touchpad.touches[i];
+        if (touch.active) {
+            if (touch_ids_[i] < 0) {
+                touch_ids_[i] = static_cast<int8_t>(next_touch_id_);
+                next_touch_id_ = static_cast<uint8_t>((next_touch_id_ + 1) & 0x7f);
+            }
+            s.touches[i].id = touch_ids_[i];
+            s.touches[i].x = touch.x;
+            s.touches[i].y = touch.y;
+        } else {
+            touch_ids_[i] = -1;
+        }
+    }
+    s.touch_id_next = next_touch_id_;
+    if (touchpad.pressed || state.touchpad) {
+        s.buttons |= CHIAKI_CONTROLLER_BUTTON_TOUCHPAD;
+    }
+
     // Analog sticks use the same range but opposite Y-axis conventions.
     s.left_x = state.left_stick_x;
     s.left_y = invertYAxis(state.left_stick_y);
@@ -63,6 +83,8 @@ ChiakiControllerState PsInputMapper::map(const input::GamepadState& state) {
 
 void PsInputMapper::reset() {
     prev_ = ChiakiControllerState{};
+    touch_ids_.fill(-1);
+    next_touch_id_ = 0;
 }
 
 } // namespace lunar::ps

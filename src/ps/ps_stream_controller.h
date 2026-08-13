@@ -10,7 +10,9 @@
 #include "../stream/stream_backend_provider.h"
 #include "../stream/perf_stats.h"
 #include "../input/gamepad_reader.h"
+#include "../input/rumble_controller.h"
 #include "ps_input_mapper.h"
+#include "ps_touchpad_reader.h"
 #include "ps_mock_replay_session.h"
 #include "ps_stream_session.h"
 #include <chiaki/log.h>
@@ -46,7 +48,7 @@ public:
     app::StreamPlatform getStreamPlatform() const override {
         return app::StreamPlatform::PlayStation;
     }
-    void setInputSuppressed(bool suppressed) override { input_suppressed_ = suppressed; }
+    void setInputSuppressed(bool suppressed) override;
     void requestPlatformHomeButton() override { ps_button_requested_ = true; }
     void update() override;
     void presentVideoFrame() override;
@@ -54,6 +56,8 @@ public:
     // PS-specific
     bool startStream();
     void requestCancel();
+    void setRumbleEnabled(bool enabled);
+    void setRumbleStrengthPercent(int percent);
     bool setPsnCredentials(std::string access_token, std::string account_id);
     std::string lastError() const { return last_error_; }
     void setLaunchCallback(LaunchCallback cb);
@@ -82,7 +86,9 @@ private:
     std::unique_ptr<PsStreamSession> session_;
     std::unique_ptr<PsMockReplaySession> mock_session_;
     std::unique_ptr<input::GamepadReader> gamepad_;
+    std::unique_ptr<input::RumbleController> rumble_;
     std::unique_ptr<PsInputMapper> input_mapper_;
+    std::unique_ptr<PsTouchpadReader> touchpad_reader_;
     ChiakiLog remote_log_{};
     std::unique_ptr<PsRemoteConnector> remote_connector_;
     PsRemoteResult remote_result_;
@@ -102,6 +108,8 @@ private:
     // controller packets.
     mutable std::shared_mutex stream_operation_mutex_;
     std::atomic<bool> input_suppressed_{false};
+    std::atomic<bool> rumble_enabled_{true};
+    std::atomic<int> rumble_strength_percent_{50};
     std::atomic<bool> ps_button_requested_{false};
     int ps_button_pulse_frames_remaining_ = 0;
     bool ps_button_release_pending_ = false;

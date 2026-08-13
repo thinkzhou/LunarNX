@@ -1,5 +1,6 @@
 #ifdef __SWITCH__
 #include "ps_settings_activity.h"
+#include "button_mapping_activity.h"
 #include "ui_style.h"
 #include "../common.h"
 #include <cJSON.h>
@@ -83,6 +84,19 @@ brls::View* PsSettingsActivity::createContentView() {
     bitrate->init(brls::getStr("lunarnx/ps/settings_bitrate"), {"10 Mbps", "20 Mbps", "30 Mbps"}, settings_.bitrate_kbps >= 30000 ? 2 : settings_.bitrate_kbps >= 20000 ? 1 : 0,
         [this](int selected) { settings_.bitrate_kbps = selected >= 2 ? 30000 : selected == 1 ? 20000 : 10000; });
     card->addView(bitrate); root->addView(card);
+    root->addView(makeSectionHeader(
+        brls::getStr("lunarnx/ps/settings_controller_section"),
+        brls::getStr("lunarnx/ps/settings_controller_detail")));
+    auto* controller_card = makeUiCard(); controller_card->setPadding(4, 8, 4, 8);
+    auto* button_mapping = new brls::DetailCell();
+    button_mapping->setText(brls::getStr("lunarnx/settings/button_mapping"));
+    button_mapping->setDetailText(brls::getStr("lunarnx/settings/button_mapping_detail"));
+    button_mapping->registerClickAction([](brls::View*) -> bool {
+        brls::Application::pushActivity(new ButtonMappingActivity(
+            input::ButtonMappingProfile::PlayStation));
+        return true;
+    });
+    controller_card->addView(button_mapping); root->addView(controller_card);
     auto* done = new brls::Button(); done->setText(brls::getStr("lunarnx/common/done")); stylePrimaryButton(done); done->setMarginTop(28); done->registerClickAction([this](brls::View*) -> bool { closeSettings(); return true; }); root->addView(done);
     scroll->setContentView(root); return scroll;
 }

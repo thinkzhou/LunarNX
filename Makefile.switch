@@ -147,16 +147,16 @@ CXX_SRCS = src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_proces
     src/app/web_rtc_transport.cpp \
     src/app/xbox_channel_manager.cpp \
     src/app/xbox_session_client.cpp src/app/xbox_stream_session.cpp \
-    src/ui/auth_activity.cpp src/ui/main_activity.cpp src/ui/stream_view.cpp src/ui/stream_loading_activity.cpp src/ui/stream_settings_activity.cpp src/ui/i18n.cpp src/ui/ui_style.cpp src/ui/qr_code.cpp src/ui/qr_code_view.cpp src/ui/poster_loader.cpp src/ui/recycling_list.cpp \
+    src/ui/auth_activity.cpp src/ui/main_activity.cpp src/ui/stream_view.cpp src/ui/stream_loading_activity.cpp src/ui/stream_settings_activity.cpp src/ui/button_mapping_activity.cpp src/ui/i18n.cpp src/ui/ui_style.cpp src/ui/qr_code.cpp src/ui/qr_code_view.cpp src/ui/poster_loader.cpp src/ui/recycling_list.cpp \
     src/ui/perf_overlay.cpp src/ui/stream_overlay.cpp \
     src/ui/platform_activity.cpp src/ui/ps_activity.cpp src/ui/ps_settings_activity.cpp src/ui/ps_registration_activity.cpp src/ui/psn_login_activity.cpp src/ui/about_activity.cpp \
-    src/input/gamepad_reader.cpp src/input/xinput_encoder.cpp src/input/rumble_controller.cpp \
+    src/input/button_mapping.cpp src/input/gamepad_reader.cpp src/input/xinput_encoder.cpp src/input/rumble_controller.cpp \
     src/auth/token_store.cpp src/auth/xbox_signing.cpp src/auth/auth_manager.cpp src/auth/xbox_auth_errors.cpp \
     src/api/http_client.cpp src/api/xbox_api_client.cpp \
     src/platform/network_worker.cpp src/platform/chiaki_curl_compat.cpp \
     src/ps/chiaki_log_adapter.cpp src/ps/ps_credentials.cpp \
     src/ps/ps_discovery.cpp src/ps/ps_registration.cpp src/ps/ps_manager.cpp \
-    src/ps/ps_input_mapper.cpp src/ps/ps_media_bridge.cpp \
+    src/ps/ps_input_mapper.cpp src/ps/ps_touchpad_reader.cpp src/ps/ps_media_bridge.cpp \
     src/ps/ps_mock_replay_session.cpp \
     src/ps/ps_stream_session.cpp src/ps/ps_stream_controller.cpp \
     src/ps/psn_auth_manager.cpp src/ps/psn_auth_utils.cpp src/ps/psn_callback_server.cpp src/ps/ps_console_repository.cpp \
