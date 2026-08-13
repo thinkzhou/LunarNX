@@ -19,7 +19,7 @@ def main():
             "distance <= -kQuickMenuSwipeDistance" in view,
             "stream menu must open from a deliberate right-edge left swipe")
     require("(brls::Application::ORIGINAL_WINDOW_WIDTH - 520) / 2" in view and
-            "(brls::Application::ORIGINAL_WINDOW_HEIGHT - 430) / 2" in view,
+            "(brls::Application::ORIGINAL_WINDOW_HEIGHT - 620) / 2" in view,
             "stream menu must use the approved centered dialog position")
     require("menu_handle_" not in view and "menu_handle_" not in header,
             "stream view must not permanently cover video with a menu handle")
@@ -37,6 +37,16 @@ def main():
     require("getStreamPlatform() == app::StreamPlatform::PlayStation" in view and
             "menu_ps_button" in view and "menu_xbox_button" in view,
             "platform home button must use PlayStation or Xbox labeling")
+    require("menu_stream_settings" in view and
+            "new PsSettingsActivity" in view and
+            "new StreamSettingsActivity" in view,
+            "stream menu must open settings for the active platform")
+    require("menu_button_mapping" in view and
+            "ButtonMappingProfile::PlayStation" in view and
+            "ButtonMappingProfile::Xbox" in view,
+            "stream menu must open the active platform button mapping")
+    require("menu_resume" in view and "setQuickMenuVisible(false)" in view,
+            "stream menu must expose an explicit Resume action")
     require("kQuickDisconnectConfirmWindow" in view and
             "menu_disconnect_confirm" in view and
             "std::atomic<bool> disconnect_armed_" in header,
@@ -47,7 +57,8 @@ def main():
             "detailed performance visibility must remain internally consistent")
     for text in (zh, en):
         for key in ("menu_title", "menu_hint", "menu_open", "menu_xbox_button",
-                    "menu_ps_button",
+                    "menu_ps_button", "menu_stream_settings",
+                    "menu_button_mapping", "menu_resume",
                     "menu_hide_performance",
                     "menu_show_performance", "menu_disconnect",
                     "menu_disconnect_confirm"):

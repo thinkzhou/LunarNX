@@ -100,7 +100,8 @@ brls::View* PlatformActivity::createContentView() {
         brls::getStr("lunarnx/common/global_settings"));
     settings->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
-            new StreamSettingsActivity(nullptr, loadStreamSettings(), {}),
+            new StreamSettingsActivity(nullptr, loadStreamSettings(), {},
+                StreamSettingsScope::Global),
             brls::TransitionAnimation::NONE);
         return true;
     });

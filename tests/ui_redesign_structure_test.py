@@ -92,6 +92,10 @@ def main() -> None:
             '"lunarnx/common/xbox_settings"' in main_source and
             '"lunarnx/common/playstation_settings"' in ps_source,
             "navigation must make global Xbox and PlayStation settings scope explicit")
+    require("StreamSettingsScope::Global" in platform_source and
+            "scope_ == StreamSettingsScope::Global" in settings_source and
+            '"lunarnx/common/xbox_settings"' in settings_source,
+            "global settings must be semantically separate from Xbox stream settings")
     require("Console Type" in registration_source and
             "PlayStation 5" in registration_source and
             "PlayStation 4" in registration_source,

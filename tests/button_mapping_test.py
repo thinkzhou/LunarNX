@@ -50,6 +50,10 @@ require("waiting_for_release_ = true" in activity and
         "peak_buttons_ |= buttons" in activity and
         "kCaptureReleaseFrames" in activity,
         "capture must wait for release and retain the peak button combination")
+require("cancelCapture();" in activity and
+        "capturing_ = false" in activity and
+        "mapping_content_->setVisibility(brls::Visibility::VISIBLE)" in activity,
+        "B must cancel capture and return to the mapping list")
 require("hasConflict" in activity and '"lunarnx/button_mapping/conflict"' in activity,
         "duplicate mappings must be visibly marked")
 require("HidNpadButton_Minus | HidNpadButton_Plus" in activity and

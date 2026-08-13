@@ -1,7 +1,10 @@
 #ifdef __SWITCH__
 #include "stream_view.h"
+#include "button_mapping_activity.h"
 #include "stream_overlay.h"
 #include "perf_overlay.h"
+#include "ps_settings_activity.h"
+#include "stream_settings_activity.h"
 #include "ui_style.h"
 #include "../diagnostics.h"
 #include "../platform/network_worker.h"
@@ -217,7 +220,7 @@ brls::View* StreamView::createContentView() {
     // The menu remains detached and hidden until the button chord is pressed.
     quick_menu_ = new brls::Box(brls::Axis::COLUMN);
     quick_menu_->setWidth(520);
-    quick_menu_->setHeight(430);
+    quick_menu_->setHeight(620);
     quick_menu_->setPadding(28, 32, 24, 32);
     quick_menu_->setBackgroundColor(nvgRGBA(48, 48, 48, 248));
     quick_menu_->setBorderThickness(1);
@@ -227,7 +230,7 @@ brls::View* StreamView::createContentView() {
     quick_menu_->detach();
     quick_menu_->setDetachedPosition(
         (brls::Application::ORIGINAL_WINDOW_WIDTH - 520) / 2,
-        (brls::Application::ORIGINAL_WINDOW_HEIGHT - 430) / 2);
+        (brls::Application::ORIGINAL_WINDOW_HEIGHT - 620) / 2);
     quick_menu_->registerAction(brls::getStr("lunarnx/stream/menu_close"),
         brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
@@ -261,6 +264,46 @@ brls::View* StreamView::createContentView() {
     });
     quick_menu_->addView(performance_button_);
 
+    auto* settings_button = new brls::Button();
+    settings_button->setHeight(64);
+    settings_button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
+    settings_button->setCornerRadius(0);
+    settings_button->setHighlightCornerRadius(3);
+    settings_button->setText(
+        brls::getStr("lunarnx/stream/menu_stream_settings"));
+    settings_button->registerClickAction([this](brls::View*) -> bool {
+        setQuickMenuVisible(false);
+        if (runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation) {
+            brls::Application::pushActivity(
+                new PsSettingsActivity(loadPsSettings()),
+                brls::TransitionAnimation::NONE);
+        } else {
+            brls::Application::pushActivity(
+                new StreamSettingsActivity(nullptr, loadStreamSettings(), {},
+                    StreamSettingsScope::Xbox),
+                brls::TransitionAnimation::NONE);
+        }
+        return true;
+    });
+    quick_menu_->addView(settings_button);
+
+    auto* mapping_button = new brls::Button();
+    mapping_button->setHeight(64);
+    mapping_button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
+    mapping_button->setCornerRadius(0);
+    mapping_button->setHighlightCornerRadius(3);
+    mapping_button->setText(brls::getStr("lunarnx/stream/menu_button_mapping"));
+    mapping_button->registerClickAction([this](brls::View*) -> bool {
+        setQuickMenuVisible(false);
+        brls::Application::pushActivity(new ButtonMappingActivity(
+            runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation
+                ? input::ButtonMappingProfile::PlayStation
+                : input::ButtonMappingProfile::Xbox),
+            brls::TransitionAnimation::NONE);
+        return true;
+    });
+    quick_menu_->addView(mapping_button);
+
     auto* platform_button = new brls::Button();
     platform_button->setHeight(64);
     platform_button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
@@ -276,6 +319,18 @@ brls::View* StreamView::createContentView() {
         return true;
     });
     quick_menu_->addView(platform_button);
+
+    resume_button_ = new brls::Button();
+    resume_button_->setHeight(64);
+    resume_button_->setStyle(&brls::BUTTONSTYLE_DEFAULT);
+    resume_button_->setCornerRadius(0);
+    resume_button_->setHighlightCornerRadius(3);
+    resume_button_->setText(brls::getStr("lunarnx/stream/menu_resume"));
+    resume_button_->registerClickAction([this](brls::View*) -> bool {
+        setQuickMenuVisible(false);
+        return true;
+    });
+    quick_menu_->addView(resume_button_);
 
     auto* spacer = new brls::Box(brls::Axis::COLUMN);
     spacer->setGrow(1.0f);

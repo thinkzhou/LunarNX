@@ -24,6 +24,7 @@ private:
     brls::View* content_root_ = nullptr;
     brls::Box* quick_menu_ = nullptr;
     brls::Button* performance_button_ = nullptr;
+    brls::Button* resume_button_ = nullptr;
     brls::Button* disconnect_button_ = nullptr;
     brls::Box* confirm_box_ = nullptr;
     std::thread update_thread_;
