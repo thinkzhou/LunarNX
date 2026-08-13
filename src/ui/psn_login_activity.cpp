@@ -38,10 +38,14 @@ brls::View* PsnLoginActivity::createContentView() {
 
     // ── Primary: Switch browser ────────────────────────────────────────
 
-    auto* browser_card = makeUiCard(brls::Axis::COLUMN);
+    auto* browser_card = new brls::Box(brls::Axis::COLUMN);
     browser_card->setWidth(540);
     browser_card->setPadding(18, 20, 18, 20);
     browser_card->setMarginBottom(16);
+    browser_card->setBackgroundColor(p.surface_alt);
+    browser_card->setBorderThickness(1);
+    browser_card->setBorderColor(p.border);
+    browser_card->setCornerRadius(0);
 
     auto* browser_title = new brls::Label();
     browser_title->setText("Sign in with Switch Browser");
@@ -102,10 +106,14 @@ brls::View* PsnLoginActivity::createContentView() {
     manual_body_ = new brls::Box(brls::Axis::COLUMN);
     manual_body_->setVisibility(brls::Visibility::GONE);
 
-    auto* manual_card = makeUiCard(brls::Axis::COLUMN);
+    auto* manual_card = new brls::Box(brls::Axis::COLUMN);
     manual_card->setWidth(540);
     manual_card->setPadding(16, 16, 16, 16);
     manual_card->setMarginBottom(14);
+    manual_card->setBackgroundColor(p.surface_alt);
+    manual_card->setBorderThickness(1);
+    manual_card->setBorderColor(p.border);
+    manual_card->setCornerRadius(0);
 
     auto* scan_hint = new brls::Label();
     scan_hint->setText("1. Scan the QR code and sign in on your phone.\n"
@@ -186,7 +194,7 @@ brls::View* PsnLoginActivity::createContentView() {
 
     scroll->setContentView(root);
     lunar::diagnosticLog("ui-psn-login", "content ready");
-    return scroll;
+    return makeAppFrame("PlayStation Network", scroll);
 }
 
 void PsnLoginActivity::openBrowser() {

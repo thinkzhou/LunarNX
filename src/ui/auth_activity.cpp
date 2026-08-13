@@ -123,11 +123,13 @@ brls::View* AuthActivity::createContentView() {
             return true;
         });
 
-    auto* story = makeUiCard(brls::Axis::COLUMN);
+    auto* story = new brls::Box(brls::Axis::COLUMN);
     story->setWidth(480);
     story->setHeight(624);
     story->setPadding(38, 38, 38, 38);
-    story->setBackgroundColor(p.surface_alt);
+    story->setBackgroundColor(p.surface);
+    story->setBorderThickness(0);
+    story->setCornerRadius(0);
 
     auto* brand = new brls::Label();
     brand->setText("LUNARNX");
@@ -185,11 +187,15 @@ brls::View* AuthActivity::createContentView() {
     story->addView(privacy);
     root->addView(story);
 
-    auto* sign_in = makeUiCard(brls::Axis::COLUMN);
+    auto* sign_in = new brls::Box(brls::Axis::COLUMN);
     sign_in->setWidth(660);
     sign_in->setHeight(624);
     sign_in->setMarginLeft(28);
     sign_in->setPadding(30, 36, 26, 36);
+    sign_in->setBackgroundColor(p.background);
+    sign_in->setBorderThickness(1);
+    sign_in->setBorderColor(p.border);
+    sign_in->setCornerRadius(0);
 
     auto* eyebrow = new brls::Label();
     eyebrow->setText(brls::getStr("lunarnx/auth/sign_in"));
@@ -254,10 +260,13 @@ brls::View* AuthActivity::createContentView() {
     auth_body->addView(device);
     sign_in->addView(auth_body);
 
-    auto* status_card = makeUiCard(brls::Axis::ROW);
+    auto* status_card = new brls::Box(brls::Axis::ROW);
     status_card->setHeight(58);
     status_card->setPadding(10, 16, 10, 16);
     status_card->setBackgroundColor(p.card_muted);
+    status_card->setBorderThickness(1);
+    status_card->setBorderColor(p.border);
+    status_card->setCornerRadius(0);
     auto* status_mark = new brls::Label();
     status_mark->setWidth(72);
     status_mark->setText(brls::getStr("lunarnx/common/status"));
@@ -316,7 +325,7 @@ brls::View* AuthActivity::createContentView() {
     sign_in->addView(footer);
     root->addView(sign_in);
 
-    return root;
+    return makeAppFrame("Xbox", root);
 }
 
 std::shared_ptr<app::StreamController> AuthActivity::createConfiguredController() {

@@ -13,11 +13,12 @@ def require(condition, message):
 
 
 require('wordmark->setText("LUNARNX")' in ABOUT and
-        'version_chip = makeUiCard(brls::Axis::ROW)' in ABOUT,
+        'version_chip = new brls::Box(brls::Axis::ROW)' in ABOUT and
+        'version_chip->setCornerRadius(4)' in ABOUT,
         "About page must use the shared LunarNX brand header")
-require('intro = makeUiCard(brls::Axis::ROW)' in ABOUT and
-        'makeSectionHeader(' in ABOUT,
-        "About content must use the shared card and section hierarchy")
+require('intro = new brls::Box(brls::Axis::ROW)' in ABOUT and
+        'makeFlatSection(' in ABOUT and 'addFlatRow(' in ABOUT,
+        "About content must use the shared flat section hierarchy")
 require('qq_number->setText("736743823")' in ABOUT and
         'lunarnx/about/qq_group' in ABOUT,
         "About page must show the LunarNX QQ group")

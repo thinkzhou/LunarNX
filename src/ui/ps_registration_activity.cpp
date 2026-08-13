@@ -35,7 +35,7 @@ brls::View* PsRegistrationActivity::createContentView() {
         });
 
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(40, 80, 40, 20);
+    root->setPadding(28, 80, 36, 80);
     root->setAlignItems(brls::AlignItems::CENTER);
 
     // Title
@@ -46,10 +46,33 @@ brls::View* PsRegistrationActivity::createContentView() {
     title->setMargins(0, 0, 0, 8);
     root->addView(title);
 
+    auto* console_type = new brls::Box(brls::Axis::ROW);
+    console_type->setWidth(520);
+    console_type->setHeight(64);
+    console_type->setAlignItems(brls::AlignItems::CENTER);
+    console_type->setBorderThickness(1);
+    console_type->setBorderColor(p.border);
+    auto* console_type_label = new brls::Label();
+    console_type_label->setText("Console Type");
+    console_type_label->setFontSize(15);
+    console_type_label->setTextColor(p.text);
+    console_type_label->setGrow(1.0f);
+    console_type_label->setMarginLeft(18);
+    console_type->addView(console_type_label);
+    auto* console_type_value = new brls::Label();
+    console_type_value->setText(target_ >= 1000000 ? "PlayStation 5" : "PlayStation 4");
+    console_type_value->setFontSize(14);
+    console_type_value->setTextColor(p.accent);
+    console_type_value->setMarginRight(18);
+    console_type->addView(console_type_value);
+    root->addView(console_type);
+
     if (host_addr_.empty()) {
         auto* host_input = new brls::InputCell();
         host_input->setWidth(520);
-        host_input->setMargins(0, 0, 0, 24);
+        host_input->setMargins(0, 0, 0, 18);
+        host_input->setHeight(64);
+        host_input->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
         auto alive = alive_;
         host_input->init(
             brls::getStr("lunarnx/ps/reg_ip_title"),
@@ -67,7 +90,14 @@ brls::View* PsRegistrationActivity::createContentView() {
         host_label->setText(host_name_ + " (" + host_addr_ + ")");
         host_label->setFontSize(14);
         host_label->setTextColor(p.text_muted);
-        host_label->setMargins(0, 0, 0, 30);
+        host_label->setWidth(520);
+        host_label->setHeight(64);
+        host_label->setMargins(0, 0, 0, 18);
+        host_label->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
+        host_label->setBorderThickness(1);
+        host_label->setBorderColor(p.border);
+        host_label->setMarginLeft(18);
+        host_label->setVerticalAlign(brls::VerticalAlign::CENTER);
         root->addView(host_label);
     }
 
@@ -76,7 +106,14 @@ brls::View* PsRegistrationActivity::createContentView() {
     pin_display_->setText(brls::getStr("lunarnx/ps/reg_enter_pin"));
     pin_display_->setFontSize(28);
     pin_display_->setTextColor(p.text);
-    pin_display_->setMargins(0, 0, 0, 30);
+    pin_display_->setWidth(520);
+    pin_display_->setHeight(72);
+    pin_display_->setMargins(0, 0, 0, 20);
+    pin_display_->setBackgroundColor(p.surface_alt);
+    pin_display_->setBorderThickness(1);
+    pin_display_->setBorderColor(p.border);
+    pin_display_->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    pin_display_->setVerticalAlign(brls::VerticalAlign::CENTER);
     root->addView(pin_display_);
 
     // Number pad
@@ -145,7 +182,7 @@ brls::View* PsRegistrationActivity::createContentView() {
     root->addView(status_);
 
     scroll->setContentView(root);
-    return scroll;
+    return makeAppFrame(brls::getStr("lunarnx/ps/reg_title"), scroll);
 }
 
 void PsRegistrationActivity::onDigit(char digit) {

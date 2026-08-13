@@ -532,7 +532,7 @@ void MainActivity::refreshConsoles() {
         item->setMarginBottom(12);
         item->setAlignItems(brls::AlignItems::CENTER);
         item->setFocusable(can_connect);
-        item->setHighlightCornerRadius(14);
+        item->setHighlightCornerRadius(4);
         item->addView(new ConsoleGlyphView(c.console_type, can_connect));
 
         auto* details = new brls::Box(brls::Axis::COLUMN);
@@ -883,12 +883,12 @@ void MainActivity::rebuildCloudList() {
         card->setHeight(250);
         card->setPadding(12, 12, 12, 12);
         card->setFocusable(!title.title_id.empty());
-        card->setHighlightCornerRadius(14);
+        card->setHighlightCornerRadius(4);
 
         auto* image = new brls::Image();
         image->setWidth(216);
         image->setHeight(174);
-        image->setCornerRadius(10);
+        image->setCornerRadius(4);
         image->setBackgroundColor(palette.surface_alt);
         image->setScalingType(brls::ImageScalingType::FILL);
         card->addView(image);

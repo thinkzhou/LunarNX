@@ -69,16 +69,18 @@ brls::View* PsSettingsActivity::createContentView() {
         [this](brls::View*) -> bool { closeSettings(); return true; });
     auto* root = new brls::Box(brls::Axis::COLUMN);
     root->setPadding(24, 64, 40, 64);
-    root->addView(makeSectionHeader(brls::getStr("lunarnx/ps/settings_video_section"), brls::getStr("lunarnx/ps/settings_video_detail")));
-    auto* card = makeUiCard(); card->setPadding(4, 8, 4, 8);
+    auto* card = makeFlatSection(
+        brls::getStr("lunarnx/ps/settings_video_section"),
+        brls::getStr("lunarnx/ps/settings_video_detail"));
     auto* resolution = new brls::SelectorCell();
     resolution->init(brls::getStr("lunarnx/settings/resolution"), {"720p", "1080p"}, settings_.height >= 1080 ? 1 : 0,
         [this](int selected) { settings_.width = selected ? 1920 : 1280; settings_.height = selected ? 1080 : 720; });
-    card->addView(resolution);
+    addFlatRow(card, resolution);
     auto* bitrate = new brls::SelectorCell();
     bitrate->init(brls::getStr("lunarnx/ps/settings_bitrate"), {"10 Mbps", "20 Mbps", "30 Mbps"}, settings_.bitrate_kbps >= 30000 ? 2 : settings_.bitrate_kbps >= 20000 ? 1 : 0,
         [this](int selected) { settings_.bitrate_kbps = selected >= 2 ? 30000 : selected == 1 ? 20000 : 10000; });
-    card->addView(bitrate); root->addView(card);
+    addFlatRow(card, bitrate);
+    root->addView(card);
     auto* done = new brls::Button(); done->setText(brls::getStr("lunarnx/common/done")); stylePrimaryButton(done); done->setMarginTop(28); done->registerClickAction([this](brls::View*) -> bool { closeSettings(); return true; }); root->addView(done);
     scroll->setContentView(root);
     return makeAppFrame(brls::getStr("lunarnx/ps/settings_title"), scroll);

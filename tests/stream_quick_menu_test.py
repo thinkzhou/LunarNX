@@ -18,8 +18,9 @@ def main():
             "ORIGINAL_WINDOW_WIDTH - kQuickMenuEdgeWidth" in view and
             "distance <= -kQuickMenuSwipeDistance" in view,
             "stream menu must open from a deliberate right-edge left swipe")
-    require("ORIGINAL_WINDOW_WIDTH - 390" in view,
-            "stream menu must be anchored to the right edge")
+    require("(brls::Application::ORIGINAL_WINDOW_WIDTH - 520) / 2" in view and
+            "(brls::Application::ORIGINAL_WINDOW_HEIGHT - 430) / 2" in view,
+            "stream menu must use the approved centered dialog position")
     require("menu_handle_" not in view and "menu_handle_" not in header,
             "stream view must not permanently cover video with a menu handle")
     require("quick_menu_->setVisibility" in view and

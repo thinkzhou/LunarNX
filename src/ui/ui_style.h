@@ -28,6 +28,9 @@ void installLunarTheme();
 const UiPalette& uiPalette();
 
 brls::Box* makeUiCard(brls::Axis axis = brls::Axis::COLUMN);
+brls::Box* makeFlatSection(const std::string& title,
+                           const std::string& subtitle = "");
+void addFlatRow(brls::Box* section, brls::View* row);
 brls::Box* makeSectionHeader(const std::string& title,
                              const std::string& subtitle = "");
 brls::Label* makeMutedLabel(const std::string& text, float font_size = 14);

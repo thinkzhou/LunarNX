@@ -8,37 +8,55 @@ namespace lunar::ui {
 namespace {
 
 const UiPalette kDarkPalette{
-    .background = nvgRGB(10, 15, 12),
-    .surface = nvgRGB(15, 23, 18),
-    .surface_alt = nvgRGB(20, 31, 24),
-    .card = nvgRGB(18, 28, 22),
-    .card_muted = nvgRGB(24, 35, 29),
-    .accent = nvgRGB(105, 216, 92),
-    .accent_soft = nvgRGBA(75, 182, 66, 72),
-    .text = nvgRGB(244, 248, 243),
-    .text_muted = nvgRGB(159, 178, 164),
-    .border = nvgRGB(53, 72, 59),
-    .success = nvgRGB(105, 216, 92),
+    .background = nvgRGB(41, 41, 41),
+    .surface = nvgRGB(48, 48, 48),
+    .surface_alt = nvgRGB(51, 51, 51),
+    .card = nvgRGB(51, 51, 51),
+    .card_muted = nvgRGB(56, 56, 56),
+    .accent = nvgRGB(8, 237, 206),
+    .accent_soft = nvgRGBA(8, 237, 206, 42),
+    .text = nvgRGB(244, 244, 244),
+    .text_muted = nvgRGB(153, 153, 153),
+    .border = nvgRGB(72, 72, 72),
+    .success = nvgRGB(84, 214, 139),
     .warning = nvgRGB(244, 197, 74),
-    .error = nvgRGB(255, 124, 115),
-    .stream_overlay = nvgRGBA(7, 12, 9, 218),
+    .error = nvgRGB(255, 112, 112),
+    .stream_overlay = nvgRGBA(16, 16, 16, 238),
 };
 
 const UiPalette kLightPalette{
-    .background = nvgRGB(242, 246, 240),
-    .surface = nvgRGB(250, 252, 248),
-    .surface_alt = nvgRGB(231, 239, 228),
-    .card = nvgRGB(252, 254, 251),
-    .card_muted = nvgRGB(235, 242, 232),
-    .accent = nvgRGB(16, 124, 16),
-    .accent_soft = nvgRGBA(16, 124, 16, 42),
-    .text = nvgRGB(24, 31, 25),
-    .text_muted = nvgRGB(91, 108, 95),
-    .border = nvgRGB(190, 204, 191),
-    .success = nvgRGB(16, 124, 16),
+    .background = nvgRGB(236, 238, 239),
+    .surface = nvgRGB(247, 248, 248),
+    .surface_alt = nvgRGB(255, 255, 255),
+    .card = nvgRGB(255, 255, 255),
+    .card_muted = nvgRGB(228, 231, 232),
+    .accent = nvgRGB(0, 137, 120),
+    .accent_soft = nvgRGBA(0, 137, 120, 32),
+    .text = nvgRGB(28, 30, 30),
+    .text_muted = nvgRGB(99, 103, 104),
+    .border = nvgRGB(202, 205, 206),
+    .success = nvgRGB(28, 151, 86),
     .warning = nvgRGB(169, 117, 0),
     .error = nvgRGB(186, 43, 37),
-    .stream_overlay = nvgRGBA(8, 14, 10, 218),
+    .stream_overlay = nvgRGBA(16, 16, 16, 230),
+};
+
+class SidebarButton final : public brls::Button {
+public:
+    void setActive(bool active) { active_ = active; }
+
+    void draw(NVGcontext* vg, float x, float y, float width, float height,
+              brls::Style style, brls::FrameContext* ctx) override {
+        brls::Button::draw(vg, x, y, width, height, style, ctx);
+        if (!active_) return;
+        nvgBeginPath(vg);
+        nvgRect(vg, x, y + 8, 4, height - 16);
+        nvgFillColor(vg, uiPalette().accent);
+        nvgFill(vg);
+    }
+
+private:
+    bool active_ = false;
 };
 
 void installThemeVariant(brls::Theme& theme, const UiPalette& p, bool dark) {
@@ -48,12 +66,14 @@ void installThemeVariant(brls::Theme& theme, const UiPalette& p, bool dark) {
     theme.addColor("brls/accent", p.accent);
     theme.addColor("brls/click_pulse", p.accent_soft);
     theme.addColor("brls/highlight/background", dark
-        ? nvgRGB(24, 39, 29)
-        : nvgRGB(229, 245, 226));
-    theme.addColor("brls/highlight/color1", p.accent);
+        ? nvgRGB(59, 59, 59)
+        : nvgRGB(220, 235, 234));
+    theme.addColor("brls/highlight/color1", dark
+        ? nvgRGB(100, 215, 236)
+        : nvgRGB(0, 137, 120));
     theme.addColor("brls/highlight/color2", dark
-        ? nvgRGB(171, 246, 158)
-        : nvgRGB(74, 170, 68));
+        ? nvgRGB(100, 215, 236)
+        : nvgRGB(0, 137, 120));
     theme.addColor("brls/applet_frame/separator", p.border);
     theme.addColor("brls/sidebar/background", p.surface);
     theme.addColor("brls/sidebar/active_item", p.accent);
@@ -61,11 +81,9 @@ void installThemeVariant(brls::Theme& theme, const UiPalette& p, bool dark) {
     theme.addColor("brls/header/border", p.border);
     theme.addColor("brls/header/rectangle", p.accent);
     theme.addColor("brls/header/subtitle", p.text_muted);
-    theme.addColor("brls/button/primary_enabled_background", dark
-        ? nvgRGB(35, 132, 38)
-        : nvgRGB(16, 124, 16));
+    theme.addColor("brls/button/primary_enabled_background", p.accent);
     theme.addColor("brls/button/primary_disabled_background", p.card_muted);
-    theme.addColor("brls/button/primary_enabled_text", nvgRGB(255, 255, 255));
+    theme.addColor("brls/button/primary_enabled_text", nvgRGB(24, 30, 30));
     theme.addColor("brls/button/primary_disabled_text", p.text_muted);
     theme.addColor("brls/button/default_enabled_background", p.card_muted);
     theme.addColor("brls/button/default_disabled_background", p.surface_alt);
@@ -104,9 +122,36 @@ brls::Box* makeUiCard(brls::Axis axis) {
     card->setBackgroundColor(p.card);
     card->setBorderThickness(1);
     card->setBorderColor(p.border);
-    card->setCornerRadius(16);
+    card->setCornerRadius(4);
     card->setPadding(18, 20, 18, 20);
     return card;
+}
+
+brls::Box* makeFlatSection(const std::string& title,
+                           const std::string& subtitle) {
+    const auto& p = uiPalette();
+    auto* section = new brls::Box(brls::Axis::COLUMN);
+    section->setCornerRadius(0);
+    section->setMarginTop(18);
+    auto* top_border = new brls::Box();
+    top_border->setHeight(1);
+    top_border->setBackgroundColor(p.border);
+    section->addView(top_border);
+    section->addView(makeSectionHeader(title, subtitle));
+    return section;
+}
+
+void addFlatRow(brls::Box* section, brls::View* row) {
+    if (!section || !row) return;
+    const auto& p = uiPalette();
+    row->setHeight(64);
+    row->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
+    row->setHighlightCornerRadius(3);
+    section->addView(row);
+    auto* divider = new brls::Box();
+    divider->setHeight(1);
+    divider->setBackgroundColor(p.border);
+    section->addView(divider);
 }
 
 brls::Box* makeSectionHeader(const std::string& title,
@@ -156,23 +201,25 @@ void stylePrimaryButton(brls::Button* button) {
     if (!button) return;
     button->setStyle(&brls::BUTTONSTYLE_PRIMARY);
     button->setHeight(48);
-    button->setCornerRadius(12);
-    button->setHighlightCornerRadius(14);
+    button->setCornerRadius(4);
+    button->setHighlightCornerRadius(4);
 }
 
 void styleSecondaryButton(brls::Button* button) {
     if (!button) return;
     button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
     button->setHeight(48);
-    button->setCornerRadius(12);
-    button->setHighlightCornerRadius(14);
+    button->setCornerRadius(4);
+    button->setHighlightCornerRadius(4);
+    button->setBorderThickness(1);
+    button->setBorderColor(uiPalette().border);
 }
 
 void styleQuietButton(brls::Button* button) {
     if (!button) return;
     button->setStyle(&brls::BUTTONSTYLE_BORDERLESS);
     button->setHeight(44);
-    button->setHighlightCornerRadius(12);
+    button->setHighlightCornerRadius(4);
 }
 
 brls::AppletFrame* makeAppFrame(const std::string& title,
@@ -183,12 +230,12 @@ brls::AppletFrame* makeAppFrame(const std::string& title,
 }
 
 brls::Button* makeSidebarButton(const std::string& label, bool active) {
-    auto* button = new brls::Button();
+    auto* button = new SidebarButton();
     button->setText(label);
     button->setStyle(&brls::BUTTONSTYLE_BORDERLESS);
     button->setHeight(58);
     button->setCornerRadius(0);
-    button->setHighlightCornerRadius(6);
+    button->setHighlightCornerRadius(3);
     button->setJustifyContent(brls::JustifyContent::FLEX_START);
     button->setPaddingLeft(18);
     setSidebarButtonActive(button, active);
@@ -199,8 +246,10 @@ void setSidebarButtonActive(brls::Button* button, bool active) {
     if (!button) return;
     const auto& p = uiPalette();
     button->setTextColor(active ? p.accent : p.text);
-    button->setBorderThickness(active ? 3 : 0);
-    button->setBorderColor(active ? p.accent : p.surface);
+    button->setBackgroundColor(active ? p.surface_alt : p.surface);
+    if (auto* sidebar = dynamic_cast<SidebarButton*>(button)) {
+        sidebar->setActive(active);
+    }
 }
 
 brls::Box* makePageHeading(const std::string& title,

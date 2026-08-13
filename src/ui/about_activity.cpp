@@ -35,10 +35,13 @@ brls::View* AboutActivity::createContentView() {
     brand->addView(makeMutedLabel(brls::getStr("lunarnx/about/subtitle"), 13));
     header->addView(brand);
 
-    auto* version_chip = makeUiCard(brls::Axis::ROW);
+    auto* version_chip = new brls::Box(brls::Axis::ROW);
     version_chip->setHeight(52);
     version_chip->setPadding(8, 16, 8, 16);
-    version_chip->setCornerRadius(14);
+    version_chip->setBackgroundColor(p.surface_alt);
+    version_chip->setBorderThickness(1);
+    version_chip->setBorderColor(p.border);
+    version_chip->setCornerRadius(4);
     version_chip->setAlignItems(brls::AlignItems::CENTER);
     auto* version_mark = new brls::Label();
     version_mark->setText(brls::getStr("lunarnx/about/version_label"));
@@ -54,11 +57,15 @@ brls::View* AboutActivity::createContentView() {
     header->addView(version_chip);
     root->addView(header);
 
-    auto* intro = makeUiCard(brls::Axis::ROW);
+    auto* intro = new brls::Box(brls::Axis::ROW);
     intro->setHeight(132);
     intro->setPadding(18, 22, 18, 22);
     intro->setAlignItems(brls::AlignItems::CENTER);
     intro->setMarginBottom(18);
+    intro->setBackgroundColor(p.surface_alt);
+    intro->setBorderThickness(1);
+    intro->setBorderColor(p.border);
+    intro->setCornerRadius(0);
     auto* logo = new brls::Label();
     logo->setWidth(82);
     logo->setHeight(82);
@@ -66,7 +73,7 @@ brls::View* AboutActivity::createContentView() {
     logo->setFontSize(24);
     logo->setTextColor(p.accent);
     logo->setBackgroundColor(p.accent_soft);
-    logo->setCornerRadius(22);
+    logo->setCornerRadius(4);
     logo->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     logo->setVerticalAlign(brls::VerticalAlign::CENTER);
     intro->addView(logo);
@@ -84,13 +91,12 @@ brls::View* AboutActivity::createContentView() {
     intro->addView(intro_copy);
     root->addView(intro);
 
-    root->addView(makeSectionHeader(
+    auto* community = makeFlatSection(
         brls::getStr("lunarnx/about/community_title"),
-        brls::getStr("lunarnx/about/community_subtitle")));
-    auto* community = makeUiCard(brls::Axis::ROW);
-    community->setHeight(104);
-    community->setPadding(16, 22, 16, 22);
-    community->setAlignItems(brls::AlignItems::CENTER);
+        brls::getStr("lunarnx/about/community_subtitle"));
+    auto* community_row = new brls::Box(brls::Axis::ROW);
+    community_row->setPadding(16, 22, 16, 22);
+    community_row->setAlignItems(brls::AlignItems::CENTER);
     community->setMarginBottom(18);
     auto* qq_mark = new brls::Label();
     qq_mark->setWidth(64);
@@ -99,10 +105,10 @@ brls::View* AboutActivity::createContentView() {
     qq_mark->setFontSize(17);
     qq_mark->setTextColor(p.accent);
     qq_mark->setBackgroundColor(p.accent_soft);
-    qq_mark->setCornerRadius(32);
+    qq_mark->setCornerRadius(4);
     qq_mark->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     qq_mark->setVerticalAlign(brls::VerticalAlign::CENTER);
-    community->addView(qq_mark);
+    community_row->addView(qq_mark);
     auto* qq_copy = new brls::Box(brls::Axis::COLUMN);
     qq_copy->setGrow(1.0f);
     qq_copy->setPadding(4, 14, 4, 18);
@@ -112,13 +118,14 @@ brls::View* AboutActivity::createContentView() {
     qq_title->setTextColor(p.text);
     qq_copy->addView(qq_title);
     qq_copy->addView(makeMutedLabel(brls::getStr("lunarnx/about/qq_hint"), 13));
-    community->addView(qq_copy);
+    community_row->addView(qq_copy);
     auto* qq_number = new brls::Label();
     qq_number->setText("736743823");
     qq_number->setFontSize(27);
     qq_number->setTextColor(p.accent);
     qq_number->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
-    community->addView(qq_number);
+    community_row->addView(qq_number);
+    addFlatRow(community, community_row);
     root->addView(community);
 
     root->addView(makeSectionHeader(
@@ -131,10 +138,14 @@ brls::View* AboutActivity::createContentView() {
                                       const std::string& title,
                                       const std::string& detail,
                                       bool add_margin) {
-        auto* card = makeUiCard(brls::Axis::COLUMN);
+        auto* card = new brls::Box(brls::Axis::COLUMN);
         card->setGrow(1.0f);
         card->setHeight(126);
         card->setPadding(16, 18, 16, 18);
+        card->setBackgroundColor(p.surface_alt);
+        card->setBorderThickness(1);
+        card->setBorderColor(p.border);
+        card->setCornerRadius(0);
         if (add_margin) card->setMarginLeft(10);
         auto* mark = new brls::Label();
         mark->setText(eyebrow);
@@ -159,9 +170,9 @@ brls::View* AboutActivity::createContentView() {
                 brls::getStr("lunarnx/about/ps_desc"), true);
     root->addView(features);
 
-    root->addView(makeSectionHeader(brls::getStr("lunarnx/about/open_source_title")));
-    auto* project = makeUiCard(brls::Axis::ROW);
-    project->setHeight(92);
+    auto* project_section = makeFlatSection(
+        brls::getStr("lunarnx/about/open_source_title"));
+    auto* project = new brls::Box(brls::Axis::ROW);
     project->setPadding(16, 22, 16, 22);
     project->setAlignItems(brls::AlignItems::CENTER);
     auto* project_copy = new brls::Box(brls::Axis::COLUMN);
@@ -182,7 +193,8 @@ brls::View* AboutActivity::createContentView() {
     build->setTextColor(p.text_muted);
     build->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
     project->addView(build);
-    root->addView(project);
+    addFlatRow(project_section, project);
+    root->addView(project_section);
 
     auto* footer = makeMutedLabel(brls::getStr("lunarnx/about/footer"), 12);
     footer->setHeight(54);
@@ -191,7 +203,7 @@ brls::View* AboutActivity::createContentView() {
     root->addView(footer);
 
     scroll->setContentView(root);
-    return scroll;
+    return makeAppFrame(brls::getStr("lunarnx/common/about"), scroll);
 }
 
 } // namespace lunar::ui

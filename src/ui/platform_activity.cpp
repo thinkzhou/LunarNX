@@ -35,8 +35,8 @@ brls::Button* makePlatformTile(const std::string& title,
     tile->setHeight(350);
     tile->setPadding(20, 22, 20, 22);
     tile->setBackgroundColor(p.card);
-    tile->setCornerRadius(12);
-    tile->setHighlightCornerRadius(14);
+    tile->setCornerRadius(4);
+    tile->setHighlightCornerRadius(4);
     tile->setAxis(brls::Axis::COLUMN);
     tile->setAlignItems(brls::AlignItems::CENTER);
 

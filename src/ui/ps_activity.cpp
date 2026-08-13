@@ -95,7 +95,7 @@ public:
         root->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
         root->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
         root->setPadding(30, 48, 24, 48);
-        root->setBackgroundColor(p.background);
+        root->setBackgroundColor(nvgRGB(16, 16, 16));
         root->setAlignItems(brls::AlignItems::CENTER);
         root->setJustifyContent(brls::JustifyContent::CENTER);
         root->setFocusable(true);
@@ -106,10 +106,11 @@ public:
                 return true;
             });
 
-        auto* card = makeUiCard(brls::Axis::COLUMN);
+        auto* card = new brls::Box(brls::Axis::COLUMN);
         card->setWidth(780);
         card->setHeight(390);
         card->setAlignItems(brls::AlignItems::CENTER);
+        card->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
         auto* eyebrow = new brls::Label();
         eyebrow->setText(brls::getStr("lunarnx/ps/connect_eyebrow"));
         eyebrow->setFontSize(14);
@@ -399,10 +400,11 @@ brls::View* PsActivity::createContentView() {
         brls::getStr("lunarnx/ps/pair_by_ip"),
         brls::getStr("lunarnx/ps/pair_by_ip_desc"));
     pair_actions_->addView(pair_heading);
-    auto* manual_card = makeUiCard(brls::Axis::ROW);
-    manual_card->setHeight(92);
-    manual_card->setMarginBottom(18);
-    manual_card->setAlignItems(brls::AlignItems::CENTER);
+    auto* manual_card = makeFlatSection(
+        brls::getStr("lunarnx/ps/pair_by_ip"),
+        brls::getStr("lunarnx/ps/pair_by_ip_desc"));
+    auto* console_type_row = new brls::Box(brls::Axis::ROW);
+    console_type_row->setAlignItems(brls::AlignItems::CENTER);
     auto* manual_copy = new brls::Box(brls::Axis::COLUMN);
     manual_copy->setGrow(1.0f);
     auto* manual_title = new brls::Label();
@@ -412,8 +414,8 @@ brls::View* PsActivity::createContentView() {
     manual_copy->addView(manual_title);
     manual_copy->addView(makeMutedLabel(
         brls::getStr("lunarnx/ps/pair_by_ip_desc"), 12));
-    manual_card->addView(manual_copy);
-    auto add_pair_button = [this, manual_card](const std::string& text, int target) {
+    console_type_row->addView(manual_copy);
+    auto add_pair_button = [this, console_type_row](const std::string& text, int target) {
         auto* button = new brls::Button();
         styleSecondaryButton(button);
         button->setText(text);
@@ -425,10 +427,11 @@ brls::View* PsActivity::createContentView() {
             pairConsole(console);
             return true;
         });
-        manual_card->addView(button);
+        console_type_row->addView(button);
     };
     add_pair_button(brls::getStr("lunarnx/ps/pair_ps4"), 900);
     add_pair_button(brls::getStr("lunarnx/ps/pair_ps5"), 1000100);
+    addFlatRow(manual_card, console_type_row);
     pair_actions_->addView(manual_card);
     root->addView(pair_actions_);
     root->addView(local_actions_);
@@ -697,7 +700,7 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
             host.remote->remoteplay_enabled;
 
         card->setFocusable(true);
-        card->setHighlightCornerRadius(14);
+        card->setHighlightCornerRadius(4);
         std::string action_text;
         if (source_ == PsConsoleSource::Local && !paired) {
             action_text = brls::getStr("lunarnx/ps/btn_pair");

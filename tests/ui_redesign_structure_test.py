@@ -21,11 +21,17 @@ def main() -> None:
     style_header = read("src/ui/ui_style.h")
     style_source = read("src/ui/ui_style.cpp")
     auth_source = read("src/ui/auth_activity.cpp")
+    platform_source = read("src/ui/platform_activity.cpp")
     main_source = read("src/ui/main_activity.cpp")
     main_header = read("src/ui/main_activity.h")
     settings_header = read("src/ui/stream_settings_activity.h")
     settings_source = read("src/ui/stream_settings_activity.cpp")
     loading_source = read("src/ui/stream_loading_activity.cpp")
+    ps_source = read("src/ui/ps_activity.cpp")
+    ps_settings_source = read("src/ui/ps_settings_activity.cpp")
+    psn_login_source = read("src/ui/psn_login_activity.cpp")
+    registration_source = read("src/ui/ps_registration_activity.cpp")
+    about_source = read("src/ui/about_activity.cpp")
     stream_overlay = read("src/ui/stream_overlay.cpp")
     perf_overlay = read("src/ui/perf_overlay.cpp")
     stream_view = read("src/ui/stream_view.cpp")
@@ -37,8 +43,18 @@ def main() -> None:
             "Theme::getDarkTheme" in style_source and
             "Theme::getLightTheme" in style_source,
             "shared UI style must support Borealis light and dark themes")
-    require("makeUiCard" in style_header and "makeSectionHeader" in style_header,
-            "shared cards and section hierarchy must be reusable")
+    for color in (
+        "nvgRGB(41, 41, 41)", "nvgRGB(48, 48, 48)",
+        "nvgRGB(51, 51, 51)", "nvgRGB(8, 237, 206)",
+        "nvgRGB(100, 215, 236)", "nvgRGB(153, 153, 153)",
+        "nvgRGB(72, 72, 72)",
+    ):
+        require(color in style_source, f"approved UI token missing: {color}")
+    require("makeFlatSection" in style_header and "addFlatRow" in style_header,
+            "flat sections and divider rows must be reusable")
+    require("class SidebarButton" in style_source and
+            "nvgRect(vg, x, y + 8, 4, height - 16)" in style_source,
+            "active sidebar items need the approved four-pixel accent bar")
     require("ConsoleGlyphView" in style_header,
             "Remote Play cards need a code-native console identity view")
 
@@ -47,11 +63,28 @@ def main() -> None:
     require('"lunarnx/auth/tagline"' in auth_source and
             '"lunarnx/auth/sign_in"' in auth_source,
             "authentication page must use the approved branded hierarchy")
+    for name, source in (
+        ("platform", platform_source), ("Xbox", main_source),
+        ("PlayStation", ps_source), ("global settings", settings_source),
+        ("PS settings", ps_settings_source), ("Xbox auth", auth_source),
+        ("PSN login", psn_login_source), ("PS registration", registration_source),
+        ("About", about_source),
+    ):
+        require("makeAppFrame" in source,
+                f"{name} Activity must use the shared AppletFrame shell")
 
     require("class StreamSettingsActivity : public brls::Activity" in settings_header,
             "stream settings must live in a dedicated Activity")
     require("SelectorCell" in settings_source and "BooleanCell" in settings_source,
             "settings page must use controller-friendly Borealis cells")
+    require("makeUiCard" not in settings_source,
+            "settings groups must be flat continuous lists, not cards")
+    require("makeUiCard" not in ps_settings_source,
+            "PlayStation settings groups must be flat lists, not cards")
+    require("Console Type" in registration_source and
+            "PlayStation 5" in registration_source and
+            "PlayStation 4" in registration_source,
+            "pairing flow must retain explicit console type selection context")
     require("new StreamSettingsActivity" in main_source,
             "MainActivity must navigate to the dedicated settings page")
     require("res_720_" not in main_header + main_source and
@@ -63,11 +96,20 @@ def main() -> None:
 
     require('#include "ui_style.h"' in loading_source,
             "stream startup page must share the LunarNX palette")
+    require("nvgRGB(16, 16, 16)" in loading_source and
+            "makeUiCard" not in loading_source,
+            "loading and error states must use the full-screen transient surface")
+    require("class PsConnectActivity" in ps_source and
+            "root->setBackgroundColor(nvgRGB(16, 16, 16))" in ps_source,
+            "PlayStation connection state must share the full-screen transient surface")
     require('#include "ui_style.h"' in stream_overlay + perf_overlay,
             "stream overlays must share the LunarNX palette")
     require("root->registerAction" in stream_view and
             "this->registerAction" not in stream_view,
             "stream actions must be registered on the available root view")
+    require("setDetachedPosition" in stream_view and
+            "ORIGINAL_WINDOW_WIDTH - 520" in stream_view,
+            "stream quick menu must remain centered")
 
     require("src/ui/ui_style.cpp" in switch_makefile and
             "src/ui/stream_settings_activity.cpp" in switch_makefile,

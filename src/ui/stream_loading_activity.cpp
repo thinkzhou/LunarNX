@@ -54,7 +54,7 @@ brls::View* StreamLoadingActivity::createContentView() {
     root->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
     root->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
     root->setPadding(30, 48, 24, 48);
-    root->setBackgroundColor(p.background);
+    root->setBackgroundColor(nvgRGB(16, 16, 16));
     root->setFocusable(true);
     root->setHideHighlight(true);
 
@@ -127,11 +127,11 @@ brls::View* StreamLoadingActivity::createContentView() {
     stage->setJustifyContent(brls::JustifyContent::CENTER);
     stage->setAlignItems(brls::AlignItems::CENTER);
 
-    loading_card_ = makeUiCard(brls::Axis::COLUMN);
+    loading_card_ = new brls::Box(brls::Axis::COLUMN);
     loading_card_->setWidth(780);
     loading_card_->setHeight(430);
     loading_card_->setPadding(34, 46, 30, 46);
-    loading_card_->setCornerRadius(6);
+    loading_card_->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
     loading_card_->setAlignItems(brls::AlignItems::CENTER);
 
     auto* eyebrow = new brls::Label();
@@ -200,11 +200,11 @@ brls::View* StreamLoadingActivity::createContentView() {
     wait_hint->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     loading_card_->addView(wait_hint);
 
-    error_card_ = makeUiCard(brls::Axis::COLUMN);
+    error_card_ = new brls::Box(brls::Axis::COLUMN);
     error_card_->setWidth(780);
     error_card_->setHeight(390);
     error_card_->setPadding(30, 54, 30, 54);
-    error_card_->setCornerRadius(6);
+    error_card_->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
     error_card_->setAlignItems(brls::AlignItems::CENTER);
     error_card_->setVisibility(brls::Visibility::GONE);
 
@@ -222,7 +222,7 @@ brls::View* StreamLoadingActivity::createContentView() {
     error_mark->setFontSize(32);
     error_mark->setTextColor(p.error);
     error_mark->setBackgroundColor(p.surface_alt);
-    error_mark->setCornerRadius(33);
+    error_mark->setCornerRadius(4);
     error_mark->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     error_mark->setVerticalAlign(brls::VerticalAlign::CENTER);
     error_card_->addView(error_mark);

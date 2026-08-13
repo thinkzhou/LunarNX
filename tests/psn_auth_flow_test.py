@@ -35,8 +35,10 @@ def main():
             "OAuth QR codes must use the standards-compliant QR encoder")
     require('startNetworkWorker("psn-device-list"' in ps_ui,
             "PSN device lookup must not block the Borealis UI thread")
-    require('setText("Search LAN")' in ps_ui and 'setText("Refresh PSN")' in ps_ui,
-            "LAN and PSN discovery must have separate manual buttons")
+    require('setText(brls::getStr("lunarnx/ps/search_lan"))' in ps_ui and
+            'setText(brls::getStr("lunarnx/ps/refresh_psn"))' in ps_ui and
+            "startLanDiscovery();" in ps_ui and "fetchPsnConsoles();" in ps_ui,
+            "LAN and PSN discovery must have separate localized buttons and callbacks")
     first_resume = ps_ui.split("if (!resumed_once_)", 1)[1].split("} else {", 1)[0]
     require("refreshConsoles();" not in first_resume,
             "opening the PS page must not automatically start discovery")
@@ -51,13 +53,14 @@ def main():
     require("platform=PS5" in repository and
             "CHIAKI_HOLEPUNCH_CONSOLE_TYPE_PS4" not in repository,
             "PSN device listing only supports PS5; PS4 remains LAN-only")
-    require('"No remote PS5 consoles loaded"' in ps_ui and
-            '"PSN: Refresh complete (PS5 only)"' in ps_ui,
+    require('brls::getStr("lunarnx/ps/empty_remote")' in ps_ui and
+            'brls::getStr("lunarnx/ps/psn_refresh_done")' in ps_ui,
             "an empty PSN account must leave the refreshing state")
     require("account_state_" in ps_ui and "psn_state_" in ps_ui and
             "lan_state_" in ps_ui and "action_status_" in ps_ui,
             "account, discovery, and console action states must stay separate")
-    require("Pair PS4 by IP" in ps_ui and "Pair PS5 by IP" in ps_ui,
+    require('add_pair_button(brls::getStr("lunarnx/ps/pair_ps4")' in ps_ui and
+            'add_pair_button(brls::getStr("lunarnx/ps/pair_ps5")' in ps_ui,
             "LAN pairing must remain available when discovery finds nothing")
     require("CURLOPT_CONNECTTIMEOUT, connect_timeout_seconds" in http and
             "CURLOPT_CONNECTTIMEOUT_MS, 0L" not in http,
