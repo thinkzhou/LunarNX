@@ -15,13 +15,13 @@ namespace lunar::ui {
 class ButtonMappingActivity : public brls::Activity {
 public:
     explicit ButtonMappingActivity(input::ButtonMappingProfile profile);
+    ~ButtonMappingActivity() override;
 
     brls::View* createContentView() override;
     void pollCaptureInput();
 
 private:
     void enterCapture(size_t index);
-    void cancelCapture();
     void finishCapture();
     void refreshRows();
     bool hasConflict(size_t index) const;

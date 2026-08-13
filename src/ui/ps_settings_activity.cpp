@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 namespace lunar::ui {
@@ -44,6 +45,11 @@ PsSettingsSnapshot loadPsSettings() {
     if (cJSON_IsNumber(resolution) && resolution->valueint >= 1080) { out.width = 1920; out.height = 1080; }
     const cJSON* bitrate = cJSON_GetObjectItem(root, "ps_bitrate_kbps");
     if (cJSON_IsNumber(bitrate) && bitrate->valueint > 0) out.bitrate_kbps = bitrate->valueint;
+    const cJSON* codec = cJSON_GetObjectItem(root, "ps_video_codec");
+    if (cJSON_IsString(codec) && codec->valuestring &&
+        std::strcmp(codec->valuestring, "hevc") == 0) {
+        out.video_codec = stream::VideoCodec::HEVC;
+    }
     cJSON_Delete(root);
     return out;
 }
@@ -54,6 +60,9 @@ bool savePsSettings(const PsSettingsSnapshot& settings) {
     cJSON_AddNumberToObject(root, "ps_resolution", settings.height);
     cJSON_DeleteItemFromObject(root, "ps_bitrate_kbps");
     cJSON_AddNumberToObject(root, "ps_bitrate_kbps", settings.bitrate_kbps);
+    cJSON_DeleteItemFromObject(root, "ps_video_codec");
+    cJSON_AddStringToObject(root, "ps_video_codec",
+                            stream::videoCodecName(settings.video_codec));
     bool ok = writeConfig(root);
     cJSON_Delete(root);
     return ok;
@@ -69,36 +78,46 @@ brls::View* PsSettingsActivity::createContentView() {
     scroll->registerAction(brls::getStr("lunarnx/settings/back_action"), brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool { closeSettings(); return true; });
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(24, 64, 40, 64);
-    auto* card = makeFlatSection(
-        brls::getStr("lunarnx/ps/settings_video_section"),
-        brls::getStr("lunarnx/ps/settings_video_detail"));
+    root->setPadding(28, 64, 40, 64);
+    auto* header = new brls::Box(brls::Axis::ROW);
+    header->setHeight(72);
+    auto* brand = new brls::Label(); brand->setText("LUNARNX"); brand->setFontSize(18); brand->setTextColor(p.accent); header->addView(brand);
+    auto* title = new brls::Label(); title->setText(brls::getStr("lunarnx/ps/settings_title")); title->setFontSize(30); title->setTextColor(p.text); title->setGrow(1.0f); title->setHorizontalAlign(brls::HorizontalAlign::RIGHT); header->addView(title); root->addView(header);
+    root->addView(makeSectionHeader(brls::getStr("lunarnx/ps/settings_video_section"), brls::getStr("lunarnx/ps/settings_video_detail")));
+    auto* card = makeUiCard(); card->setPadding(4, 8, 4, 8);
     auto* resolution = new brls::SelectorCell();
     resolution->init(brls::getStr("lunarnx/settings/resolution"), {"720p", "1080p"}, settings_.height >= 1080 ? 1 : 0,
         [this](int selected) { settings_.width = selected ? 1920 : 1280; settings_.height = selected ? 1080 : 720; });
-    addFlatRow(card, resolution);
+    card->addView(resolution);
     auto* bitrate = new brls::SelectorCell();
     bitrate->init(brls::getStr("lunarnx/ps/settings_bitrate"), {"10 Mbps", "20 Mbps", "30 Mbps"}, settings_.bitrate_kbps >= 30000 ? 2 : settings_.bitrate_kbps >= 20000 ? 1 : 0,
         [this](int selected) { settings_.bitrate_kbps = selected >= 2 ? 30000 : selected == 1 ? 20000 : 10000; });
-    addFlatRow(card, bitrate);
+    card->addView(bitrate);
+    auto* codec = new brls::SelectorCell();
+    codec->init(brls::getStr("lunarnx/ps/settings_codec"),
+        {"H.264", "HEVC (H.265)"},
+        settings_.video_codec == stream::VideoCodec::HEVC ? 1 : 0,
+        [this](int selected) {
+            settings_.video_codec = selected == 1
+                ? stream::VideoCodec::HEVC : stream::VideoCodec::H264;
+        });
+    card->addView(codec);
     root->addView(card);
-    auto* controller = makeFlatSection(
+    root->addView(makeSectionHeader(
         brls::getStr("lunarnx/ps/settings_controller_section"),
-        brls::getStr("lunarnx/ps/settings_controller_detail"));
+        brls::getStr("lunarnx/ps/settings_controller_detail")));
+    auto* controller_card = makeUiCard(); controller_card->setPadding(4, 8, 4, 8);
     auto* button_mapping = new brls::DetailCell();
     button_mapping->setText(brls::getStr("lunarnx/settings/button_mapping"));
-    button_mapping->setDetailText(
-        brls::getStr("lunarnx/settings/button_mapping_detail"));
+    button_mapping->setDetailText(brls::getStr("lunarnx/settings/button_mapping_detail"));
     button_mapping->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(new ButtonMappingActivity(
             input::ButtonMappingProfile::PlayStation));
         return true;
     });
-    addFlatRow(controller, button_mapping);
-    root->addView(controller);
+    controller_card->addView(button_mapping); root->addView(controller_card);
     auto* done = new brls::Button(); done->setText(brls::getStr("lunarnx/common/done")); stylePrimaryButton(done); done->setMarginTop(28); done->registerClickAction([this](brls::View*) -> bool { closeSettings(); return true; }); root->addView(done);
-    scroll->setContentView(root);
-    return makeAppFrame(brls::getStr("lunarnx/ps/settings_title"), scroll);
+    scroll->setContentView(root); return scroll;
 }
 
 void PsSettingsActivity::closeSettings() {

@@ -27,7 +27,9 @@ def main():
             "PsMockReplaySession" in controller and
             "PsMediaBridge" in controller and "MediaPipeline" in controller,
             "production PS controller must own the mock session and media path")
-    require('av_bsf_get_by_name("h264_mp4toannexb")' in session and
+    require('"h264_mp4toannexb"' in session and
+            '"hevc_mp4toannexb"' in session and
+            "av_bsf_get_by_name(filter_name)" in session and
             "bridge_.onVideoSample" in session and
             "bridge_.audioSink()" in session,
             "mock session must feed the production Chiaki callback boundary")

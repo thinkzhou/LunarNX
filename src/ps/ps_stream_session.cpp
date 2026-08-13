@@ -35,6 +35,7 @@ PsStreamSession::PsStreamSession(const std::string& host_addr,
                                   const uint8_t* regist_key, const uint8_t* morning,
                                   int target,
                                   int width, int height, int fps, int bitrate_kbps,
+                                  stream::VideoCodec video_codec,
                                   PsMediaBridge& bridge)
     : host_addr_(host_addr)
     , is_ps5_(target >= 1000000)
@@ -42,6 +43,7 @@ PsStreamSession::PsStreamSession(const std::string& host_addr,
     , height_(height)
     , fps_(fps)
     , bitrate_kbps_(bitrate_kbps)
+    , video_codec_(is_ps5_ ? video_codec : stream::VideoCodec::H264)
     , bridge_(bridge) {
     std::memcpy(regist_key_, regist_key, sizeof(regist_key_));
     std::memcpy(morning_, morning, sizeof(morning_));
@@ -60,7 +62,8 @@ void PsStreamSession::configureConnectInfo() {
     connect_info_.video_profile.height = static_cast<unsigned int>(height_);
     connect_info_.video_profile.max_fps = static_cast<unsigned int>(fps_);
     connect_info_.video_profile.bitrate = static_cast<unsigned int>(bitrate_kbps_);
-    connect_info_.video_profile.codec = CHIAKI_CODEC_H264;
+    connect_info_.video_profile.codec = video_codec_ == stream::VideoCodec::HEVC
+        ? CHIAKI_CODEC_H265 : CHIAKI_CODEC_H264;
     connect_info_.video_profile_auto_downgrade = true;
     connect_info_.packet_loss_max = 0.02;
     connect_info_.enable_dualsense = true;

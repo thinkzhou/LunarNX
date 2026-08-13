@@ -34,6 +34,7 @@ public:
     ~GamepadReader();
 
     bool initialize();
+    void releaseCaptureButton();
     void reloadButtonMapping();
     GamepadState read();
     bool isConnected() const;
@@ -43,6 +44,7 @@ private:
     ButtonMappingProfile mapping_profile_ = ButtonMappingProfile::Xbox;
     ButtonMapping button_mapping_ =
         defaultButtonMapping(ButtonMappingProfile::Xbox);
+    bool capture_button_acquired_ = false;
 #endif
     bool initialized_ = false;
 #ifdef __SWITCH__

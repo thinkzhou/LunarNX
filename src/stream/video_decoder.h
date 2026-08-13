@@ -2,6 +2,7 @@
 
 #include "../common.h"
 #include "media_pipeline.h"
+#include "video_codec.h"
 #include <functional>
 #include <cstdint>
 #include <vector>
@@ -35,11 +36,12 @@ public:
     ~VideoDecoder();
 
     /// Initialize decoder. On Switch uses NVDEC hardware acceleration.
-    /// On desktop uses standard FFmpeg H.264 software decode.
+    /// On desktop uses the selected standard FFmpeg software decoder.
     bool initialize(int width = 1280, int height = 720);
     void setVideoBackend(VideoBackend backend) { video_backend_ = backend; }
+    void setVideoCodec(VideoCodec codec) { video_codec_ = codec; }
 
-    /// Decode a chunk of H.264 data. Callback fires for each complete frame.
+    /// Decode one complete Annex-B access unit.
     bool decode(const uint8_t* data, size_t len, uint64_t timestamp);
 
     void setCallback(FrameCallback cb);
@@ -61,19 +63,21 @@ private:
 #else
     VideoBackend video_backend_ = VideoBackend::Software;
 #endif
+    VideoCodec video_codec_ = VideoCodec::H264;
     void* codec_ctx_ = nullptr;
     void* parser_ = nullptr;
     AVBufferRef* hw_device_ctx_ = nullptr;
     FrameCallback on_frame_;
     struct PerfStats* perf_ = nullptr;
     bool initialized_ = false;
-    bool h264_decoder_ready_ = false;
-    bool h264_seen_sps_ = false;
-    bool h264_seen_pps_ = false;
-    std::vector<uint8_t> h264_parameter_sets_;
-    bool h264_parameter_sets_pending_ = false;
-    int h264_wait_log_count_ = 0;
-    int h264_error_log_count_ = 0;
+    bool decoder_ready_ = false;
+    bool seen_vps_ = false;
+    bool seen_sps_ = false;
+    bool seen_pps_ = false;
+    std::vector<uint8_t> parameter_sets_;
+    bool parameter_sets_pending_ = false;
+    int wait_log_count_ = 0;
+    int error_log_count_ = 0;
 };
 
 } // namespace lunar::stream

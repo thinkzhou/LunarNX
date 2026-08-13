@@ -21,7 +21,7 @@ def main():
             "the PS pulse must suppress menu input and send only the PS button")
     require("ps_button_release_pending_" in header,
             "the PS pulse must include an explicit release frame")
-    require("else if (input_suppressed_.load())" in controller,
+    require("else if (input_suppressed)" in controller,
             "input suppression must not erase a requested PS pulse")
     require("kPsInputInterval{8}" in controller and
             "input_thread_ = std::thread" in controller and

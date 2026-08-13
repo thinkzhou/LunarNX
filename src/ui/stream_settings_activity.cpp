@@ -289,12 +289,10 @@ bool saveStreamSettings(const StreamSettingsSnapshot& settings) {
 StreamSettingsActivity::StreamSettingsActivity(
     std::shared_ptr<app::StreamController> ctrl,
     StreamSettingsSnapshot settings,
-    CompletionCallback completion,
-    StreamSettingsScope scope)
+    CompletionCallback completion)
     : ctrl_(std::move(ctrl)),
       settings_(settings),
-      completion_(std::move(completion)),
-      scope_(scope) {}
+      completion_(std::move(completion)) {}
 
 brls::View* StreamSettingsActivity::createContentView() {
     const auto& p = uiPalette();
@@ -309,13 +307,44 @@ brls::View* StreamSettingsActivity::createContentView() {
         });
 
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(24, 64, 40, 64);
+    root->setPadding(28, 64, 40, 64);
     root->setBackgroundColor(p.background);
     scroll->setContentView(root);
 
-    auto* app_card = makeFlatSection(
+    auto* top = new brls::Box(brls::Axis::ROW);
+    top->setHeight(72);
+    top->setAlignItems(brls::AlignItems::CENTER);
+
+    auto* brand = new brls::Label();
+    brand->setText("LUNARNX");
+    brand->setFontSize(18);
+    brand->setTextColor(p.accent);
+    top->addView(brand);
+
+    auto* title = new brls::Label();
+    title->setText(brls::getStr("lunarnx/settings/title"));
+    title->setFontSize(30);
+    title->setTextColor(p.text);
+    title->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
+    title->setGrow(1.0f);
+    top->addView(title);
+    root->addView(top);
+
+    auto* intro = makeUiCard();
+    intro->setMarginBottom(22);
+    auto* intro_title = new brls::Label();
+    intro_title->setText(brls::getStr("lunarnx/settings/intro_title"));
+    intro_title->setFontSize(20);
+    intro_title->setTextColor(p.text);
+    intro->addView(intro_title);
+    intro->addView(makeMutedLabel(brls::getStr("lunarnx/settings/intro_detail"), 14));
+    root->addView(intro);
+
+    root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/app_section"),
-        brls::getStr("lunarnx/settings/app_section_detail"));
+        brls::getStr("lunarnx/settings/app_section_detail")));
+    auto* app_card = makeUiCard();
+    app_card->setPadding(4, 8, 4, 8);
     std::vector<std::string> language_labels;
     language_labels.reserve(kLanguageCount);
     for (const auto& language : kLanguages) {
@@ -335,26 +364,14 @@ brls::View* StreamSettingsActivity::createContentView() {
                     brls::getStr("lunarnx/settings/language_save_failed"));
             }
         });
-    addFlatRow(app_card, language);
+    app_card->addView(language);
     root->addView(app_card);
 
-    if (scope_ == StreamSettingsScope::Global) {
-        auto* close = new brls::Button();
-        close->setText(brls::getStr("lunarnx/common/done"));
-        stylePrimaryButton(close);
-        close->setMarginTop(28);
-        close->registerClickAction([this](brls::View*) -> bool {
-            closeSettings();
-            return true;
-        });
-        root->addView(close);
-        return makeAppFrame(
-            brls::getStr("lunarnx/common/global_settings"), scroll);
-    }
-
-    auto* video_card = makeFlatSection(
+    root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/video_section"),
-        brls::getStr("lunarnx/settings/video_section_detail"));
+        brls::getStr("lunarnx/settings/video_section_detail")));
+    auto* video_card = makeUiCard();
+    video_card->setPadding(4, 8, 4, 8);
 
     auto* resolution = new brls::SelectorCell();
     resolution->init(brls::getStr("lunarnx/settings/resolution"),
@@ -379,7 +396,7 @@ brls::View* StreamSettingsActivity::createContentView() {
                 settings_.bitrate_kbps = 10000;
             }
         });
-    addFlatRow(video_card, resolution);
+    video_card->addView(resolution);
 
     int backend_index = 0;
     if (settings_.video_backend == stream::VideoBackend::HardwareCopyOut) {
@@ -403,12 +420,14 @@ brls::View* StreamSettingsActivity::createContentView() {
             }
             if (ctrl_) ctrl_->setDefaultVideoBackend(settings_.video_backend);
         });
-    addFlatRow(video_card, decoder);
+    video_card->addView(decoder);
     root->addView(video_card);
 
-    auto* image_card = makeFlatSection(
+    root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/image_section"),
-        brls::getStr("lunarnx/settings/image_section_detail"));
+        brls::getStr("lunarnx/settings/image_section_detail")));
+    auto* image_card = makeUiCard();
+    image_card->setPadding(4, 8, 4, 8);
 
     int post_index = 0;
     if (settings_.post_process_mode == stream::PostProcessMode::Upscale) {
@@ -431,7 +450,7 @@ brls::View* StreamSettingsActivity::createContentView() {
                 settings_.post_process_mode = stream::PostProcessMode::Off;
             }
         });
-    addFlatRow(image_card, post);
+    image_card->addView(post);
 
     auto* dithering = new brls::BooleanCell();
     dithering->init(brls::getStr("lunarnx/settings/dithering"),
@@ -439,12 +458,14 @@ brls::View* StreamSettingsActivity::createContentView() {
         [this](bool enabled) {
             settings_.dithering_enabled = enabled;
         });
-    addFlatRow(image_card, dithering);
+    image_card->addView(dithering);
     root->addView(image_card);
 
-    auto* controller_card = makeFlatSection(
+    root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/controller_section"),
-        brls::getStr("lunarnx/settings/controller_section_detail"));
+        brls::getStr("lunarnx/settings/controller_section_detail")));
+    auto* controller_card = makeUiCard();
+    controller_card->setPadding(4, 8, 4, 8);
 
     auto* vibration = new brls::BooleanCell();
     vibration->init(brls::getStr("lunarnx/settings/vibration"),
@@ -453,7 +474,7 @@ brls::View* StreamSettingsActivity::createContentView() {
             settings_.vibration_enabled = enabled;
             if (ctrl_) ctrl_->setRumbleEnabled(enabled);
         });
-    addFlatRow(controller_card, vibration);
+    controller_card->addView(vibration);
 
     auto* rumble_strength = new brls::SelectorCell();
     rumble_strength->init(brls::getStr("lunarnx/settings/rumble_strength"),
@@ -466,7 +487,7 @@ brls::View* StreamSettingsActivity::createContentView() {
                 ctrl_->setRumbleStrengthPercent(settings_.rumble_strength_percent);
             }
         });
-    addFlatRow(controller_card, rumble_strength);
+    controller_card->addView(rumble_strength);
 
     auto* button_mapping = new brls::DetailCell();
     button_mapping->setText(brls::getStr("lunarnx/settings/button_mapping"));
@@ -477,12 +498,14 @@ brls::View* StreamSettingsActivity::createContentView() {
             input::ButtonMappingProfile::Xbox));
         return true;
     });
-    addFlatRow(controller_card, button_mapping);
+    controller_card->addView(button_mapping);
     root->addView(controller_card);
 
-    auto* cloud_card = makeFlatSection(
+    root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/region_section"),
-        brls::getStr("lunarnx/settings/region_section_detail"));
+        brls::getStr("lunarnx/settings/region_section_detail")));
+    auto* cloud_card = makeUiCard();
+    cloud_card->setPadding(4, 8, 4, 8);
     std::vector<std::string> game_language_labels;
     game_language_labels.reserve(kGameLanguageCount);
     for (const auto& option : kGameLanguages) {
@@ -501,7 +524,7 @@ brls::View* StreamSettingsActivity::createContentView() {
                     settings_.preferred_game_language);
             }
         });
-    addFlatRow(cloud_card, game_language);
+    cloud_card->addView(game_language);
     std::vector<std::string> region_labels;
     region_labels.reserve(kRegionCount);
     for (const auto& region : kRegions) {
@@ -521,7 +544,7 @@ brls::View* StreamSettingsActivity::createContentView() {
                                      ? kRegions[selected].ip
                                      : "(native)");
         });
-    addFlatRow(cloud_card, region);
+    cloud_card->addView(region);
     root->addView(cloud_card);
 
     auto* close = new brls::Button();
@@ -538,7 +561,7 @@ brls::View* StreamSettingsActivity::createContentView() {
     hint->setHeight(34);
     hint->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
     root->addView(hint);
-    return makeAppFrame(brls::getStr("lunarnx/common/xbox_settings"), scroll);
+    return scroll;
 }
 
 void StreamSettingsActivity::closeSettings() {

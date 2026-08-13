@@ -22,13 +22,19 @@ GamepadReader::GamepadReader(ButtonMappingProfile profile) {
 }
 GamepadReader::~GamepadReader() {
 #ifdef __SWITCH__
+    releaseCaptureButton();
     delete static_cast<PadState*>(pad_state_);
 #endif
 }
 
 bool GamepadReader::initialize() {
 #ifdef __SWITCH__
+    releaseCaptureButton();
     reloadButtonMapping();
+    if (mappingUsesCaptureButton(button_mapping_)) {
+        acquireCaptureButtonInput();
+        capture_button_acquired_ = true;
+    }
     initialized_ = false;
     delete static_cast<PadState*>(pad_state_);
     pad_state_ = nullptr;
@@ -56,6 +62,14 @@ void GamepadReader::reloadButtonMapping() {
 #endif
 }
 
+void GamepadReader::releaseCaptureButton() {
+#ifdef __SWITCH__
+    if (!capture_button_acquired_) return;
+    releaseCaptureButtonInput();
+    capture_button_acquired_ = false;
+#endif
+}
+
 GamepadState GamepadReader::read() {
     GamepadState state = {};
 
@@ -63,6 +77,9 @@ GamepadState GamepadReader::read() {
     auto* pad = static_cast<PadState*>(pad_state_);
     padUpdate(pad);
     u64 btns = padGetButtons(pad);
+    if (capture_button_acquired_ && isCaptureButtonPressed()) {
+        btns |= kButtonMappingCapture;
+    }
 
     const bool quick_menu_chord =
         (btns & HidNpadButton_Minus) && (btns & HidNpadButton_Plus);

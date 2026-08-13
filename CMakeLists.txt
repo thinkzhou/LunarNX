@@ -114,6 +114,8 @@ if(PLATFORM_SWITCH)
         src/ui/ps_settings_activity.cpp
         src/ui/ps_registration_activity.cpp
         src/ui/psn_login_activity.cpp
+        src/ps/psn_callback_server.cpp
+        src/auth/xbox_login_server.cpp
         src/ui/stream_view.cpp
         src/ui/perf_overlay.cpp
         lib/stubs/mbedtls_timing.c

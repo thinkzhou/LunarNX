@@ -74,6 +74,9 @@ def main():
     require("kRemoteSessionTokenMarginMs = 10 * 60 * 1000" in auth_manager and
             "nowMilliseconds() + kRemoteSessionTokenMarginMs" in auth_manager,
             "PSN tokens must retain enough lifetime for all remote retry attempts")
+    require("setPsnCredentials" in controller_header and
+            "state_.load() != app::StreamState::Idle" in controller,
+            "refreshed PSN credentials must only be applied before stream startup")
     require("CHIAKI_EVENT_HOLEPUNCH" in session,
             "session must surface Chiaki-owned data-hole progress")
     require("connect_info_.morning" in session and

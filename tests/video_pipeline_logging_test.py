@@ -19,15 +19,15 @@ def main():
             "Video decoder should log decoded AVFrame output")
     require("video decode done" in decoder,
             "Video decoder should log per-packet decoded frame counts")
-    require("av_parser_init(AV_CODEC_ID_H264)" in decoder,
-            "Video decoder should use FFmpeg's H.264 parser before submitting packets")
+    require("AV_CODEC_ID_HEVC" in decoder and "av_parser_init(codec_id)" in decoder,
+            "Video decoder should select the FFmpeg parser for H.264 or HEVC")
     require("PARSER_FLAG_COMPLETE_FRAMES" in decoder,
             "Video decoder should treat RTP-depacketized access units as complete H.264 frames")
-    require("H264 decoder gate opened" in decoder and
-            "drop H264 until SPS/PPS/IDR" in decoder,
-            "Video decoder should wait for SPS/PPS/IDR before feeding FFmpeg")
+    require("decoder gate opened" in decoder and
+            "until parameter sets/random access" in decoder,
+            "Video decoder should wait for codec parameter sets and random access")
     require("kVideoErrorLogLimit" in decoder and
-            "h264_error_log_count_" in decoder,
+            "error_log_count_" in decoder,
             "Video decoder FFmpeg errors should be rate-limited")
     require("NVDEC doesn't need a parser" not in decoder and
             "feed raw NAL units directly" not in decoder,

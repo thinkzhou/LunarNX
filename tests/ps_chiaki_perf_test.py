@@ -7,6 +7,8 @@ def main():
     header = Path("src/ps/ps_stream_session.h").read_text()
     controller = Path("src/ps/ps_stream_controller.cpp").read_text()
     overlay = Path("src/ui/stream_overlay.cpp").read_text()
+    detail = Path("src/ui/perf_overlay.cpp").read_text()
+    runtime = Path("src/ps/ps_stream_controller.h").read_text()
     rtt_patch = Path(
         "tools/chiaki_switch/lunarnx-chiaki-stream-rtt.patch"
     ).read_text()
@@ -29,6 +31,9 @@ def main():
     assert "stream_connection->rtt <= 0.0" in rtt_patch
     assert "transportStats()" in controller
     assert "hud_metrics_ps" in overlay
+    assert "video_codec" in overlay
+    assert "detail_codec" in detail
+    assert "getVideoCodec() const override" in runtime
     print("PS chiaki performance test passed")
 
 

@@ -1,10 +1,14 @@
 #include "button_mapping.h"
 #include "../common.h"
 #include <cJSON.h>
+#include <borealis/core/application.hpp>
+#include <borealis/core/platform.hpp>
+#include <borealis/platforms/switch/switch_input.hpp>
 #include <switch.h>
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <mutex>
 #include <vector>
 
 namespace lunar::input {
@@ -24,7 +28,19 @@ constexpr ButtonName kButtons[] = {
     {HidNpadButton_Minus, "Minus"}, {HidNpadButton_Plus, "Plus"},
     {HidNpadButton_Up, "D-Up"}, {HidNpadButton_Down, "D-Down"},
     {HidNpadButton_Left, "D-Left"}, {HidNpadButton_Right, "D-Right"},
+    {kButtonMappingCapture, "Capture"},
 };
+
+std::mutex g_capture_button_mutex;
+size_t g_capture_button_users = 0;
+brls::ButtonOverrideMode g_previous_capture_button_mode =
+    brls::ButtonOverrideMode::NONE;
+
+brls::SwitchInputManager* switchInputManager() {
+    auto* platform = brls::Application::getPlatform();
+    if (!platform) return nullptr;
+    return static_cast<brls::SwitchInputManager*>(platform->getInputManager());
+}
 
 cJSON* readConfig() {
     FILE* file = std::fopen(lunar::get_config_path(), "rb");
@@ -140,6 +156,38 @@ std::string formatHidButtonMask(uint64_t mask) {
         result += button.name;
     }
     return result.empty() ? "?" : result;
+}
+
+bool mappingUsesCaptureButton(const ButtonMapping& mapping) {
+    return std::any_of(mapping.begin(), mapping.end(), [](uint64_t mask) {
+        return (mask & kButtonMappingCapture) != 0;
+    });
+}
+
+void acquireCaptureButtonInput() {
+    std::lock_guard<std::mutex> lock(g_capture_button_mutex);
+    auto* input = switchInputManager();
+    if (!input) return;
+    if (g_capture_button_users++ == 0) {
+        g_previous_capture_button_mode = input->screenshotButtonOverrideMode();
+        appletSetRequiresCaptureButtonShortPressedMessage(true);
+        input->setScreenshotButtonOverrideMode(brls::ButtonOverrideMode::CUSTOM_EVENT);
+    }
+}
+
+void releaseCaptureButtonInput() {
+    std::lock_guard<std::mutex> lock(g_capture_button_mutex);
+    if (g_capture_button_users == 0) return;
+    if (--g_capture_button_users != 0) return;
+    auto* input = switchInputManager();
+    if (!input) return;
+    input->setScreenshotButtonOverrideMode(g_previous_capture_button_mode);
+    appletSetRequiresCaptureButtonShortPressedMessage(false);
+}
+
+bool isCaptureButtonPressed() {
+    auto* input = switchInputManager();
+    return input && input->isScreenshotButtonPressed();
 }
 
 } // namespace lunar::input

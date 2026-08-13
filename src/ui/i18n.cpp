@@ -99,6 +99,10 @@ std::string getConfiguredLanguage() {
     return isSupportedLanguage(language) ? language : "auto";
 }
 
+std::string getResolvedAppLocale() {
+    return resolveNoticeLocale(getConfiguredLanguage());
+}
+
 bool saveConfiguredLanguage(const std::string& language) {
     if (!isSupportedLanguage(language)) return false;
 

@@ -23,7 +23,8 @@ StreamOverlay::StreamOverlay(const stream::PerfStats* perf, app::StreamPlatform 
     this->addView(metrics_label_);
 }
 
-void StreamOverlay::update(float fps, const std::string& resolution) {
+void StreamOverlay::update(float fps, const std::string& resolution,
+                           const std::string& video_codec) {
     if (!metrics_label_ || !perf_) return;
 
     const auto now = std::chrono::steady_clock::now();
@@ -117,7 +118,7 @@ void StreamOverlay::update(float fps, const std::string& resolution) {
         metrics_label_->setText(brls::getStr(
             "lunarnx/perf/hud_metrics_ps",
             resolution, rtt_ms, bitrate_mbps_, packet_loss_pct, fps,
-            decode_ms_, ps_frames_lost));
+            decode_ms_, ps_frames_lost, video_codec));
         return;
     }
 

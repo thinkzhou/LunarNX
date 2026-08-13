@@ -1096,6 +1096,7 @@ void XboxStreamSession::cleanupResources(bool delete_session) {
     lunar::diagnosticLog("xbox-stream", "cleanup media shutdown done");
     lunar::diagnosticLog("xbox-stream", "cleanup rumble stop begin");
     rumble_.stop();
+    gamepad_.releaseCaptureButton();
     lunar::diagnosticLog("xbox-stream", "cleanup rumble stop done");
     lunar::cloud1080CrashProbeLog(
         "crash-probe", "DEBUG-c1080 phase=session-cleanup normal=1");

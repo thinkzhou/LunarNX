@@ -8,6 +8,7 @@
 #include "../diagnostics.h"
 #include "../platform/network_worker.h"
 #include <chrono>
+#include <algorithm>
 #include <cstring>
 #include <thread>
 
@@ -28,7 +29,8 @@ void PsStreamController::releasePendingRemoteResult() {
 PsStreamController::PsStreamController(const PsConsole& console,
                                         const std::string& psn_access_token,
                                         const std::string& psn_account_id,
-                                        int width, int height, int fps, int bitrate_kbps)
+                                        int width, int height, int fps, int bitrate_kbps,
+                                        stream::VideoCodec video_codec)
     : console_(console)
     , psn_access_token_(psn_access_token)
     , psn_account_id_(psn_account_id)
@@ -36,6 +38,8 @@ PsStreamController::PsStreamController(const PsConsole& console,
     , height_(height)
     , fps_(fps)
     , bitrate_kbps_(bitrate_kbps)
+    , video_codec_(console.target >= 1000000
+          ? video_codec : stream::VideoCodec::H264)
     , video_backend_(stream::VideoBackend::HardwareZeroCopy) {}
 
 PsStreamController::~PsStreamController() {
@@ -43,6 +47,31 @@ PsStreamController::~PsStreamController() {
     stopStream(false);
     std::unique_lock<std::shared_mutex> lock(stream_operation_mutex_);
     media_.reset();
+}
+
+void PsStreamController::setRumbleEnabled(bool enabled) {
+    rumble_enabled_ = enabled;
+    if (rumble_) rumble_->setEnabled(enabled);
+}
+
+void PsStreamController::setRumbleStrengthPercent(int percent) {
+    percent = std::clamp(percent, 0, 100);
+    rumble_strength_percent_ = percent;
+    if (rumble_) rumble_->setStrengthPercent(percent);
+}
+
+bool PsStreamController::setPsnCredentials(std::string access_token,
+                                            std::string account_id) {
+    std::unique_lock<std::shared_mutex> operation_lock(stream_operation_mutex_);
+    if (state_.load() != app::StreamState::Idle) return false;
+    psn_access_token_ = std::move(access_token);
+    psn_account_id_ = std::move(account_id);
+    return true;
+}
+
+void PsStreamController::setInputSuppressed(bool suppressed) {
+    input_suppressed_ = suppressed;
+    if (suppressed && rumble_) rumble_->stop();
 }
 
 bool PsStreamController::startStream() {
@@ -59,6 +88,9 @@ bool PsStreamController::startStream() {
     lunar::startDropDiagnosticWriter();
 
     const bool mock_replay = psMockReplayEnabled();
+    diagnosticLog("ps-controller", "video codec=%s target_ps5=%d",
+                  stream::videoCodecName(video_codec_),
+                  console_.target >= 1000000 ? 1 : 0);
     bool has_token = !psn_access_token_.empty();
     ResolvedRoute route;
     if (mock_replay) {
@@ -152,8 +184,15 @@ bool PsStreamController::startStream() {
     media_ = std::make_unique<stream::MediaPipeline>(*stream_backend_);
     gamepad_ = std::make_unique<input::GamepadReader>(
         input::ButtonMappingProfile::PlayStation);
+    rumble_ = std::make_unique<input::RumbleController>();
     input_mapper_ = std::make_unique<PsInputMapper>();
+    touchpad_reader_ = std::make_unique<PsTouchpadReader>(console_.target >= 1000000);
     if (gamepad_) gamepad_->initialize();
+    if (rumble_) {
+        rumble_->setEnabled(rumble_enabled_.load());
+        rumble_->setStrengthPercent(rumble_strength_percent_.load());
+        rumble_->initialize();
+    }
 
     uint8_t regist_key[0x10]{};
     uint8_t morning[0x10]{};
@@ -174,12 +213,21 @@ bool PsStreamController::startStream() {
         setState(app::StreamState::Streaming, "Video ready");
     });
     bridge_ = std::make_unique<PsMediaBridge>(*media_, mock_replay ? 30 : fps_);
+    bridge_->setRumbleForwarder([this](uint8_t left, uint8_t right) {
+        if (!rumble_ || input_suppressed_.load() ||
+            state_.load() != app::StreamState::Streaming) return;
+        rumble_->setRumble(0,
+            static_cast<float>(left) / 255.0f,
+            static_cast<float>(right) / 255.0f,
+            0.0f, 0.0f, 30, 0, 0);
+    });
     if (mock_replay) {
-        mock_session_ = std::make_unique<PsMockReplaySession>(*bridge_, fps_);
+        mock_session_ = std::make_unique<PsMockReplaySession>(
+            *bridge_, fps_, video_codec_);
     } else {
         session_ = std::make_unique<PsStreamSession>(
             host_addr, regist_key, morning, console_.target,
-            width_, height_, fps_, bitrate_kbps_, *bridge_);
+            width_, height_, fps_, bitrate_kbps_, video_codec_, *bridge_);
     }
 
     PsSessionCallbacks callbacks;
@@ -245,6 +293,7 @@ bool PsStreamController::startStream() {
     // Now initialize the media pipeline (NVDEC, audio) while the session
     // thread already runs regist/request on the CTRL channel in parallel.
     stream::MediaPipelineOptions media_opts;
+    media_opts.video_codec = video_codec_;
     media_opts.hold_non_target_startup_frames = true;
     media_opts.video_backend = video_backend_;
     if (!media_->initialize(width_, height_, &perf_, media_opts)) {
@@ -397,10 +446,14 @@ void PsStreamController::stopStream(bool set_disconnected) {
         media_->shutdown();
         diagnosticLog("ps-controller", "media pipeline stopped");
     }
+    if (rumble_) rumble_->stop();
+    if (gamepad_) gamepad_->releaseCaptureButton();
     lunar::stopDropDiagnosticWriter();
     ps_button_requested_ = false;
     ps_button_pulse_frames_remaining_ = 0;
     ps_button_release_pending_ = false;
+    if (touchpad_reader_) touchpad_reader_->reset();
+    if (input_mapper_) input_mapper_->reset();
     if (set_disconnected) setState(app::StreamState::Disconnected, "Stopped");
     diagnosticLog("ps-controller", "stop stream complete");
 }
@@ -422,6 +475,10 @@ void PsStreamController::update() {
     }
 
     auto state = gamepad_->read();
+    const bool input_suppressed = input_suppressed_.load();
+    PsTouchpadState touchpad = touchpad_reader_
+        ? touchpad_reader_->read(input_suppressed)
+        : PsTouchpadState{};
     if (ps_button_requested_.exchange(false)) {
         ps_button_pulse_frames_remaining_ = kPsButtonPulseFrames;
         ps_button_release_pending_ = true;
@@ -435,11 +492,11 @@ void PsStreamController::update() {
     } else if (ps_button_release_pending_) {
         state = {};
         ps_button_release_pending_ = false;
-    } else if (input_suppressed_.load()) {
+    } else if (input_suppressed) {
         state = {};
     }
 
-    ChiakiControllerState cs = input_mapper_->map(state);
+    ChiakiControllerState cs = input_mapper_->map(state, touchpad);
     if (mock_session_) mock_session_->setControllerState(cs);
     else session_->setControllerState(cs);
     perf_.recordInputPacket();
@@ -462,6 +519,7 @@ void PsStreamController::update() {
     if (media_ && media_->hasVideoRecoveryRequest()) {
         if (requestRecoveryIDR()) media_->clearVideoRecoveryRequest();
     }
+    if (rumble_) rumble_->update();
 }
 
 void PsStreamController::presentVideoFrame() {
@@ -471,6 +529,10 @@ void PsStreamController::presentVideoFrame() {
 
 void PsStreamController::setState(app::StreamState s, const std::string& info) {
     state_.store(s);
+    if ((s == app::StreamState::Error ||
+         s == app::StreamState::Disconnected) && rumble_) {
+        rumble_->stop();
+    }
     if (s == app::StreamState::Error && !info.empty()) last_error_ = info;
     LaunchCallback callback;
     {

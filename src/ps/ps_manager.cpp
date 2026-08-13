@@ -7,6 +7,8 @@
 #include "../common.h"
 #include "../diagnostics.h"
 #include <borealis.hpp>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
 
 namespace lunar::ps {
@@ -41,7 +43,15 @@ std::vector<PsConsole> PsManager::getDiscoveredHosts() const {
 }
 
 bool PsManager::fetchPsnDevices(HostListCallback cb) {
-    if (!psn_auth_.ensureValidToken()) return false;
+    bool token_refreshed = false;
+    if (!psn_auth_.ensureValidToken({}, &token_refreshed)) {
+        psn_device_error_ = psn_auth_.getAuthError();
+        return false;
+    }
+    if (token_refreshed && !psn_auth_.saveToken(get_psn_token_path())) {
+        psn_device_error_ = "PSN session refreshed but could not be saved";
+        return false;
+    }
 
     std::string error;
     bool ok = repository_->fetchPsnDevices(
@@ -49,8 +59,12 @@ bool PsManager::fetchPsnDevices(HostListCallback cb) {
     if (!ok && repository_->getLastPsnStatusCode() == 401) {
         diagnosticLog("ps-manager", "PSN device token rejected; refreshing and retrying");
         if (psn_auth_.refreshToken()) {
-            ok = repository_->fetchPsnDevices(
-                psn_auth_.getAccessToken(), std::move(cb), &error);
+            if (!psn_auth_.saveToken(get_psn_token_path())) {
+                error = "PSN session refreshed but could not be saved";
+            } else {
+                ok = repository_->fetchPsnDevices(
+                    psn_auth_.getAccessToken(), std::move(cb), &error);
+            }
         } else {
             error = psn_auth_.getAuthError();
         }
@@ -61,7 +75,6 @@ bool PsManager::fetchPsnDevices(HostListCallback cb) {
         return false;
     }
 
-    psn_auth_.saveToken(get_psn_token_path());
     psn_device_error_.clear();
     return true;
 }
@@ -147,8 +160,25 @@ void PsManager::wakeupHost(const std::string& host_addr, const std::string& host
         return;
     }
 
-    uint64_t user_credential = 0;
-    std::memcpy(&user_credential, cred->rp_regist_key, sizeof(user_credential));
+    const size_t key_length = strnlen(
+        reinterpret_cast<const char*>(cred->rp_regist_key),
+        sizeof(cred->rp_regist_key));
+    if (key_length == 0 || key_length > 8) {
+        cb(false, "Invalid registration key");
+        return;
+    }
+    char key_text[9]{};
+    std::memcpy(key_text, cred->rp_regist_key, key_length);
+    char* key_end = nullptr;
+    errno = 0;
+    const unsigned long long parsed = std::strtoull(key_text, &key_end, 16);
+    if (errno != 0 || key_end != key_text + key_length) {
+        cb(false, "Invalid registration key");
+        return;
+    }
+    const uint64_t user_credential = static_cast<uint64_t>(parsed);
+    diagnosticLog("ps-manager", "wakeup target=%s platform=%s key_chars=%zu",
+                  host_addr.c_str(), is_ps5 ? "ps5" : "ps4", key_length);
 
     ChiakiDiscovery discovery{};
     ChiakiErrorCode err = chiaki_discovery_init(&discovery, &chiaki_log_, AF_INET);
@@ -162,7 +192,7 @@ void PsManager::wakeupHost(const std::string& host_addr, const std::string& host
     chiaki_discovery_fini(&discovery);
 
     if (err == CHIAKI_ERR_SUCCESS) cb(true, "");
-    else cb(false, "Wakeup failed");
+    else cb(false, chiaki_error_string(err));
 }
 
 ResolvedRoute PsManager::resolveRoute(const PsConsole& console) const {

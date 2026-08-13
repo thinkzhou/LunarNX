@@ -15,7 +15,8 @@ bool psMockReplayEnabled();
 
 class PsMockReplaySession {
 public:
-    PsMockReplaySession(PsMediaBridge& bridge, int fps);
+    PsMockReplaySession(PsMediaBridge& bridge, int fps,
+                        stream::VideoCodec video_codec);
     ~PsMockReplaySession();
 
     PsMockReplaySession(const PsMockReplaySession&) = delete;
@@ -32,6 +33,7 @@ private:
 
     PsMediaBridge& bridge_;
     int fps_;
+    stream::VideoCodec video_codec_;
     PsSessionCallbacks callbacks_;
     ChiakiLog log_{};
     std::atomic<bool> running_{false};

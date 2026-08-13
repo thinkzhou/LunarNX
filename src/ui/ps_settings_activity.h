@@ -2,6 +2,7 @@
 #ifdef __SWITCH__
 
 #include <borealis.hpp>
+#include "../stream/video_codec.h"
 #include <functional>
 
 namespace lunar::ui {
@@ -10,6 +11,7 @@ struct PsSettingsSnapshot {
     int width = 1280;
     int height = 720;
     int bitrate_kbps = 10000;
+    stream::VideoCodec video_codec = stream::VideoCodec::H264;
 };
 
 PsSettingsSnapshot loadPsSettings();

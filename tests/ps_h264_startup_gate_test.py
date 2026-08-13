@@ -19,13 +19,13 @@ hardware_start = decoder.index("#ifdef __SWITCH__", decode_start)
 decode_gate = decoder[decode_start:hardware_start]
 require("if (!au.has_vcl)" in decode_gate and
         decode_gate.index("if (!au.has_vcl)") <
-        decode_gate.index("if (!h264_decoder_ready_)") and
-        "h264_parameter_sets_" in decode_gate,
-        "parameter-set/metadata-only H.264 AUs must be consumed before the "
+        decode_gate.index("if (!decoder_ready_)") and
+        "parameter_sets_" in decode_gate,
+        "parameter-set/metadata-only video AUs must be consumed before the "
         "decoder gate, cached, and never submitted to NVDEC")
-require("h264_parameter_sets_pending_" in decoder and
+require("parameter_sets_pending_" in decoder and
         "startup_access_unit" in decoder,
-        "cached SPS/PPS must be prepended to the first VCL access unit")
+        "cached codec parameter sets must be prepended to the first VCL access unit")
 
 require("last_recovery_request_" in controller and
         "requestRecoveryIDR" in controller and

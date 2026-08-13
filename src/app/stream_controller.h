@@ -90,6 +90,9 @@ public:
     std::string getPreferredGameLanguage() const;
     void setDefaultVideoBackend(stream::VideoBackend backend);
     stream::VideoBackend getDefaultVideoBackend() const override;
+    stream::VideoCodec getVideoCodec() const override {
+        return stream::VideoCodec::H264;
+    }
     StreamPlatform getStreamPlatform() const override { return StreamPlatform::Xbox; }
     void setRumbleEnabled(bool enabled);
     bool getRumbleEnabled() const { return rumble_enabled_.load(); }

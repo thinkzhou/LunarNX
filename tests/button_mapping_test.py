@@ -50,15 +50,20 @@ require("waiting_for_release_ = true" in activity and
         "peak_buttons_ |= buttons" in activity and
         "kCaptureReleaseFrames" in activity,
         "capture must wait for release and retain the peak button combination")
-require("cancelCapture();" in activity and
-        "capturing_ = false" in activity and
-        "mapping_content_->setVisibility(brls::Visibility::VISIBLE)" in activity,
-        "B must cancel capture and return to the mapping list")
 require("hasConflict" in activity and '"lunarnx/button_mapping/conflict"' in activity,
         "duplicate mappings must be visibly marked")
 require("HidNpadButton_Minus | HidNpadButton_Plus" in activity and
         '"lunarnx/button_mapping/reserved_chord"' in activity,
         "the reserved quick-menu chord must not be saved as a mapping")
+require("kButtonMappingCapture" in header and
+        "isCaptureButtonPressed()" in activity and
+        "acquireCaptureButtonInput()" in activity and
+        "releaseCaptureButtonInput()" in activity,
+        "the mapping screen must capture and release the Switch screenshot button")
+require("mappingUsesCaptureButton" in reader and
+        "btns |= kButtonMappingCapture" in reader and
+        "releaseCaptureButton()" in reader,
+        "configured screenshot mappings must feed streams and restore system input")
 require("defaultButtonMapping(profile_)" in activity and "reset_all" in activity,
         "the mapping screen must reset all mappings to defaults")
 require("src/input/button_mapping.cpp" in switch_makefile and

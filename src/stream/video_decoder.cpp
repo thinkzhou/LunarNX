@@ -31,7 +31,7 @@ namespace {
 
 constexpr int kVideoDecodeLogLimit = LUNARNX_VIDEO_DECODE_LOG_LIMIT;
 constexpr int kVideoErrorLogLimit = LUNARNX_VIDEO_ERROR_LOG_LIMIT;
-constexpr int kH264WaitLogLimit = 16;
+constexpr int kVideoWaitLogLimit = 16;
 std::atomic<int> g_video_decode_logs{0};
 std::atomic<int> g_video_transfer_logs{0};
 
@@ -86,22 +86,13 @@ void logSoftwareAllocationProbe(const AVCodec* codec) {
 #endif
 }
 
-struct H264AccessUnitInfo {
-    bool has_sps = false;
-    bool has_pps = false;
-    bool has_idr = false;
-    bool has_vcl = false;
-    int nal_count = 0;
-    std::string nal_types;
-};
-
 void logDecodeDrop(PerfStats* perf,
                    const char* reason,
                    int error_code,
                    uint32_t error_flags,
                    uint64_t timestamp,
                    size_t access_unit_bytes,
-                   const H264AccessUnitInfo* au = nullptr,
+                   const VideoAccessUnitInfo* au = nullptr,
                    int width = 0,
                    int height = 0) {
     if (perf) {
@@ -115,7 +106,7 @@ void logDecodeDrop(PerfStats* perf,
             width,
             height,
             au && !au->nal_types.empty() ? au->nal_types.c_str() : nullptr,
-            au && au->has_idr);
+            au && au->has_random_access);
         return;
     }
     lunar::dropDiagnosticLog("video-drop",
@@ -130,73 +121,6 @@ void logDecodeDrop(PerfStats* perf,
                              height);
 }
 
-bool findStartCode(const uint8_t* data,
-                   size_t len,
-                   size_t from,
-                   size_t& pos,
-                   size_t& code_size) {
-    for (size_t i = from; i + 3 <= len; ++i) {
-        if (data[i] != 0x00 || data[i + 1] != 0x00) continue;
-        if (data[i + 2] == 0x01) {
-            pos = i;
-            code_size = 3;
-            return true;
-        }
-        if (i + 4 <= len && data[i + 2] == 0x00 && data[i + 3] == 0x01) {
-            pos = i;
-            code_size = 4;
-            return true;
-        }
-    }
-    return false;
-}
-
-void appendNalType(std::string& out, uint8_t type) {
-    if (out.size() > 96) return;
-    if (!out.empty()) out.push_back(',');
-    char buf[8] = {};
-    std::snprintf(buf, sizeof(buf), "%u", type);
-    out += buf;
-}
-
-H264AccessUnitInfo inspectH264AccessUnit(const uint8_t* data, size_t len) {
-    H264AccessUnitInfo info;
-    if (!data || len == 0) return info;
-
-    size_t pos = 0;
-    size_t code_size = 0;
-    if (!findStartCode(data, len, 0, pos, code_size)) {
-        const uint8_t type = data[0] & 0x1f;
-        info.nal_count = 1;
-        info.has_sps = type == 7;
-        info.has_pps = type == 8;
-        info.has_idr = type == 5;
-        info.has_vcl = type >= 1 && type <= 5;
-        appendNalType(info.nal_types, type);
-        return info;
-    }
-
-    while (pos < len) {
-        const size_t nalu_start = pos + code_size;
-        size_t next = len;
-        size_t next_code_size = 0;
-        findStartCode(data, len, nalu_start, next, next_code_size);
-        if (nalu_start < next && nalu_start < len) {
-            const uint8_t type = data[nalu_start] & 0x1f;
-            info.nal_count++;
-            info.has_sps = info.has_sps || type == 7;
-            info.has_pps = info.has_pps || type == 8;
-            info.has_idr = info.has_idr || type == 5;
-            info.has_vcl = info.has_vcl || (type >= 1 && type <= 5);
-            appendNalType(info.nal_types, type);
-        }
-        if (next >= len) break;
-        pos = next;
-        code_size = next_code_size;
-    }
-    return info;
-}
-
 } // namespace
 
 VideoDecoder::VideoDecoder() = default;
@@ -205,13 +129,17 @@ VideoDecoder::~VideoDecoder() { shutdown(); }
 bool VideoDecoder::initialize(int width, int height) {
     g_video_decode_logs = 0;
     g_video_transfer_logs = 0;
-    h264_decoder_ready_ = false;
-    h264_seen_sps_ = false;
-    h264_seen_pps_ = false;
-    h264_parameter_sets_.clear();
-    h264_parameter_sets_pending_ = false;
-    h264_wait_log_count_ = 0;
-    h264_error_log_count_ = 0;
+    decoder_ready_ = false;
+    seen_vps_ = false;
+    seen_sps_ = false;
+    seen_pps_ = false;
+    parameter_sets_.clear();
+    parameter_sets_pending_ = false;
+    wait_log_count_ = 0;
+    error_log_count_ = 0;
+    const AVCodecID codec_id = video_codec_ == VideoCodec::HEVC
+        ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
+    const char* codec_name = videoCodecName(video_codec_);
 #ifdef __SWITCH__
     if (usesHardwareDecode(video_backend_)) {
     // =========================================================================
@@ -230,15 +158,14 @@ bool VideoDecoder::initialize(int width, int height) {
     }
     lunar::diagnosticLog("video", "NVDEC hwdevice_ctx_create done");
 
-    // Find H.264 decoder
-    lunar::diagnosticLog("video", "avcodec_find_decoder H264 begin");
-    const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+    lunar::diagnosticLog("video", "avcodec_find_decoder %s begin", codec_name);
+    const AVCodec* codec = avcodec_find_decoder(codec_id);
     if (!codec) {
-        fprintf(stderr, "[video] H.264 decoder not found\n");
-        lunar::diagnosticLog("video", "H264 decoder not found");
+        fprintf(stderr, "[video] %s decoder not found\n", codec_name);
+        lunar::diagnosticLog("video", "%s decoder not found", codec_name);
         return false;
     }
-    lunar::diagnosticLog("video", "avcodec_find_decoder H264 done");
+    lunar::diagnosticLog("video", "avcodec_find_decoder %s done", codec_name);
 
     lunar::diagnosticLog("video", "avcodec_alloc_context3 begin");
     AVCodecContext* ctx = avcodec_alloc_context3(codec);
@@ -276,7 +203,7 @@ bool VideoDecoder::initialize(int width, int height) {
     }
     lunar::diagnosticLog("video", "avcodec_open2 NVDEC done");
 
-    AVCodecParserContext* parser = av_parser_init(AV_CODEC_ID_H264);
+    AVCodecParserContext* parser = av_parser_init(codec_id);
     if (!parser) {
         fprintf(stderr, "[video] av_parser_init failed\n");
         lunar::diagnosticLog("video", "av_parser_init failed");
@@ -284,14 +211,15 @@ bool VideoDecoder::initialize(int width, int height) {
         return false;
     }
     parser->flags |= PARSER_FLAG_COMPLETE_FRAMES;
-    lunar::diagnosticLog("video", "av_parser_init H264 done");
+    lunar::diagnosticLog("video", "av_parser_init %s done", codec_name);
 
     codec_ctx_ = ctx;
     parser_ = parser;
     initialized_ = true;
 
-    fprintf(stderr, "[video] NVDEC H.264 decoder initialized, %dx%d\n", width, height);
-    lunar::diagnosticLog("video", "NVDEC H264 decoder initialized width=%d height=%d extra_hw=%d",
+    fprintf(stderr, "[video] NVDEC %s decoder initialized, %dx%d\n", codec_name, width, height);
+    lunar::diagnosticLog("video", "NVDEC %s decoder initialized width=%d height=%d extra_hw=%d",
+                         codec_name,
                          width,
                          height,
                          ctx->extra_hw_frames);
@@ -301,13 +229,13 @@ bool VideoDecoder::initialize(int width, int height) {
     video_backend_ = VideoBackend::Software;
 #endif
     // =========================================================================
-    // Software H.264 decoding. Used by desktop and by Switch when selected for
+    // Software decoding. Used by desktop and by Switch when selected for
     // simulator/debug playback.
     // =========================================================================
-    const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+    const AVCodec* codec = avcodec_find_decoder(codec_id);
     if (!codec) {
-        fprintf(stderr, "[video] H.264 decoder not found\n");
-        lunar::diagnosticLog("video", "software H264 decoder not found");
+        fprintf(stderr, "[video] %s decoder not found\n", codec_name);
+        lunar::diagnosticLog("video", "software %s decoder not found", codec_name);
         return false;
     }
     logSoftwareAllocationProbe(codec);
@@ -327,12 +255,12 @@ bool VideoDecoder::initialize(int width, int height) {
     if (open_ret < 0) {
         fprintf(stderr, "[video] avcodec_open2 failed\n");
         logVideoDecodeError("software avcodec_open2 failed", open_ret,
-                            h264_error_log_count_);
+                            error_log_count_);
         avcodec_free_context(&ctx);
         return false;
     }
 
-    AVCodecParserContext* parser = av_parser_init(AV_CODEC_ID_H264);
+    AVCodecParserContext* parser = av_parser_init(codec_id);
     if (!parser) {
         fprintf(stderr, "[video] av_parser_init failed\n");
         lunar::diagnosticLog("video", "software av_parser_init failed");
@@ -345,10 +273,11 @@ bool VideoDecoder::initialize(int width, int height) {
     parser_ = parser;
     initialized_ = true;
 
-    fprintf(stderr, "[video] Software H.264 decoder initialized, %dx%d (%d threads)\n",
-            width, height, ctx->thread_count);
+    fprintf(stderr, "[video] Software %s decoder initialized, %dx%d (%d threads)\n",
+            codec_name, width, height, ctx->thread_count);
     lunar::diagnosticLog("video",
-                         "Software H264 decoder initialized width=%d height=%d threads=%d",
+                         "Software %s decoder initialized width=%d height=%d threads=%d",
+                         codec_name,
                          width,
                          height,
                          ctx->thread_count);
@@ -405,7 +334,7 @@ bool VideoDecoder::deliverFrame(AVFrame* frame,
                           timestamp, 0, nullptr, frame->width, frame->height);
             logVideoDecodeError("NVDEC av_hwframe_transfer_data failed",
                                 transfer_ret,
-                                h264_error_log_count_);
+                                error_log_count_);
             av_frame_free(&sw_frame);
             av_frame_free(&frame);
             return false;
@@ -489,107 +418,121 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
     const int log_index = g_video_decode_logs.fetch_add(1);
     const uint64_t probe_frame_index = static_cast<uint64_t>(log_index) + 1;
     const bool log = shouldLogVideoDecode(log_index);
-    const auto au = inspectH264AccessUnit(data, len);
+    const auto au = inspectVideoAccessUnit(video_codec_, data, len);
+    const char* codec_name = videoCodecName(video_codec_);
     if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
         lunar::cloud1080CrashProbeLog(
             "crash-probe",
             "DEBUG-c1080 phase=decode-begin au=%llu bytes=%zu pts_ns=%llu "
-            "nal=%s sps=%d pps=%d idr=%d ready=%d",
+            "codec=%s nal=%s vps=%d sps=%d pps=%d random_access=%d ready=%d",
             static_cast<unsigned long long>(probe_frame_index),
             len,
             static_cast<unsigned long long>(timestamp),
+            codec_name,
             au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+            au.has_vps ? 1 : 0,
             au.has_sps ? 1 : 0,
             au.has_pps ? 1 : 0,
-            au.has_idr ? 1 : 0,
-            h264_decoder_ready_ ? 1 : 0);
+            au.has_random_access ? 1 : 0,
+            decoder_ready_ ? 1 : 0);
     }
     if (perf_) {
         perf_->recordVideoAccessUnit(
             len,
             timestamp,
             perf_->lastVideoAccessUnitQueueAgeUs(),
-            au.has_idr);
+            au.has_random_access);
     }
     if (log) {
         lunar::diagnosticLog("video",
-                             "video decode begin index=%d len=%zu ts=%llu nal=%s sps=%d pps=%d idr=%d ready=%d",
+                             "video decode begin index=%d codec=%s len=%zu ts=%llu nal=%s vps=%d sps=%d pps=%d random_access=%d ready=%d",
                              log_index,
+                             codec_name,
                              len,
                              static_cast<unsigned long long>(timestamp),
                              au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+                             au.has_vps ? 1 : 0,
                              au.has_sps ? 1 : 0,
                              au.has_pps ? 1 : 0,
-                             au.has_idr ? 1 : 0,
-                             h264_decoder_ready_ ? 1 : 0);
+                             au.has_random_access ? 1 : 0,
+                             decoder_ready_ ? 1 : 0);
     }
 
-    h264_seen_sps_ = h264_seen_sps_ || au.has_sps;
-    h264_seen_pps_ = h264_seen_pps_ || au.has_pps;
-    // Chiaki reports the PS5's initial SPS/PPS as a standalone access unit.
+    seen_vps_ = seen_vps_ || au.has_vps;
+    seen_sps_ = seen_sps_ || au.has_sps;
+    seen_pps_ = seen_pps_ || au.has_pps;
+    // Chiaki can report initial parameter sets as a standalone access unit.
     // NVDEC rejects parameter-set-only packets, so retain them and prepend
     // them to the next VCL access unit instead of treating this as a decode
     // failure. The same path handles standalone parameter-set updates.
     if (!au.has_vcl) {
-        constexpr size_t kMaxH264ParameterSetBytes = 64 * 1024;
-        if (au.has_sps) h264_parameter_sets_.clear();
-        if (au.has_sps || au.has_pps) {
-            if (len <= kMaxH264ParameterSetBytes &&
-                h264_parameter_sets_.size() <=
-                    kMaxH264ParameterSetBytes - len) {
-                h264_parameter_sets_.insert(h264_parameter_sets_.end(),
+        constexpr size_t kMaxParameterSetBytes = 64 * 1024;
+        if (au.has_vps || au.has_sps) parameter_sets_.clear();
+        if (au.hasParameterSets()) {
+            if (len <= kMaxParameterSetBytes &&
+                parameter_sets_.size() <=
+                    kMaxParameterSetBytes - len) {
+                parameter_sets_.insert(parameter_sets_.end(),
                                             data, data + len);
-                h264_parameter_sets_pending_ = true;
+                parameter_sets_pending_ = true;
             } else {
-                h264_parameter_sets_.clear();
-                h264_parameter_sets_pending_ = false;
+                parameter_sets_.clear();
+                parameter_sets_pending_ = false;
                 lunar::diagnosticLog(
-                    "video", "discard oversized H264 parameter sets len=%zu", len);
+                    "video", "discard oversized %s parameter sets len=%zu",
+                    codec_name, len);
             }
         }
         if (log) {
             lunar::diagnosticLog(
-                "video", "consume H264 non-VCL access unit nal=%s len=%zu cached=%zu",
+                "video", "consume %s non-VCL access unit nal=%s len=%zu cached=%zu",
+                codec_name,
                 au.nal_types.empty() ? "-" : au.nal_types.c_str(),
-                len, h264_parameter_sets_.size());
+                len, parameter_sets_.size());
         }
         return true;
     }
 
-    if (!h264_decoder_ready_) {
-        if (h264_seen_sps_ && h264_seen_pps_ && au.has_idr) {
-            h264_decoder_ready_ = true;
+    if (!decoder_ready_) {
+        const bool have_parameter_sets = seen_sps_ && seen_pps_ &&
+            (video_codec_ != VideoCodec::HEVC || seen_vps_);
+        if (have_parameter_sets && au.has_random_access) {
+            decoder_ready_ = true;
             lunar::diagnosticLog("video",
-                                 "H264 decoder gate opened nal=%s len=%zu",
+                                 "%s decoder gate opened nal=%s len=%zu",
+                                 codec_name,
                                  au.nal_types.empty() ? "-" : au.nal_types.c_str(),
                                  len);
         } else if (au.has_vcl) {
-            if (h264_wait_log_count_++ < kH264WaitLogLimit) {
+            if (wait_log_count_++ < kVideoWaitLogLimit) {
                 lunar::diagnosticLog("video",
-                                     "drop H264 until SPS/PPS/IDR nal=%s len=%zu sps=%d pps=%d idr=%d",
+                                     "drop %s until parameter sets/random access nal=%s len=%zu vps=%d sps=%d pps=%d random_access=%d",
+                                     codec_name,
                                      au.nal_types.empty() ? "-" : au.nal_types.c_str(),
                                      len,
-                                     h264_seen_sps_ ? 1 : 0,
-                                     h264_seen_pps_ ? 1 : 0,
-                                     au.has_idr ? 1 : 0);
+                                     seen_vps_ ? 1 : 0,
+                                     seen_sps_ ? 1 : 0,
+                                     seen_pps_ ? 1 : 0,
+                                     au.has_random_access ? 1 : 0);
             }
             return true;
         }
     }
 
     std::vector<uint8_t> startup_access_unit;
-    if (h264_parameter_sets_pending_ && !h264_parameter_sets_.empty()) {
-        startup_access_unit.reserve(h264_parameter_sets_.size() + len);
+    if (parameter_sets_pending_ && !parameter_sets_.empty()) {
+        startup_access_unit.reserve(parameter_sets_.size() + len);
         startup_access_unit.insert(startup_access_unit.end(),
-                                   h264_parameter_sets_.begin(),
-                                   h264_parameter_sets_.end());
+                                   parameter_sets_.begin(),
+                                   parameter_sets_.end());
         startup_access_unit.insert(startup_access_unit.end(), data, data + len);
         data = startup_access_unit.data();
         len = startup_access_unit.size();
-        h264_parameter_sets_pending_ = false;
+        parameter_sets_pending_ = false;
         lunar::diagnosticLog("video",
-                             "prepended cached H264 parameter sets bytes=%zu total=%zu",
-                             h264_parameter_sets_.size(), len);
+                             "prepended cached %s parameter sets bytes=%zu total=%zu",
+                             codec_name,
+                             parameter_sets_.size(), len);
     }
 
 #ifdef __SWITCH__
@@ -609,12 +552,12 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                           timestamp, len, &au, ctx->width, ctx->height);
             logVideoDecodeError("hardware av_new_packet failed",
                                 packet_ret,
-                                h264_error_log_count_);
+                                error_log_count_);
             av_packet_free(&pkt);
             return false;
         }
         std::memcpy(pkt->data, data, len);
-        if (au.has_idr) pkt->flags |= AV_PKT_FLAG_KEY;
+        if (au.has_random_access) pkt->flags |= AV_PKT_FLAG_KEY;
 
         int ret = avcodec_send_packet(ctx, pkt);
         if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
@@ -666,7 +609,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                     if (log && receive_ret != AVERROR(EAGAIN) && receive_ret != AVERROR_EOF) {
                         logVideoDecodeError("hardware avcodec_receive_frame failed",
                                             receive_ret,
-                                            h264_error_log_count_);
+                                            error_log_count_);
                     }
                     if (receive_ret != AVERROR(EAGAIN) && receive_ret != AVERROR_EOF) {
                         logDecodeDrop(perf_, "hardware_receive_frame_failed",
@@ -694,7 +637,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
             if (retry_ret < 0 && retry_ret != AVERROR(EAGAIN)) {
                 decode_ok = false;
             }
-        } else if (ret == AVERROR_UNKNOWN && h264_error_log_count_ < kVideoErrorLogLimit) {
+        } else if (ret == AVERROR_UNKNOWN && error_log_count_ < kVideoErrorLogLimit) {
             lunar::diagnosticLog("video",
                                  "NVDEC status error; packet not retried index=%d len=%zu ts=%llu",
                                  log_index,
@@ -708,20 +651,19 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
             if (perf_) perf_->recordVideoDecodeError();
             logDecodeDrop(perf_, "hardware_send_packet_rejected", ret, 0,
                           timestamp, len, &au, ctx->width, ctx->height);
-            if (h264_error_log_count_ < kVideoErrorLogLimit) {
+            if (error_log_count_ < kVideoErrorLogLimit) {
                 lunar::diagnosticLog("video",
-                                     "hardware avcodec_send_packet rejected index=%d len=%zu ts=%llu nal=%s sps=%d pps=%d idr=%d",
+                                     "hardware avcodec_send_packet rejected index=%d codec=%s len=%zu ts=%llu nal=%s random_access=%d",
                                      log_index,
+                                     codec_name,
                                      len,
                                      static_cast<unsigned long long>(timestamp),
                                      au.nal_types.empty() ? "-" : au.nal_types.c_str(),
-                                     au.has_sps ? 1 : 0,
-                                     au.has_pps ? 1 : 0,
-                                     au.has_idr ? 1 : 0);
+                                     au.has_random_access ? 1 : 0);
             }
             logVideoDecodeError("hardware avcodec_send_packet failed",
                                 ret,
-                                h264_error_log_count_);
+                                error_log_count_);
             decode_ok = false;
         }
         if (log) {
@@ -745,9 +687,8 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
 #endif
 
     // =========================================================================
-    // Parse complete RTP-depacketized H.264 access units into decoder-ready
-    // packets. Moonlight submits complete decode units; LunarNX now mirrors
-    // that boundary at the RTP layer and keeps FFmpeg's parser as a guardrail.
+    // Parse complete transport access units into decoder-ready packets. Keep
+    // FFmpeg's parser as a guardrail for both Xbox RTP and Chiaki samples.
     // =========================================================================
     auto* parser = static_cast<AVCodecParserContext*>(parser_);
     if (!parser) return false;
@@ -765,7 +706,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
             if (perf_) perf_->recordVideoDecodeError();
             logDecodeDrop(perf_, "software_parser_failed", parsed, 0,
                           timestamp, len, &au, ctx->width, ctx->height);
-            logVideoDecodeError("av_parser_parse2 failed", parsed, h264_error_log_count_);
+            logVideoDecodeError("av_parser_parse2 failed", parsed, error_log_count_);
             return false;
         }
         if (parsed == 0 && out_size == 0) {
@@ -796,18 +737,17 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                 if (perf_) perf_->recordVideoDecodeError();
                 logDecodeDrop(perf_, "software_send_packet_rejected", ret, 0,
                               timestamp, len, &au, ctx->width, ctx->height);
-                if (h264_error_log_count_ < kVideoErrorLogLimit) {
+                if (error_log_count_ < kVideoErrorLogLimit) {
                     lunar::diagnosticLog("video",
-                                         "avcodec_send_packet rejected index=%d len=%zu ts=%llu nal=%s sps=%d pps=%d idr=%d",
+                                         "avcodec_send_packet rejected index=%d codec=%s len=%zu ts=%llu nal=%s random_access=%d",
                                          log_index,
+                                         codec_name,
                                          len,
                                          static_cast<unsigned long long>(timestamp),
                                          au.nal_types.empty() ? "-" : au.nal_types.c_str(),
-                                         au.has_sps ? 1 : 0,
-                                         au.has_pps ? 1 : 0,
-                                         au.has_idr ? 1 : 0);
+                                         au.has_random_access ? 1 : 0);
                 }
-                logVideoDecodeError("avcodec_send_packet failed", ret, h264_error_log_count_);
+                logVideoDecodeError("avcodec_send_packet failed", ret, error_log_count_);
                 continue;
             }
 
@@ -844,7 +784,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
                                       ctx->width, ctx->height);
                     }
                     if (log && ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
-                        logVideoDecodeError("avcodec_receive_frame failed", ret, h264_error_log_count_);
+                        logVideoDecodeError("avcodec_receive_frame failed", ret, error_log_count_);
                     }
                     if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
                         decode_ok = false;
@@ -876,20 +816,23 @@ bool VideoDecoder::resetForKeyframe() {
         av_parser_close(static_cast<AVCodecParserContext*>(parser_));
         parser_ = nullptr;
     }
-    AVCodecParserContext* parser = av_parser_init(AV_CODEC_ID_H264);
+    const AVCodecID codec_id = video_codec_ == VideoCodec::HEVC
+        ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
+    AVCodecParserContext* parser = av_parser_init(codec_id);
     if (!parser) {
-        lunar::diagnosticLog("video", "H264 parser reinit failed during keyframe reset");
-        h264_decoder_ready_ = false;
+        lunar::diagnosticLog("video", "%s parser reinit failed during keyframe reset",
+                             videoCodecName(video_codec_));
+        decoder_ready_ = false;
         return false;
     }
     parser->flags |= PARSER_FLAG_COMPLETE_FRAMES;
     parser_ = parser;
-    // Keep SPS/PPS knowledge: Xbox may send them only in the first IDR, while
-    // a requested recovery IDR can be a slice-only access unit.
-    h264_decoder_ready_ = false;
-    h264_parameter_sets_pending_ = !h264_parameter_sets_.empty();
-    h264_wait_log_count_ = 0;
-    lunar::diagnosticLog("video", "H264 decoder reset; waiting for IDR");
+    // Keep parameter-set knowledge across a transport-requested recovery.
+    decoder_ready_ = false;
+    parameter_sets_pending_ = !parameter_sets_.empty();
+    wait_log_count_ = 0;
+    lunar::diagnosticLog("video", "%s decoder reset; waiting for random access",
+                         videoCodecName(video_codec_));
     return true;
 }
 
@@ -926,13 +869,14 @@ void VideoDecoder::shutdown() {
     if (codec_ctx_) {
         avcodec_free_context(reinterpret_cast<AVCodecContext**>(&codec_ctx_));
     }
-    h264_decoder_ready_ = false;
-    h264_seen_sps_ = false;
-    h264_seen_pps_ = false;
-    h264_parameter_sets_.clear();
-    h264_parameter_sets_pending_ = false;
-    h264_wait_log_count_ = 0;
-    h264_error_log_count_ = 0;
+    decoder_ready_ = false;
+    seen_vps_ = false;
+    seen_sps_ = false;
+    seen_pps_ = false;
+    parameter_sets_.clear();
+    parameter_sets_pending_ = false;
+    wait_log_count_ = 0;
+    error_log_count_ = 0;
     initialized_ = false;
 }
 

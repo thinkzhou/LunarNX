@@ -31,7 +31,8 @@ PerfOverlay::PerfOverlay(const stream::PerfStats* perf, app::StreamPlatform plat
 }
 
 void PerfOverlay::update(float fps, const std::string& resolution,
-                         const std::string& video_backend) {
+                         const std::string& video_backend,
+                         const std::string& video_codec) {
     if (!visible_ || !label_) return;
 
     uint32_t video = perf_->video_frames.load();
@@ -104,6 +105,10 @@ void PerfOverlay::update(float fps, const std::string& resolution,
     if (!video_backend.empty()) {
         text += "\n" + brls::getStr(
             "lunarnx/perf/detail_backend", video_backend);
+    }
+    if (is_ps && !video_codec.empty()) {
+        text += "\n" + brls::getStr(
+            "lunarnx/perf/detail_codec", video_codec);
     }
     text += "\n" + brls::getStr(
         "lunarnx/perf/detail_packet_loss", lost, drop_pct);

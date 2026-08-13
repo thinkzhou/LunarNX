@@ -4,6 +4,7 @@
 #include "psn_login_activity.h"
 #include "about_activity.h"
 #include "ps_settings_activity.h"
+#include "stream_settings_activity.h"
 #include "stream_view.h"
 #include "ui_style.h"
 #include "../common.h"
@@ -13,6 +14,7 @@
 #include "../ps/psn_auth_manager.h"
 #include <algorithm>
 #include <cstdio>
+#include <thread>
 
 namespace lunar::ui {
 namespace {
@@ -76,8 +78,13 @@ void schedulePsConnectCleanup(
 class PsConnectActivity : public brls::Activity {
 public:
     PsConnectActivity(std::shared_ptr<ps::PsStreamController> controller,
+                      std::shared_ptr<ps::PsManager> manager,
+                      bool remote,
                       std::string console_name)
-        : controller_(std::move(controller)), console_name_(std::move(console_name)) {
+        : controller_(std::move(controller))
+        , manager_(std::move(manager))
+        , remote_(remote)
+        , console_name_(std::move(console_name)) {
         diagnosticLog("ui-ps-connect", "constructor name=%s", console_name_.c_str());
     }
 
@@ -95,7 +102,7 @@ public:
         root->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
         root->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
         root->setPadding(30, 48, 24, 48);
-        root->setBackgroundColor(nvgRGB(16, 16, 16));
+        root->setBackgroundColor(p.background);
         root->setAlignItems(brls::AlignItems::CENTER);
         root->setJustifyContent(brls::JustifyContent::CENTER);
         root->setFocusable(true);
@@ -106,11 +113,10 @@ public:
                 return true;
             });
 
-        auto* card = new brls::Box(brls::Axis::COLUMN);
+        auto* card = makeUiCard(brls::Axis::COLUMN);
         card->setWidth(780);
         card->setHeight(390);
         card->setAlignItems(brls::AlignItems::CENTER);
-        card->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
         auto* eyebrow = new brls::Label();
         eyebrow->setText(brls::getStr("lunarnx/ps/connect_eyebrow"));
         eyebrow->setFontSize(14);
@@ -146,6 +152,8 @@ public:
         diagnosticLog("ui-ps-connect", "onContentAvailable begin");
         auto context = context_;
         auto controller = controller_;
+        auto manager = manager_;
+        const bool remote = remote_;
         controller_->setLoginPinCallback([this, context](bool incorrect) {
             brls::sync([this, context, incorrect]() {
                 if (!context->alive.load()) return;
@@ -160,7 +168,7 @@ public:
                 if (state == app::StreamState::Streaming) openStream();
             });
         });
-        brls::sync([this, context, controller]() {
+        brls::sync([this, context, controller, manager, remote]() {
             if (!context->alive.load() || started_.exchange(true)) return;
             if (context->cancel_requested.load()) {
                 context->connect_worker_done = true;
@@ -169,9 +177,38 @@ public:
             }
             auto* status = status_;
             bool worker = lunar::platform::startNetworkWorker("ps-connect",
-                [context, controller, status]() {
-                    bool ok = controller->startStream();
-                    std::string error = controller->lastError();
+                [context, controller, manager, remote, status]() {
+                    bool ok = true;
+                    std::string error;
+                    ps::PsnAuthErrorKind auth_error_kind = ps::PsnAuthErrorKind::None;
+                    if (remote) {
+                        bool token_refreshed = false;
+                        ok = manager->psnAuth().ensureValidToken({}, &token_refreshed);
+                        if (!ok) {
+                            error = manager->psnAuth().getAuthError();
+                            auth_error_kind = manager->psnAuth().getAuthErrorKind();
+                            if (auth_error_kind == ps::PsnAuthErrorKind::SessionExpired) {
+                                manager->psnAuth().signOut();
+                                std::remove(lunar::get_psn_token_path());
+                            }
+                        } else if (token_refreshed &&
+                                   !manager->psnAuth().saveToken(
+                                       lunar::get_psn_token_path())) {
+                            ok = false;
+                            error = "PSN session refreshed but could not be saved";
+                        } else if (!controller->setPsnCredentials(
+                                       manager->getPsnAccessToken(),
+                                       manager->getPsnAccountId())) {
+                            ok = false;
+                            error = "PSN credentials could not be applied";
+                        }
+                    }
+                    if (ok && !context->cancel_requested.load()) {
+                        ok = controller->startStream();
+                        if (!ok) error = controller->lastError();
+                    } else if (context->cancel_requested.load()) {
+                        ok = false;
+                    }
                     context->connect_worker_done = true;
                     diagnosticLog("ui-ps-connect",
                                   "connect worker done ok=%d cancelled=%d",
@@ -179,11 +216,18 @@ public:
                                   context->cancel_requested.load() ? 1 : 0);
                     schedulePsConnectCleanup(context, controller);
                     if (!ok) {
-                        brls::sync([context, status, error = std::move(error)]() {
+                        brls::sync([context, manager, remote, status, auth_error_kind,
+                                    error = std::move(error)]() {
                             if (!context->alive.load() ||
                                 context->cancel_requested.load()) return;
                             if (status) status->setText(
                                 brls::getStr("lunarnx/ps/connect_failed", error));
+                            if (remote &&
+                                auth_error_kind == ps::PsnAuthErrorKind::SessionExpired) {
+                                brls::Application::pushActivity(
+                                    new PsnLoginActivity(manager->psnAuth()),
+                                    brls::TransitionAnimation::NONE);
+                            }
                         });
                     }
                 }, 8 * 1024 * 1024);
@@ -233,6 +277,8 @@ private:
     }
 
     std::shared_ptr<ps::PsStreamController> controller_;
+    std::shared_ptr<ps::PsManager> manager_;
+    bool remote_ = false;
     std::string console_name_;
     brls::Label* status_ = nullptr;
     std::shared_ptr<PsConnectContext> context_ =
@@ -257,15 +303,17 @@ PsActivity::PsActivity() {
 }
 
 PsActivity::~PsActivity() {
-    stopDiscovery();
     alive_->store(false);
+    wake_generation_->fetch_add(1);
+    stopDiscovery();
 }
 
 brls::View* PsActivity::createContentView() {
     const auto& p = uiPalette();
-    auto* workspace = new brls::Box(brls::Axis::ROW);
-    workspace->setBackgroundColor(p.background);
-    workspace->registerAction("Back", brls::ControllerButton::BUTTON_B,
+    auto* scroll = new brls::ScrollingFrame();
+    scroll->setBackgroundColor(p.background);
+    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
+    scroll->registerAction("Back", brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
             const auto now = std::chrono::steady_clock::now();
             if (now < back_navigation_ready_at_) return true;
@@ -273,73 +321,113 @@ brls::View* PsActivity::createContentView() {
             return true;
         });
 
-    auto* sidebar = new brls::Box(brls::Axis::COLUMN);
-    sidebar->setWidth(286);
-    sidebar->setPadding(24, 24, 24, 30);
-    sidebar->setBackgroundColor(p.surface);
+    auto* root = new brls::Box(brls::Axis::COLUMN);
+    root->setPadding(26, 48, 36, 48);
+    root->setBackgroundColor(p.background);
 
-    local_tab_ = makeSidebarButton(brls::getStr("lunarnx/ps/tab_local"), true);
-    local_tab_->registerClickAction([this](brls::View*) -> bool {
-        setConsoleSource(PsConsoleSource::Local);
-        return true;
-    });
-    sidebar->addView(local_tab_);
-    remote_tab_ = makeSidebarButton(brls::getStr("lunarnx/ps/tab_remote"));
-    remote_tab_->registerClickAction([this](brls::View*) -> bool {
-        setConsoleSource(PsConsoleSource::Remote);
-        return true;
-    });
-    sidebar->addView(remote_tab_);
-    pair_tab_ = makeSidebarButton(brls::getStr("lunarnx/ps/pair_by_ip"));
-    pair_tab_->registerClickAction([this](brls::View*) -> bool {
-        setConsoleSource(PsConsoleSource::Pair);
-        return true;
-    });
-    sidebar->addView(pair_tab_);
+    auto* header = new brls::Box(brls::Axis::ROW);
+    header->setHeight(84);
+    header->setAlignItems(brls::AlignItems::CENTER);
+    auto* brand = new brls::Box(brls::Axis::COLUMN);
+    brand->setGrow(1.0f);
+    auto* wordmark = new brls::Label();
+    wordmark->setText("LUNARNX");
+    wordmark->setFontSize(29);
+    wordmark->setTextColor(p.accent);
+    brand->addView(wordmark);
+    brand->addView(makeMutedLabel(brls::getStr("lunarnx/ps/subtitle"), 13));
+    header->addView(brand);
 
-    auto* settings_button = makeSidebarButton(
-        brls::getStr("lunarnx/common/playstation_settings"));
+    auto* settings_button = new brls::Button();
+    settings_button->setText(brls::getStr("lunarnx/common/settings"));
+    styleSecondaryButton(settings_button);
     settings_button->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new PsSettingsActivity(loadPsSettings()),
             brls::TransitionAnimation::NONE);
         return true;
     });
-    sidebar->addView(settings_button);
-    auto* about_button = makeSidebarButton(brls::getStr("lunarnx/common/about"));
+    header->addView(settings_button);
+
+    auto* about_button = new brls::Button();
+    about_button->setText(brls::getStr("lunarnx/common/about"));
+    styleSecondaryButton(about_button);
+    about_button->setMarginLeft(8);
     about_button->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new AboutActivity(), brls::TransitionAnimation::NONE);
         return true;
     });
-    sidebar->addView(about_button);
-    account_button_ = makeSidebarButton(brls::getStr("lunarnx/ps/sign_in"));
+    header->addView(about_button);
+
+    account_button_ = new brls::Button();
+    styleQuietButton(account_button_);
+    account_button_->setMarginLeft(8);
     account_button_->registerClickAction([this](brls::View*) -> bool {
         handleAccountAction();
         return true;
     });
-    sidebar->addView(account_button_);
+    header->addView(account_button_);
 
-    auto* account = new brls::Box(brls::Axis::COLUMN);
-    account->setGrow(1.0f);
-    account->setJustifyContent(brls::JustifyContent::FLEX_END);
-    account->addView(makeMutedLabel(brls::getStr("lunarnx/ps/account_network"), 12));
+    auto* account_chip = makeUiCard(brls::Axis::ROW);
+    account_chip->setWidth(306);
+    account_chip->setHeight(58);
+    account_chip->setMarginLeft(10);
+    account_chip->setPadding(7, 10, 7, 10);
+    account_chip->setCornerRadius(14);
+    account_chip->setAlignItems(brls::AlignItems::CENTER);
+
+    auto* account_mark = new brls::Label();
+    account_mark->setWidth(42);
+    account_mark->setHeight(42);
+    account_mark->setText("PS");
+    account_mark->setFontSize(13);
+    account_mark->setTextColor(p.accent);
+    account_mark->setBackgroundColor(p.accent_soft);
+    account_mark->setCornerRadius(21);
+    account_mark->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    account_mark->setVerticalAlign(brls::VerticalAlign::CENTER);
+    account_chip->addView(account_mark);
+
+    auto* account_copy = new brls::Box(brls::Axis::COLUMN);
+    account_copy->setGrow(1.0f);
+    account_copy->setPadding(2, 0, 2, 10);
+    auto* account_label = new brls::Label();
+    account_label->setText(brls::getStr("lunarnx/ps/account_network"));
+    account_label->setFontSize(10);
+    account_label->setTextColor(p.accent);
+    account_copy->addView(account_label);
     account_state_ = new brls::Label();
-    account_state_->setFontSize(15);
+    account_state_->setFontSize(14);
     account_state_->setTextColor(p.text);
     account_state_->setSingleLine(true);
-    account->addView(account_state_);
-    sidebar->addView(account);
-    workspace->addView(sidebar);
+    account_copy->addView(account_state_);
+    account_chip->addView(account_copy);
+    header->addView(account_chip);
+    root->addView(header);
 
-    auto* scroll = new brls::ScrollingFrame();
-    scroll->setGrow(1.0f);
-    scroll->setBackgroundColor(p.background);
-    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
-
-    auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(24, 42, 32, 42);
-    root->setBackgroundColor(p.background);
+    auto* source_card = makeUiCard(brls::Axis::ROW);
+    source_card->setHeight(68);
+    source_card->setPadding(8, 8, 8, 8);
+    source_card->setMarginBottom(18);
+    local_tab_ = new brls::Button();
+    local_tab_->setText(brls::getStr("lunarnx/ps/tab_local"));
+    local_tab_->setGrow(1.0f);
+    local_tab_->registerClickAction([this](brls::View*) -> bool {
+        setConsoleSource(PsConsoleSource::Local);
+        return true;
+    });
+    source_card->addView(local_tab_);
+    remote_tab_ = new brls::Button();
+    remote_tab_->setText(brls::getStr("lunarnx/ps/tab_remote"));
+    remote_tab_->setGrow(1.0f);
+    remote_tab_->setMarginLeft(8);
+    remote_tab_->registerClickAction([this](brls::View*) -> bool {
+        setConsoleSource(PsConsoleSource::Remote);
+        return true;
+    });
+    source_card->addView(remote_tab_);
+    root->addView(source_card);
 
     remote_actions_ = new brls::Box(brls::Axis::COLUMN);
     auto* remote_header = new brls::Box(brls::Axis::ROW);
@@ -396,16 +484,10 @@ brls::View* PsActivity::createContentView() {
     lan_state_->setMarginBottom(12);
     local_actions_->addView(lan_state_);
 
-    pair_actions_ = new brls::Box(brls::Axis::COLUMN);
-    auto* pair_heading = makePageHeading(
-        brls::getStr("lunarnx/ps/pair_by_ip"),
-        brls::getStr("lunarnx/ps/pair_by_ip_desc"));
-    pair_actions_->addView(pair_heading);
-    auto* manual_card = makeFlatSection(
-        brls::getStr("lunarnx/ps/pair_by_ip"),
-        brls::getStr("lunarnx/ps/pair_by_ip_desc"));
-    auto* console_type_row = new brls::Box(brls::Axis::ROW);
-    console_type_row->setAlignItems(brls::AlignItems::CENTER);
+    auto* manual_card = makeUiCard(brls::Axis::ROW);
+    manual_card->setHeight(92);
+    manual_card->setMarginBottom(18);
+    manual_card->setAlignItems(brls::AlignItems::CENTER);
     auto* manual_copy = new brls::Box(brls::Axis::COLUMN);
     manual_copy->setGrow(1.0f);
     auto* manual_title = new brls::Label();
@@ -415,8 +497,8 @@ brls::View* PsActivity::createContentView() {
     manual_copy->addView(manual_title);
     manual_copy->addView(makeMutedLabel(
         brls::getStr("lunarnx/ps/pair_by_ip_desc"), 12));
-    console_type_row->addView(manual_copy);
-    auto add_pair_button = [this, console_type_row](const std::string& text, int target) {
+    manual_card->addView(manual_copy);
+    auto add_pair_button = [this, manual_card](const std::string& text, int target) {
         auto* button = new brls::Button();
         styleSecondaryButton(button);
         button->setText(text);
@@ -428,13 +510,11 @@ brls::View* PsActivity::createContentView() {
             pairConsole(console);
             return true;
         });
-        console_type_row->addView(button);
+        manual_card->addView(button);
     };
     add_pair_button(brls::getStr("lunarnx/ps/pair_ps4"), 900);
     add_pair_button(brls::getStr("lunarnx/ps/pair_ps5"), 1000100);
-    addFlatRow(manual_card, console_type_row);
-    pair_actions_->addView(manual_card);
-    root->addView(pair_actions_);
+    local_actions_->addView(manual_card);
     root->addView(local_actions_);
 
     console_list_ = new brls::Box(brls::Axis::COLUMN);
@@ -460,14 +540,13 @@ brls::View* PsActivity::createContentView() {
     root->addView(status_card);
 
     scroll->setContentView(root);
-    workspace->addView(scroll);
     updateAccountUi();
     hosts_ = ps_manager_ ? ps_manager_->getDiscoveredHosts()
                          : std::vector<ps::PsConsole>{};
     appendMockReplayConsole(hosts_);
     updateSourceUi();
     rebuildConsoleList(hosts_);
-    return makeAppFrame("PlayStation", workspace);
+    return scroll;
 }
 
 void PsActivity::onResume() {
@@ -516,6 +595,7 @@ void PsActivity::startLanDiscovery() {
     auto alive = alive_;
     const bool started = ps_manager_->startDiscovery([this, alive](const std::vector<ps::PsConsole>& hosts) {
         if (!alive->load()) return;
+        if (completePendingWake(hosts)) return;
         rebuildConsoleList(hosts);
         if (lan_state_) {
             size_t local_count = 0;
@@ -561,10 +641,23 @@ void PsActivity::fetchPsnConsoles() {
             if (!ok) {
                 std::string error = manager->getPsnDeviceError();
                 if (error.empty()) error = manager->psnAuth().getAuthError();
-                brls::sync([this, alive, error = std::move(error)]() {
+                auto error_kind = manager->psnAuth().getAuthErrorKind();
+                brls::sync([this, alive, manager, error_kind,
+                            error = std::move(error)]() {
                     if (!alive->load()) return;
-                    if (psn_state_) psn_state_->setText(brls::getStr("lunarnx/ps/psn_unavailable", error));
-                    updateAccountUi();
+                    if (error_kind == ps::PsnAuthErrorKind::SessionExpired) {
+                        manager->psnAuth().signOut();
+                        std::remove(lunar::get_psn_token_path());
+                        if (psn_state_) psn_state_->setText(
+                            brls::getStr("lunarnx/ps/psn_session_expired", error));
+                        brls::Application::pushActivity(
+                            new PsnLoginActivity(manager->psnAuth()),
+                            brls::TransitionAnimation::NONE);
+                    } else {
+                        if (psn_state_) psn_state_->setText(
+                            brls::getStr("lunarnx/ps/psn_unavailable", error));
+                        updateAccountUi();
+                    }
                 });
             }
         });
@@ -587,25 +680,18 @@ void PsActivity::setConsoleSource(PsConsoleSource source) {
 
 void PsActivity::updateSourceUi() {
     const bool local = source_ == PsConsoleSource::Local;
-    const bool remote = source_ == PsConsoleSource::Remote;
-    const bool pair = source_ == PsConsoleSource::Pair;
     if (local_tab_) {
-        setSidebarButtonActive(local_tab_, local);
+        if (local) stylePrimaryButton(local_tab_);
+        else styleSecondaryButton(local_tab_);
     }
     if (remote_tab_) {
-        setSidebarButtonActive(remote_tab_, remote);
-    }
-    if (pair_tab_) {
-        setSidebarButtonActive(pair_tab_, pair);
+        if (local) styleSecondaryButton(remote_tab_);
+        else stylePrimaryButton(remote_tab_);
     }
     if (local_actions_) local_actions_->setVisibility(
         local ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
     if (remote_actions_) remote_actions_->setVisibility(
-        remote ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
-    if (pair_actions_) pair_actions_->setVisibility(
-        pair ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
-    if (console_list_) console_list_->setVisibility(
-        pair ? brls::Visibility::GONE : brls::Visibility::VISIBLE);
+        local ? brls::Visibility::GONE : brls::Visibility::VISIBLE);
 }
 
 void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
@@ -642,7 +728,7 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
     for (const auto& host : hosts) {
         const bool visible = source_ == PsConsoleSource::Local
             ? host.local.has_value()
-            : source_ == PsConsoleSource::Remote && host.remote.has_value();
+            : host.remote.has_value();
         if (!visible) continue;
         visible_count++;
         auto* card = makeUiCard(brls::Axis::ROW);
@@ -700,32 +786,35 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         const bool remote_enabled = host.remote.has_value() &&
             host.remote->remoteplay_enabled;
 
-        card->setFocusable(true);
-        card->setHighlightCornerRadius(4);
-        std::string action_text;
+        auto* action = new brls::Button();
+        action->setWidth(190);
         if (source_ == PsConsoleSource::Local && !paired) {
-            action_text = brls::getStr("lunarnx/ps/btn_pair");
-            card->registerClickAction([this, host](brls::View*) -> bool {
+            stylePrimaryButton(action);
+            action->setText(brls::getStr("lunarnx/ps/btn_pair"));
+            action->registerClickAction([this, host](brls::View*) -> bool {
                 pairConsole(host);
                 return true;
             });
         } else if (source_ == PsConsoleSource::Local && paired && local_standby) {
-            action_text = brls::getStr("lunarnx/ps/btn_wake_connect");
-            card->registerClickAction([this, host](brls::View*) -> bool {
+            stylePrimaryButton(action);
+            action->setText(brls::getStr("lunarnx/ps/btn_wake_connect"));
+            action->registerClickAction([this, host](brls::View*) -> bool {
                 wakeupConsole(host);
                 return true;
             });
         } else if (source_ == PsConsoleSource::Local && paired && local_ready) {
-            action_text = brls::getStr("lunarnx/ps/btn_connect");
-            card->registerClickAction([this, host](brls::View*) -> bool {
+            stylePrimaryButton(action);
+            action->setText(brls::getStr("lunarnx/ps/btn_connect"));
+            action->registerClickAction([this, host](brls::View*) -> bool {
                 diagnosticLog("ui-ps", "Local Connect clicked name=%s",
                               host.nickname.c_str());
                 connectToConsole(host);
                 return true;
             });
         } else if (source_ == PsConsoleSource::Remote && remote_enabled) {
-            action_text = brls::getStr("lunarnx/ps/btn_connect");
-            card->registerClickAction([this, host](brls::View*) -> bool {
+            stylePrimaryButton(action);
+            action->setText(brls::getStr("lunarnx/ps/btn_connect"));
+            action->registerClickAction([this, host](brls::View*) -> bool {
                 diagnosticLog("ui-ps", "Remote Connect clicked name=%s",
                               host.nickname.c_str());
                 connectToConsole(host);
@@ -733,22 +822,17 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
             });
         } else if (source_ == PsConsoleSource::Remote && host.remote.has_value() &&
                    !host.remote->remoteplay_enabled) {
-            action_text = brls::getStr("lunarnx/ps/btn_how_enable");
-            card->registerClickAction([this](brls::View*) -> bool {
+            styleSecondaryButton(action);
+            action->setText(brls::getStr("lunarnx/ps/btn_how_enable"));
+            action->registerClickAction([this](brls::View*) -> bool {
                 showRemotePlayHelp();
                 return true;
             });
         } else {
-            action_text = brls::getStr("lunarnx/ps/btn_unavailable");
-            card->setFocusable(false);
+            styleSecondaryButton(action);
+            action->setText(brls::getStr("lunarnx/ps/btn_unavailable"));
+            action->registerClickAction([](brls::View*) -> bool { return true; });
         }
-        auto* action = new brls::Label();
-        action->setWidth(190);
-        action->setText(action_text);
-        action->setFontSize(14);
-        action->setTextColor(card->isFocusable() ? p.accent : p.text_muted);
-        action->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
-        action->setVerticalAlign(brls::VerticalAlign::CENTER);
         card->addView(action);
         console_list_->addView(card);
     }
@@ -775,6 +859,28 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
     }
 }
 
+bool PsActivity::completePendingWake(const std::vector<ps::PsConsole>& hosts) {
+    if (pending_wake_mac_.empty()) return false;
+    const auto ready = std::find_if(hosts.begin(), hosts.end(),
+        [this](const ps::PsConsole& host) {
+            return host.server_mac == pending_wake_mac_ && host.local.has_value() &&
+                   host.local->state == ps::PsConsoleState::Ready;
+        });
+    if (ready == hosts.end()) return false;
+
+    const ps::PsConsole host = *ready;
+    pending_wake_mac_.clear();
+    wake_generation_->fetch_add(1);
+    diagnosticLog("ui-ps", "wake target ready mac=%s ip=%s",
+                  host.server_mac.c_str(), host.local->ip.c_str());
+    if (action_status_) {
+        action_status_->setText(brls::getStr("lunarnx/ps/wake_ready"));
+    }
+    rebuildConsoleList(hosts);
+    connectToConsole(host);
+    return true;
+}
+
 void PsActivity::pairConsole(const ps::PsConsole& host) {
     int target = host.target >= 1000000 ? 1000100 : 900;
     std::string addr = host.local.has_value() ? host.local->ip : "";
@@ -786,24 +892,50 @@ void PsActivity::pairConsole(const ps::PsConsole& host) {
 
 void PsActivity::wakeupConsole(const ps::PsConsole& host) {
     if (!host.local.has_value() || host.server_mac.empty()) return;
+    const auto normalized_mac = ps::normalizeMac(host.server_mac);
+    if (!normalized_mac) return;
+    const uint64_t generation = wake_generation_->fetch_add(1) + 1;
+    pending_wake_mac_ = *normalized_mac;
     if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/waking", host.nickname));
     auto alive = alive_;
     auto manager = ps_manager_;
-    lunar::platform::startNetworkWorker("ps-wakeup",
-        [this, manager, host, alive]() {
+    auto wake_generation = wake_generation_;
+    const bool started = lunar::platform::startNetworkWorker("ps-wakeup",
+        [this, manager, host, alive, wake_generation, generation]() {
             manager->wakeupHost(host.local->ip, host.server_mac,
                 host.target >= 1000000,
-                [this, alive, host](bool ok, const std::string& error) {
-                    brls::sync([this, alive, host, ok, error]() {
-                        if (!alive->load()) return;
+                [this, alive, host, wake_generation, generation](
+                    bool ok, const std::string& error) {
+                    brls::sync([this, alive, host, wake_generation, generation,
+                                ok, error]() {
+                        if (!alive->load() || wake_generation->load() != generation) return;
                         if (!ok) {
+                            pending_wake_mac_.clear();
+                            wake_generation->fetch_add(1);
                             if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/wake_failed", error));
                             return;
                         }
-                        if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/wake_sent"));
+                        if (action_status_) action_status_->setText(
+                            brls::getStr("lunarnx/ps/wake_waiting"));
                     });
                 });
+            if (wake_generation->load() != generation) return;
+            std::this_thread::sleep_for(std::chrono::seconds(25));
+            brls::sync([this, alive, wake_generation, generation]() {
+                if (!alive->load() || wake_generation->load() != generation) return;
+                pending_wake_mac_.clear();
+                wake_generation->fetch_add(1);
+                diagnosticLog("ui-ps", "wake target timed out");
+                if (action_status_) action_status_->setText(
+                    brls::getStr("lunarnx/ps/wake_timeout"));
+            });
         });
+    if (!started) {
+        pending_wake_mac_.clear();
+        wake_generation_->fetch_add(1);
+        if (action_status_) action_status_->setText(
+            brls::getStr("lunarnx/ps/wake_failed", "Could not start wake worker"));
+    }
 }
 
 void PsActivity::connectToConsole(const ps::PsConsole& host) {
@@ -816,8 +948,7 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
     if (source_ == PsConsoleSource::Local) selected.remote.reset();
     else selected.local.reset();
 
-    const bool requested_remote = selected.remote.has_value();
-    const bool remote_enabled = requested_remote &&
+    const bool remote_enabled = selected.remote.has_value() &&
         selected.remote->remoteplay_enabled && ps_manager_->hasStoredPsnSession();
     if (!selected.credentials.has_value() && !remote_enabled) {
         diagnosticLog("ui-ps", "connect blocked: no usable route credentials=%s remote_enabled=%s",
@@ -826,29 +957,31 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
         if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/no_route"));
         return;
     }
-    if (!requested_remote) {
-        auto route = ps_manager_->resolveRoute(selected);
-        if (route.type == ps::ResolvedRouteType::None) {
-            diagnosticLog("ui-ps", "connect blocked by resolver error=%s", route.error.c_str());
-            if (action_status_) action_status_->setText(route.error);
-            return;
-        }
-        diagnosticLog("ui-ps", "connect route resolved type=%d", static_cast<int>(route.type));
-        if (action_status_) action_status_->setText(
-            ps::PsConsoleResolver::routeDescription(route));
-    } else if (action_status_) {
-        action_status_->setText("Connecting via PSN...");
+    auto route = ps::PsConsoleResolver::resolve(
+        selected, ps_manager_->hasStoredPsnSession());
+    if (route.type == ps::ResolvedRouteType::None) {
+        diagnosticLog("ui-ps", "connect blocked by resolver error=%s", route.error.c_str());
+        if (action_status_) action_status_->setText(route.error);
+        return;
     }
+    diagnosticLog("ui-ps", "connect route resolved type=%d", static_cast<int>(route.type));
+    const bool requested_remote = route.type == ps::ResolvedRouteType::Remote;
+    if (action_status_) action_status_->setText(ps::PsConsoleResolver::routeDescription(route));
 
     const auto settings = loadPsSettings();
-    diagnosticLog("ui-ps", "stream profile=%dx%d fps=60 bitrate_kbps=%d",
-                  settings.width, settings.height, settings.bitrate_kbps);
+    diagnosticLog("ui-ps", "stream profile=%dx%d fps=60 bitrate_kbps=%d codec=%s",
+                  settings.width, settings.height, settings.bitrate_kbps,
+                  stream::videoCodecName(settings.video_codec));
     auto controller = std::make_shared<ps::PsStreamController>(
         selected, ps_manager_->getPsnAccessToken(), ps_manager_->getPsnAccountId(),
-        settings.width, settings.height, 60, settings.bitrate_kbps);
+        settings.width, settings.height, 60, settings.bitrate_kbps,
+        settings.video_codec);
+    const auto stream_settings = loadStreamSettings();
+    controller->setRumbleEnabled(stream_settings.vibration_enabled);
+    controller->setRumbleStrengthPercent(stream_settings.rumble_strength_percent);
     diagnosticLog("ui-ps", "pushing PsConnectActivity");
     brls::Application::pushActivity(
-        new PsConnectActivity(controller,
+        new PsConnectActivity(controller, ps_manager_, requested_remote,
             selected.nickname.empty() ? brls::getStr("lunarnx/ps/console_default") : selected.nickname),
         brls::TransitionAnimation::NONE);
     diagnosticLog("ui-ps", "PsConnectActivity push complete");
@@ -921,19 +1054,33 @@ void PsActivity::signInToPsn() {
         auto alive = alive_;
         bool started = lunar::platform::startNetworkWorker("psn-session-refresh",
             [this, manager, alive]() {
-                bool ok = manager->psnAuth().ensureValidToken();
-                if (ok) manager->psnAuth().saveToken(lunar::get_psn_token_path());
+                bool token_refreshed = false;
+                bool ok = manager->psnAuth().ensureValidToken({}, &token_refreshed);
+                if (ok && token_refreshed) {
+                    ok = manager->psnAuth().saveToken(lunar::get_psn_token_path());
+                }
                 std::string error = manager->psnAuth().getAuthError();
-                brls::sync([this, manager, alive, ok, error = std::move(error)]() {
+                auto error_kind = manager->psnAuth().getAuthErrorKind();
+                brls::sync([this, manager, alive, ok, error_kind,
+                            error = std::move(error)]() {
                     if (!alive->load()) return;
                     if (ok) {
                         updateAccountUi();
                         fetchPsnConsoles();
                     } else {
-                        if (psn_state_) psn_state_->setText(brls::getStr("lunarnx/ps/psn_session_expired", error));
-                        brls::Application::pushActivity(
-                            new PsnLoginActivity(manager->psnAuth()),
-                            brls::TransitionAnimation::NONE);
+                        if (error_kind == ps::PsnAuthErrorKind::SessionExpired) {
+                            manager->psnAuth().signOut();
+                            std::remove(lunar::get_psn_token_path());
+                            if (psn_state_) psn_state_->setText(
+                                brls::getStr("lunarnx/ps/psn_session_expired", error));
+                            brls::Application::pushActivity(
+                                new PsnLoginActivity(manager->psnAuth()),
+                                brls::TransitionAnimation::NONE);
+                        } else {
+                            if (psn_state_) psn_state_->setText(
+                                brls::getStr("lunarnx/ps/psn_unavailable", error));
+                            updateAccountUi();
+                        }
                     }
                 });
             });

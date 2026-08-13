@@ -37,10 +37,18 @@ enum class RemoteButton : uint8_t {
 constexpr size_t kRemoteButtonCount = static_cast<size_t>(RemoteButton::Count);
 using ButtonMapping = std::array<uint64_t, kRemoteButtonCount>;
 
+// Capture is a system button, not part of HidNpadButton. Bit 48 is outside the
+// current libnx button range and still keeps combined masks exact in JSON.
+constexpr uint64_t kButtonMappingCapture = uint64_t{1} << 48;
+
 ButtonMapping defaultButtonMapping(ButtonMappingProfile profile);
 ButtonMapping loadButtonMapping(ButtonMappingProfile profile);
 bool saveButtonMapping(ButtonMappingProfile profile, const ButtonMapping& mapping);
 const char* remoteButtonConfigKey(RemoteButton button);
 std::string formatHidButtonMask(uint64_t mask);
+bool mappingUsesCaptureButton(const ButtonMapping& mapping);
+void acquireCaptureButtonInput();
+void releaseCaptureButtonInput();
+bool isCaptureButtonPressed();
 
 } // namespace lunar::input

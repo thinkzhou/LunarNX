@@ -8,6 +8,7 @@
 #include "stream_settings_activity.h"
 #include "qr_code.h"
 #include "qr_code_view.h"
+#include "i18n.h"
 #include "ui_style.h"
 #include <algorithm>
 #include <cstdio>
@@ -117,6 +118,7 @@ brls::View* AuthActivity::createContentView() {
                 alive_->store(false);
                 polling_->store(false);
                 poll_generation_->fetch_add(1);
+                xbox_login_server_->stop();
             } else {
                 brls::Application::quit();
             }
@@ -216,12 +218,12 @@ brls::View* AuthActivity::createContentView() {
     sign_in->addView(hint);
 
     auto* auth_body = new brls::Box(brls::Axis::ROW);
-    auth_body->setHeight(270);
+    auth_body->setHeight(288);
     auth_body->setAlignItems(brls::AlignItems::CENTER);
 
     qr_view_ = new QrCodeView();
-    qr_view_->setWidth(224);
-    qr_view_->setHeight(224);
+    qr_view_->setWidth(280);
+    qr_view_->setHeight(280);
     qr_view_->clearQrCode();
     auth_body->addView(qr_view_);
 
@@ -308,6 +310,7 @@ brls::View* AuthActivity::createContentView() {
     cancel_btn_->registerClickAction([this](brls::View*) -> bool {
         polling_->store(false);
         poll_generation_->fetch_add(1);
+        xbox_login_server_->stop();
         if (start_btn_) start_btn_->setState(brls::ButtonState::ENABLED);
         if (cancel_btn_) cancel_btn_->setState(brls::ButtonState::DISABLED);
         status_label_->setText(brls::getStr("lunarnx/auth/cancelled"));
@@ -326,6 +329,12 @@ brls::View* AuthActivity::createContentView() {
     root->addView(sign_in);
 
     return makeAppFrame("Xbox", root);
+}
+
+void AuthActivity::onContentAvailable() {
+    lunar::diagnosticLog("auth-ui", "Auth screen ready; starting sign-in automatically");
+    if (resumeSavedSessionIfPresent()) return;
+    beginAuthRequest();
 }
 
 std::shared_ptr<app::StreamController> AuthActivity::createConfiguredController() {
@@ -543,11 +552,21 @@ void AuthActivity::beginAuthRequest() {
                 return;
             }
 
-            if (url_label && !url.empty()) url_label->setText(url);
-            if (qr_view) qr_view->setQrCode(makeQrCode(url));
+            xbox_login_server_->stop();
+            const bool helper_started = xbox_login_server_->start(
+                url, code, getResolvedAppLocale());
+            const std::string qr_url = helper_started
+                ? xbox_login_server_->getHelperUrl() : url;
+            if (url_label) {
+                url_label->setText(helper_started
+                    ? brls::getStr("lunarnx/auth/phone_helper") : url);
+            }
+            if (qr_view) qr_view->setQrCode(makeQrCode(qr_url));
             if (code_label) code_label->setText(code);
             if (status_label) {
-                status_label->setText(brls::getStr("lunarnx/auth/enter_at_website"));
+                status_label->setText(brls::getStr(helper_started
+                    ? "lunarnx/auth/scan_phone_helper"
+                    : "lunarnx/auth/helper_fallback"));
             }
             startPollingThread();
         });
@@ -581,9 +600,10 @@ void AuthActivity::startPollingThread() {
     auto* status_label = status_label_;
     auto* code_label = code_label_;
     auto* qr_view = qr_view_;
+    auto xbox_login_server = xbox_login_server_;
     poll_thread_done_->store(false);
     poll_thread_ = std::thread([alive, polling, poll_generation, ctrl, generation,
-                                poll_thread_done,
+                                poll_thread_done, xbox_login_server,
                                 start_btn, cancel_btn, status_label, code_label, qr_view]() {
         struct DoneGuard {
             std::shared_ptr<std::atomic<bool>> done;
@@ -608,8 +628,10 @@ void AuthActivity::startPollingThread() {
                 std::chrono::steady_clock::now() - started_at).count());
             if (elapsed >= expires_in) {
                 polling->store(false);
-                brls::sync([alive, start_btn, cancel_btn, status_label, code_label, qr_view]() {
+                brls::sync([alive, xbox_login_server, start_btn, cancel_btn,
+                            status_label, code_label, qr_view]() {
                     if (!alive->load()) return;
+                    xbox_login_server->stop();
                     if (start_btn) start_btn->setState(brls::ButtonState::ENABLED);
                     if (cancel_btn) cancel_btn->setState(brls::ButtonState::DISABLED);
                     status_label->setText(brls::getStr("lunarnx/auth/code_expired"));
@@ -624,8 +646,9 @@ void AuthActivity::startPollingThread() {
 
             if (result == auth::DeviceCodePollResult::Authenticated) {
                 polling->store(false);
-                brls::sync([alive, ctrl]() {
+                brls::sync([alive, ctrl, xbox_login_server]() {
                     if (!alive->load()) return;
+                    xbox_login_server->stop();
                     openXboxHome(ctrl);
                 });
                 return;
@@ -636,8 +659,10 @@ void AuthActivity::startPollingThread() {
                 result == auth::DeviceCodePollResult::Error) {
                 polling->store(false);
                 std::string error = ctrl->getAuthError();
-                brls::sync([alive, start_btn, cancel_btn, status_label, code_label, qr_view, result, error]() {
+                brls::sync([alive, xbox_login_server, start_btn, cancel_btn,
+                            status_label, code_label, qr_view, result, error]() {
                     if (!alive->load()) return;
+                    xbox_login_server->stop();
                     if (start_btn) start_btn->setState(brls::ButtonState::ENABLED);
                     if (cancel_btn) cancel_btn->setState(brls::ButtonState::DISABLED);
                     if (code_label) code_label->setText("--------");
@@ -676,6 +701,7 @@ void AuthActivity::onResume() {
 }
 
 void AuthActivity::resetSignedOutUi() {
+    xbox_login_server_->stop();
     polling_->store(false);
     poll_generation_->fetch_add(1);
     if (start_btn_) start_btn_->setState(brls::ButtonState::ENABLED);
@@ -690,6 +716,7 @@ void AuthActivity::resetSignedOutUi() {
 
 AuthActivity::~AuthActivity() {
     alive_->store(false);
+    xbox_login_server_->stop();
     auth_requesting_->store(false);
     auth_request_generation_->fetch_add(1);
     polling_->store(false);

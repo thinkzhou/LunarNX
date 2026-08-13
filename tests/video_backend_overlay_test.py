@@ -34,7 +34,7 @@ def main() -> None:
             'video_backend' in perf_overlay,
             "Detailed diagnostics should retain the active video backend")
     require("videoBackendOverlayName(" in view and
-            "perf_overlay_->update(fps, res, video_backend)" in view,
+            "perf_overlay_->update(fps, res, video_backend, video_codec)" in view,
             "Stream view should pass the selected mode only to detailed diagnostics")
 
     print("Video backend overlay tests passed")

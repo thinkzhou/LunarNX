@@ -222,6 +222,19 @@ HttpClient::~HttpClient() {
 HttpResponse HttpClient::get(const std::string& url,
                               const std::map<std::string, std::string>& headers,
                               CancelCallback cancel) {
+    return getImpl(url, url, headers, std::move(cancel));
+}
+
+HttpResponse HttpClient::getSensitive(
+    const std::string& url, const std::string& diagnostic_url,
+    const std::map<std::string, std::string>& headers, CancelCallback cancel) {
+    return getImpl(url, diagnostic_url, headers, std::move(cancel));
+}
+
+HttpResponse HttpClient::getImpl(const std::string& url,
+                                  const std::string& diagnostic_url,
+                                  const std::map<std::string, std::string>& headers,
+                                  CancelCallback cancel) {
     std::lock_guard<std::mutex> lock(mutex_);
     HttpResponse response;
     body_buf_.clear();
@@ -237,17 +250,17 @@ HttpResponse HttpClient::get(const std::string& url,
         response.network_error = true;
         response.error_message = "curl init failed";
         lunar::diagnosticLog("http", "GET %s failed: %s",
-                             url.c_str(), response.error_message.c_str());
+                             diagnostic_url.c_str(), response.error_message.c_str());
         curl_slist_free_all(hlist);
         return response;
     }
     curl_easy_reset(curl);
-    lunar::diagnosticLog("http", "GET %s begin", url.c_str());
+    lunar::diagnosticLog("http", "GET %s begin", diagnostic_url.c_str());
     apply_common_options(curl, url, hlist, &body_buf_, &resp_headers_, &cancel, error_buffer);
 
     CURLcode res = curl_easy_perform(curl);
     const char* error_text = curl_error_text(res, error_buffer);
-    log_curl_result(curl, "GET", url, res, error_text);
+    log_curl_result(curl, "GET", diagnostic_url, res, error_text);
     curl_slist_free_all(hlist);
     // Always capture HTTP status when the peer started responding, even on timeout.
     {
@@ -258,9 +271,9 @@ HttpResponse HttpClient::get(const std::string& url,
     if (res != CURLE_OK) {
         response.network_error = true;
         response.error_message = error_text;
-        fprintf(stderr, "[http] GET %s failed: %s\n", url.c_str(), error_text);
+        fprintf(stderr, "[http] GET %s failed: %s\n", diagnostic_url.c_str(), error_text);
         lunar::diagnosticLog("http", "GET %s failed: %s body_len=%zu status=%d",
-                             url.c_str(), response.error_message.c_str(),
+                             diagnostic_url.c_str(), response.error_message.c_str(),
                              body_buf_.size(), response.status_code);
     }
     response.body = std::move(body_buf_);

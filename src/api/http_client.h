@@ -24,6 +24,9 @@ public:
 
     HttpResponse get(const std::string& url, const std::map<std::string, std::string>& headers = {},
                      CancelCallback cancel = {});
+    HttpResponse getSensitive(const std::string& url, const std::string& diagnostic_url,
+                              const std::map<std::string, std::string>& headers = {},
+                              CancelCallback cancel = {});
     HttpResponse post(const std::string& url, const std::string& body,
                       const std::map<std::string, std::string>& headers = {},
                       CancelCallback cancel = {});
@@ -38,6 +41,10 @@ private:
     std::string body_buf_;
     std::map<std::string, std::string> resp_headers_;
     std::mutex mutex_;
+
+    HttpResponse getImpl(const std::string& url, const std::string& diagnostic_url,
+                         const std::map<std::string, std::string>& headers,
+                         CancelCallback cancel);
 };
 
 } // namespace lunar::api

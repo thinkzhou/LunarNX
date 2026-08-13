@@ -13,7 +13,8 @@ class PerfOverlay : public brls::Box {
 public:
     PerfOverlay(const stream::PerfStats* perf, app::StreamPlatform platform);
     void update(float fps, const std::string& resolution,
-                const std::string& video_backend);
+                const std::string& video_backend,
+                const std::string& video_codec);
     void toggle();
     void setVisible(bool visible);
     bool isVisible() const { return visible_; }
