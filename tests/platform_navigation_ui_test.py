@@ -20,7 +20,8 @@ def main():
     require("makeAppFrame" in platform and
             "makeSidebarButton" in platform,
             "platform selection must use the shared Borealis workspace shell")
-    require("new StreamSettingsActivity(nullptr, loadStreamSettings(), {})" in platform,
+    require("new StreamSettingsActivity(nullptr, loadStreamSettings(), {}," in platform and
+            "StreamSettingsScope::Global" in platform,
             "platform selection must expose global settings without constructing a controller")
     require("savedFileExists(lunar::get_token_path())" in platform and
             "savedFileExists(lunar::get_ps_credentials_path())" in platform and
