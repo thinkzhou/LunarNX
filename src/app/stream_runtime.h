@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
+
 namespace lunar::stream {
 
 struct PerfStats;
@@ -24,6 +27,25 @@ enum class StreamPlatform {
     PlayStation,
 };
 
+enum class TouchpadFeedbackGesture : uint8_t {
+    None,
+    Touch,
+    Tap,
+    Pan,
+    LongPress,
+};
+
+struct TouchpadFeedbackPoint {
+    bool active = false;
+    uint16_t screen_x = 0;
+    uint16_t screen_y = 0;
+};
+
+struct TouchpadFeedback {
+    TouchpadFeedbackGesture gesture = TouchpadFeedbackGesture::None;
+    std::array<TouchpadFeedbackPoint, 2> points{};
+};
+
 // Protocol-neutral runtime surface consumed by the in-stream UI. Protocol
 // discovery, registration and session setup intentionally remain outside this
 // boundary.
@@ -43,6 +65,7 @@ public:
 
     virtual void setInputSuppressed(bool suppressed) = 0;
     virtual void requestPlatformHomeButton() = 0;
+    virtual TouchpadFeedback getTouchpadFeedback() const { return {}; }
     virtual void update() = 0;
     virtual void presentVideoFrame() = 0;
 };
