@@ -35,7 +35,7 @@ brls::View* PsRegistrationActivity::createContentView() {
         });
 
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(28, 80, 36, 80);
+    root->setPadding(14, 80, 18, 80);
     root->setAlignItems(brls::AlignItems::CENTER);
 
     // Title
@@ -43,12 +43,13 @@ brls::View* PsRegistrationActivity::createContentView() {
     title->setText(brls::getStr("lunarnx/ps/reg_title"));
     title->setFontSize(24);
     title->setTextColor(p.text);
-    title->setMargins(0, 0, 0, 8);
+    title->setHeight(38);
+    title->setMargins(0, 0, 0, 6);
     root->addView(title);
 
     auto* console_type = new brls::Box(brls::Axis::ROW);
     console_type->setWidth(520);
-    console_type->setHeight(64);
+    console_type->setHeight(52);
     console_type->setAlignItems(brls::AlignItems::CENTER);
     console_type->setBorderThickness(1);
     console_type->setBorderColor(p.border);
@@ -70,8 +71,8 @@ brls::View* PsRegistrationActivity::createContentView() {
     if (host_addr_.empty()) {
         auto* host_input = new brls::InputCell();
         host_input->setWidth(520);
-        host_input->setMargins(0, 0, 0, 18);
-        host_input->setHeight(64);
+        host_input->setMargins(0, 0, 0, 10);
+        host_input->setHeight(52);
         host_input->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
         auto alive = alive_;
         host_input->init(
@@ -91,8 +92,8 @@ brls::View* PsRegistrationActivity::createContentView() {
         host_label->setFontSize(14);
         host_label->setTextColor(p.text_muted);
         host_label->setWidth(520);
-        host_label->setHeight(64);
-        host_label->setMargins(0, 0, 0, 18);
+        host_label->setHeight(52);
+        host_label->setMargins(0, 0, 0, 10);
         host_label->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
         host_label->setBorderThickness(1);
         host_label->setBorderColor(p.border);
@@ -107,8 +108,8 @@ brls::View* PsRegistrationActivity::createContentView() {
     pin_display_->setFontSize(28);
     pin_display_->setTextColor(p.text);
     pin_display_->setWidth(520);
-    pin_display_->setHeight(72);
-    pin_display_->setMargins(0, 0, 0, 20);
+    pin_display_->setHeight(60);
+    pin_display_->setMargins(0, 0, 0, 10);
     pin_display_->setBackgroundColor(p.surface_alt);
     pin_display_->setBorderThickness(1);
     pin_display_->setBorderColor(p.border);
@@ -120,8 +121,9 @@ brls::View* PsRegistrationActivity::createContentView() {
     static const char* kRows[] = {"123", "456", "789", " 0 "};
     for (const auto* row : kRows) {
         auto* row_box = new brls::Box(brls::Axis::ROW);
+        row_box->setHeight(50);
         row_box->setJustifyContent(brls::JustifyContent::CENTER);
-        row_box->setMargins(0, 0, 0, 8);
+        row_box->setMargins(0, 0, 0, 6);
 
         for (const char* c = row; *c; c++) {
             if (*c == ' ') {
@@ -148,8 +150,9 @@ brls::View* PsRegistrationActivity::createContentView() {
 
     // Action row
     auto* action_row = new brls::Box(brls::Axis::ROW);
+    action_row->setHeight(54);
     action_row->setJustifyContent(brls::JustifyContent::CENTER);
-    action_row->setMargins(0, 12, 0, 0);
+    action_row->setMargins(0, 8, 0, 0);
 
     auto* back_btn = new brls::Button();
     back_btn->setText(brls::getStr("lunarnx/ps/reg_backspace"));
@@ -178,7 +181,10 @@ brls::View* PsRegistrationActivity::createContentView() {
     status_->setText(brls::getStr("lunarnx/ps/reg_instructions"));
     status_->setFontSize(12);
     status_->setTextColor(p.text_muted);
-    status_->setMargins(0, 20, 0, 0);
+    status_->setHeight(34);
+    status_->setMargins(0, 8, 0, 0);
+    status_->setSingleLine(true);
+    status_->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     root->addView(status_);
 
     scroll->setContentView(root);

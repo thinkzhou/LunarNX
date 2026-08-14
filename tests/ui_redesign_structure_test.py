@@ -108,6 +108,11 @@ def main() -> None:
             "PlayStation 5" in registration_source and
             "PlayStation 4" in registration_source,
             "pairing flow must retain explicit console type selection context")
+    require("root->setPadding(14, 80, 18, 80)" in registration_source and
+            "row_box->setHeight(50)" in registration_source and
+            "action_row->setHeight(54)" in registration_source and
+            "status_->setHeight(34)" in registration_source,
+            "PS pairing keypad must reserve space for its action row and footer")
     require("new StreamSettingsActivity" in main_source,
             "MainActivity must navigate to the dedicated settings page")
     require("res_720_" not in main_header + main_source and
