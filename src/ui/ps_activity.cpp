@@ -384,6 +384,9 @@ brls::View* PsActivity::createContentView() {
     account_space->setJustifyContent(brls::JustifyContent::FLEX_END);
     account_space->addView(makeMutedLabel(
         brls::getStr("lunarnx/ps/account_network"), 11));
+    account_state_ = makeMutedLabel("", 12);
+    account_state_->setSingleLine(true);
+    account_space->addView(account_state_);
     account_button_ = makeSidebarButton("", false, UiIcon::Account);
     account_button_->registerClickAction([this](brls::View*) -> bool {
         handleAccountAction();
@@ -415,41 +418,6 @@ brls::View* PsActivity::createContentView() {
     brand->addView(makeMutedLabel(brls::getStr("lunarnx/ps/subtitle"), 13));
     header->addView(brand);
 
-    auto* account_chip = makeUiCard(brls::Axis::ROW);
-    account_chip->setWidth(306);
-    account_chip->setHeight(58);
-    account_chip->setMarginLeft(10);
-    account_chip->setPadding(7, 10, 7, 10);
-    account_chip->setCornerRadius(14);
-    account_chip->setAlignItems(brls::AlignItems::CENTER);
-
-    auto* account_mark = new brls::Label();
-    account_mark->setWidth(42);
-    account_mark->setHeight(42);
-    account_mark->setText("PS");
-    account_mark->setFontSize(13);
-    account_mark->setTextColor(p.accent);
-    account_mark->setBackgroundColor(p.accent_soft);
-    account_mark->setCornerRadius(21);
-    account_mark->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    account_mark->setVerticalAlign(brls::VerticalAlign::CENTER);
-    account_chip->addView(account_mark);
-
-    auto* account_copy = new brls::Box(brls::Axis::COLUMN);
-    account_copy->setGrow(1.0f);
-    account_copy->setPadding(2, 0, 2, 10);
-    auto* account_label = new brls::Label();
-    account_label->setText(brls::getStr("lunarnx/ps/account_network"));
-    account_label->setFontSize(10);
-    account_label->setTextColor(p.accent);
-    account_copy->addView(account_label);
-    account_state_ = new brls::Label();
-    account_state_->setFontSize(14);
-    account_state_->setTextColor(p.text);
-    account_state_->setSingleLine(true);
-    account_copy->addView(account_state_);
-    account_chip->addView(account_copy);
-    header->addView(account_chip);
     root->addView(header);
 
     remote_actions_ = new brls::Box(brls::Axis::COLUMN);
@@ -760,21 +728,23 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         if (!visible) continue;
         visible_count++;
         auto* card = makeUiCard(brls::Axis::ROW);
-        card->setHeight(108);
-        card->setPadding(10, 18, 10, 18);
+        card->setHeight(92);
+        card->setPadding(8, 16, 8, 16);
         card->setMarginBottom(12);
         card->setAlignItems(brls::AlignItems::CENTER);
 
         auto* glyph = new ConsoleGlyphView(host.target >= 1000000 ? "PS5" : "PS4",
             host.local.has_value() || (host.remote.has_value() && host.remote->remoteplay_enabled));
+        glyph->setWidth(82);
+        glyph->setHeight(72);
         card->addView(glyph);
 
         auto* info = new brls::Box(brls::Axis::COLUMN);
         info->setGrow(1.0f);
-        info->setPadding(6, 20, 6, 20);
+        info->setPadding(6, 16, 6, 16);
         auto* name = new brls::Label();
         name->setText(host.nickname.empty() ? brls::getStr("lunarnx/ps/console_default") : host.nickname);
-        name->setFontSize(23);
+        name->setFontSize(20);
         name->setTextColor(p.text);
         name->setSingleLine(true);
         name->setVerticalAlign(brls::VerticalAlign::CENTER);
@@ -797,13 +767,6 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         meta->setHeight(28);
         meta->setVerticalAlign(brls::VerticalAlign::CENTER);
         info->addView(meta);
-        auto* description = makeMutedLabel(
-            source_ == PsConsoleSource::Local
-                ? brls::getStr("lunarnx/ps/local_console_desc")
-                : brls::getStr("lunarnx/ps/remote_console_desc"),
-            13);
-        description->setSingleLine(true);
-        info->addView(description);
         card->addView(info);
 
         const bool paired = host.credentials.has_value();
@@ -815,7 +778,7 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
             host.remote->remoteplay_enabled;
 
         auto* action = new brls::Button();
-        action->setWidth(190);
+        action->setWidth(168);
         if (source_ == PsConsoleSource::Local && !paired) {
             stylePrimaryButton(action);
             action->setText(brls::getStr("lunarnx/ps/btn_pair"));

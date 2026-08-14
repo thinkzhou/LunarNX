@@ -39,10 +39,12 @@ def main():
     require('lunarnx/ps/btn_pair' in ui and 'lunarnx/ps/btn_wake_connect' in ui and
             'lunarnx/ps/btn_connect' in ui,
             "console cards must expose truthful goal-oriented actions")
-    require("card->setHeight(108);" in ui and
-            "name->setFontSize(23);" in ui and
-            "local_console_desc" in ui and "remote_console_desc" in ui,
-            "dynamic PS console rows must match Xbox card dimensions and typography")
+    require("card->setHeight(92);" in ui and
+            "name->setFontSize(20);" in ui and
+            "name->setSingleLine(true);" in ui and
+            "meta->setHeight(28);" in ui and
+            "local_console_desc" not in ui and "remote_console_desc" not in ui,
+            "dynamic PS console rows must use the compact two-line card hierarchy")
     require('detail_remote_disabled' in ui and 'btn_how_enable' in ui,
             "remote-disabled devices must remain visible with guidance")
     require('lunarnx/ps/pair_ps4' in ui and 'lunarnx/ps/pair_ps5' in ui,

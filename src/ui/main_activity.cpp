@@ -224,23 +224,14 @@ brls::View* MainActivity::createContentView() {
             : brls::getStr("lunarnx/main/sign_in_then_xbox"));
     }
 
-    auto* status_card = makeUiCard(brls::Axis::ROW);
-    status_card->setHeight(58);
-    status_card->setPadding(12, 18, 12, 18);
-    auto* status_mark = new brls::Label();
-    status_mark->setText(brls::getStr("lunarnx/common/status"));
-    status_mark->setWidth(88);
-    status_mark->setFontSize(12);
-    status_mark->setTextColor(p.accent);
-    status_card->addView(status_mark);
     status_ = new brls::Label();
     status_->setText("");
-    status_->setFontSize(14);
+    status_->setFontSize(13);
     status_->setTextColor(p.text_muted);
-    status_->setGrow(1.0f);
+    status_->setHeight(34);
+    status_->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     status_->setVerticalAlign(brls::VerticalAlign::CENTER);
-    status_card->addView(status_);
-    root->addView(status_card);
+    root->addView(status_);
     installStateCallback();
 
     // Do not auto-start home stream in mock mode.
@@ -531,23 +522,26 @@ void MainActivity::refreshConsoles() {
         bool can_connect = on || c.power_state == "ConnectedStandby";
 
         auto* item = makeUiCard(brls::Axis::ROW);
-        item->setHeight(108);
-        item->setPadding(10, 18, 10, 18);
+        item->setHeight(92);
+        item->setPadding(8, 16, 8, 16);
         item->setMarginBottom(12);
         item->setAlignItems(brls::AlignItems::CENTER);
         item->setFocusable(can_connect);
         item->setHighlightCornerRadius(10);
-        item->addView(new ConsoleGlyphView(c.console_type, can_connect));
+        auto* glyph = new ConsoleGlyphView(c.console_type, can_connect);
+        glyph->setWidth(82);
+        glyph->setHeight(72);
+        item->addView(glyph);
 
         auto* details = new brls::Box(brls::Axis::COLUMN);
         details->setGrow(1.0f);
-        details->setPadding(6, 20, 6, 20);
+        details->setPadding(6, 16, 6, 16);
 
         auto* name = new brls::Label();
         name->setText(c.name.empty()
             ? brls::getStr("lunarnx/main/xbox_console")
             : c.name);
-        name->setFontSize(23);
+        name->setFontSize(20);
         name->setTextColor(p.text);
         name->setSingleLine(true);
         name->setVerticalAlign(brls::VerticalAlign::CENTER);
@@ -564,13 +558,6 @@ void MainActivity::refreshConsoles() {
         meta->setVerticalAlign(brls::VerticalAlign::CENTER);
         details->addView(meta);
 
-        auto* description = makeMutedLabel(
-            can_connect
-                ? brls::getStr("lunarnx/main/console_ready_description")
-                : brls::getStr("lunarnx/main/console_offline_description"),
-            13);
-        description->setSingleLine(true);
-        details->addView(description);
         item->addView(details);
 
         std::string server_id = c.id;

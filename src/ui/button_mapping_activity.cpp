@@ -101,15 +101,6 @@ brls::View* ButtonMappingActivity::createContentView() {
     content->setPadding(28, 64, 40, 64);
     scroll->setContentView(content);
 
-    auto* title = new brls::Label();
-    title->setText(brls::getStr(
-        profile_ == input::ButtonMappingProfile::PlayStation
-            ? "lunarnx/button_mapping/ps_title"
-            : "lunarnx/button_mapping/xbox_title"));
-    title->setFontSize(30);
-    title->setTextColor(p.text);
-    title->setHeight(60);
-    content->addView(title);
     content->addView(makeMutedLabel(
         brls::getStr("lunarnx/button_mapping/detail"), 14));
 
