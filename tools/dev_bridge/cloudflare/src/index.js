@@ -32,7 +32,7 @@ async function authorized(request, expected) {
   return difference === 0;
 }
 
-async function serveObject(namespace, key, cacheControl, contentType) {
+async function serveObject(namespace, key, cacheControl, contentType, headers = {}) {
   const object = await namespace.getWithMetadata(key, "arrayBuffer");
   if (!object.value) return json({ error: "not_found" }, 404);
 
@@ -40,6 +40,7 @@ async function serveObject(namespace, key, cacheControl, contentType) {
     headers: {
       "content-type": object.metadata?.contentType || contentType,
       "cache-control": cacheControl,
+      ...headers,
     },
   });
 }
@@ -134,10 +135,17 @@ export default {
     }
     if (request.method === "GET" && url.pathname.startsWith("/dev/builds/")) {
       const name = url.pathname.slice("/dev/builds/".length);
-      if (!/^[a-f0-9]{64}\.nro$/.test(name)) {
+      if (!/^[a-f0-9]{64}\.nro(?:\.gz)?$/.test(name)) {
         return json({ error: "invalid_build_name" }, 400);
       }
-      return serveObject(env.ARTIFACTS, `builds/${name}`, "public, max-age=31536000, immutable", "application/octet-stream");
+      const compressed = name.endsWith(".gz");
+      return serveObject(
+        env.ARTIFACTS,
+        `builds/${name}`,
+        "public, max-age=31536000, immutable",
+        "application/octet-stream",
+        compressed ? { "content-encoding": "gzip", "vary": "Accept-Encoding" } : {},
+      );
     }
     if (request.method === "POST" && url.pathname === "/dev/logs") {
       return uploadLog(request, env);

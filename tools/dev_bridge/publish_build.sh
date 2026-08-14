@@ -60,6 +60,14 @@ fi
 BASE_URL=${LUNARNX_DEV_BRIDGE_URL%/}
 TMP_DIR=$(mktemp -d /tmp/lunarnx-dev-publish-XXXXXX)
 trap '/bin/rm -rf "$TMP_DIR"' EXIT
+GZIP_PATH="$TMP_DIR/$SHA256.nro.gz"
+/bin/cat "$NRO_PATH" | /usr/bin/gzip -c -9 > "$GZIP_PATH"
+COMPRESSED_SIZE=$(/usr/bin/stat -f '%z' "$GZIP_PATH")
+if (( COMPRESSED_SIZE <= 0 || COMPRESSED_SIZE >= SIZE ||
+      COMPRESSED_SIZE > KV_MAX_VALUE_BYTES )); then
+    print -u2 -- "Compressed NRO has an invalid size: $COMPRESSED_SIZE bytes"
+    exit 9
+fi
 
 /usr/bin/jq -n \
     --arg build_id "$BUILD_ID" \
@@ -68,9 +76,15 @@ trap '/bin/rm -rf "$TMP_DIR"' EXIT
     --arg git_commit "$COMMIT" \
     --arg sha256 "$SHA256" \
     --arg download_url "$BASE_URL/dev/builds/$SHA256.nro" \
+    --arg compressed_download_url "$BASE_URL/dev/builds/$SHA256.nro.gz" \
     --arg published_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --argjson size "$SIZE" \
-    '{schema:2,version:$version,notes:$notes,build_id:$build_id,git_commit:$git_commit,published_at:$published_at,size:$size,sha256:$sha256,download_url:$download_url}' \
+    --argjson compressed_size "$COMPRESSED_SIZE" \
+    '{schema:3,version:$version,notes:$notes,build_id:$build_id,
+      git_commit:$git_commit,published_at:$published_at,size:$size,
+      compressed_size:$compressed_size,compression:"gzip",sha256:$sha256,
+      download_url:$download_url,
+      compressed_download_url:$compressed_download_url}' \
     > "$TMP_DIR/latest.json"
 
 INDEX_STATUS=$(curl -sS -o "$TMP_DIR/index.json" -w '%{http_code}' "$BASE_URL/dev/versions.json") || exit 7
@@ -90,6 +104,8 @@ esac
 cd "$CLOUDFLARE_DIR"
 npx wrangler kv key put "builds/$SHA256.nro" \
     --remote --binding ARTIFACTS --path "$NRO_PATH"
+npx wrangler kv key put "builds/$SHA256.nro.gz" \
+    --remote --binding ARTIFACTS --path "$GZIP_PATH"
 npx wrangler kv key put "builds/versions/$VERSION.json" \
     --remote --binding ARTIFACTS --path "$TMP_DIR/latest.json"
 npx wrangler kv key put "builds/index.json" \
@@ -102,6 +118,7 @@ print -- "Version: $VERSION"
 print -- "Notes: $NOTES"
 print -- "Build: $BUILD_ID"
 print -- "Size: $SIZE bytes"
+print -- "Compressed size: $COMPRESSED_SIZE bytes"
 print -- "SHA-256: $SHA256"
 print -- "Manifest: $BASE_URL/dev/latest.json"
 print -- "Versions: $BASE_URL/dev/versions.json"

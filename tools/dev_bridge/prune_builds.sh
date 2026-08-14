@@ -64,13 +64,14 @@ cd "$CLOUDFLARE_DIR"
 npx wrangler kv key list --binding ARTIFACTS --remote --prefix builds/ \
     > "$TMP_DIR/keys.json"
 /usr/bin/jq -e 'type == "array"' "$TMP_DIR/keys.json" >/dev/null
-/usr/bin/jq -r '.[].name | select(test("^builds/[0-9a-f]{64}\\.nro$"))' \
+/usr/bin/jq -r '.[].name | select(test("^builds/[0-9a-f]{64}\\.nro(\\.gz)?$"))' \
     "$TMP_DIR/keys.json" > "$TMP_DIR/binary-keys.txt"
 
 : > "$TMP_DIR/remove-binaries.txt"
 while IFS= read -r key; do
     [[ -n "$key" ]] || continue
     sha=${key#builds/}
+    sha=${sha%.gz}
     sha=${sha%.nro}
     if ! /usr/bin/jq -e --arg sha "$sha" \
         '.versions[] | select(.sha256 == $sha)' "$TMP_DIR/index-next.json" >/dev/null; then

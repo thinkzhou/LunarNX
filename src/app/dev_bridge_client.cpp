@@ -35,6 +35,9 @@ namespace {
 
 constexpr long long kMaxNroBytes = 25LL * 1024LL * 1024LL;
 constexpr long long kMaxLogBytes = 2LL * 1024LL * 1024LL;
+constexpr long kDownloadTimeoutSeconds = 30L * 60L;
+constexpr long kDownloadLowSpeedBytesPerSecond = 512L;
+constexpr long kDownloadLowSpeedSeconds = 3L * 60L;
 
 int sha256Starts(mbedtls_sha256_context* context) {
 #if defined(MBEDTLS_VERSION_MAJOR) && MBEDTLS_VERSION_MAJOR >= 3
@@ -75,8 +78,12 @@ bool parseBuild(cJSON* item, DevBuild& build) {
     build.published_at = jsonString(item, "published_at");
     build.sha256 = jsonString(item, "sha256");
     build.download_url = jsonString(item, "download_url");
+    build.compressed_download_url = jsonString(item, "compressed_download_url");
     cJSON* size = cJSON_GetObjectItemCaseSensitive(item, "size");
+    cJSON* compressed_size = cJSON_GetObjectItemCaseSensitive(item, "compressed_size");
     build.size = cJSON_IsNumber(size) ? static_cast<long long>(size->valuedouble) : 0;
+    build.compressed_size = cJSON_IsNumber(compressed_size)
+        ? static_cast<long long>(compressed_size->valuedouble) : 0;
     const bool lowercase_sha = build.sha256.size() == 64 &&
         build.sha256.find_first_not_of("0123456789abcdef") == std::string::npos;
     const std::string expected_path = "/dev/builds/" + build.sha256 + ".nro";
@@ -89,6 +96,20 @@ bool parseBuild(cJSON* item, DevBuild& build) {
         // downloads through the configured custom domain after validating the
         // content-addressed path.
         build.download_url = std::string(DevBridgeClient::kBaseUrl) + expected_path;
+        const std::string expected_compressed_path = expected_path + ".gz";
+        const bool valid_compressed_path = build.compressed_download_url.size() >=
+                expected_compressed_path.size() &&
+            build.compressed_download_url.compare(
+                build.compressed_download_url.size() - expected_compressed_path.size(),
+                expected_compressed_path.size(), expected_compressed_path) == 0 &&
+            build.compressed_size > 0 && build.compressed_size <= kMaxNroBytes;
+        if (valid_compressed_path) {
+            build.compressed_download_url =
+                std::string(DevBridgeClient::kBaseUrl) + expected_compressed_path;
+        } else {
+            build.compressed_download_url.clear();
+            build.compressed_size = 0;
+        }
         return true;
     }
     return false;
@@ -118,6 +139,18 @@ size_t downloadWrite(void* data, size_t size, size_t count, void* user) {
         state->bytes += static_cast<long long>(written);
     }
     return written;
+}
+
+size_t responseWrite(char* data, size_t size, size_t count, void* user) {
+    const size_t bytes = size * count;
+    auto* body = static_cast<std::string*>(user);
+    if (!body) return 0;
+    try {
+        body->append(data, bytes);
+    } catch (...) {
+        return 0;
+    }
+    return bytes;
 }
 
 int downloadProgress(void* user, curl_off_t total, curl_off_t downloaded,
@@ -274,14 +307,17 @@ bool DevBridgeClient::install(const DevBuild& build, const std::string& target_p
         error = "Could not initialize download";
         return false;
     }
-    curl_easy_setopt(curl, CURLOPT_URL, build.download_url.c_str());
+    const std::string& download_url = build.compressed_download_url.empty()
+        ? build.download_url : build.compressed_download_url;
+    curl_easy_setopt(curl, CURLOPT_URL, download_url.c_str());
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 180L);
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, kDownloadTimeoutSeconds);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, kDownloadLowSpeedBytesPerSecond);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, kDownloadLowSpeedSeconds);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "LunarNX-Updater");
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, LUNARNX_CURL_VERIFY_SSL ? 1L : 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, LUNARNX_CURL_VERIFY_SSL ? 2L : 0L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, downloadWrite);
@@ -361,11 +397,7 @@ bool DevBridgeClient::uploadLog(const std::string& log_path, std::string& log_id
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, LUNARNX_CURL_VERIFY_SSL ? 1L : 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, LUNARNX_CURL_VERIFY_SSL ? 2L : 0L);
     std::string response_body;
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, [](void* data, size_t unit, size_t count, void* user) -> size_t {
-        const size_t bytes = unit * count;
-        static_cast<std::string*>(user)->append(static_cast<const char*>(data), bytes);
-        return bytes;
-    });
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, responseWrite);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
     const CURLcode result = curl_easy_perform(curl);
     long status = 0;

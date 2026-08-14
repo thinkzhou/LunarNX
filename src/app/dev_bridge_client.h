@@ -14,7 +14,9 @@ struct DevBuild {
     std::string published_at;
     std::string sha256;
     std::string download_url;
+    std::string compressed_download_url;
     long long size = 0;
+    long long compressed_size = 0;
 };
 
 class DevBridgeClient {

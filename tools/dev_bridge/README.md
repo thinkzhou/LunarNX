@@ -24,6 +24,11 @@ time for the current local artifact. It is build output and is intentionally
 not committed. Cloudflare's `/dev/versions.json` remains the durable release
 history, avoiding a second manually maintained history file.
 
+Each release stores both the original `.nro` and a gzip transport copy. Existing
+clients and Feishu links keep using the original artifact. New clients prefer
+`compressed_download_url`, let libcurl decode gzip while streaming, and verify
+the decompressed NRO against the original size and SHA-256 before replacement.
+
 A successful Cloudflare publish sends the Feishu notification by default. Pass
 `--no-feishu` only when a publish intentionally should not notify the configured
 release chat.

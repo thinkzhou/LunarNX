@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { gzipSync } from "node:zlib";
 import worker from "../src/index.js";
 
 class MemoryNamespace {
@@ -12,7 +13,12 @@ class MemoryNamespace {
     const item = this.objects.get(key);
     if (!item) return null;
     if (type === "arrayBuffer") {
-      if (item.bytes instanceof Uint8Array) return item.bytes.buffer;
+      if (item.bytes instanceof Uint8Array) {
+        return item.bytes.buffer.slice(
+          item.bytes.byteOffset,
+          item.bytes.byteOffset + item.bytes.byteLength,
+        );
+      }
       return new TextEncoder().encode(item.bytes).buffer;
     }
     if (typeof item.bytes === "string") return item.bytes;
@@ -90,6 +96,21 @@ test("build downloads only accept sha256 object names", async () => {
   const response = await worker.fetch(
     new Request("https://bridge.test/dev/builds/latest.nro"), env());
   assert.equal(response.status, 400);
+});
+
+test("compressed build downloads are served with gzip content encoding", async () => {
+  const testEnv = env();
+  const sha = "a".repeat(64);
+  const compressed = gzipSync(Buffer.from("nro payload"));
+  await testEnv.ARTIFACTS.put(`builds/${sha}.nro.gz`, compressed);
+
+  const response = await worker.fetch(
+    new Request(`https://bridge.test/dev/builds/${sha}.nro.gz`), testEnv);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-encoding"), "gzip");
+  assert.equal(response.headers.get("vary"), "Accept-Encoding");
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), compressed);
 });
 
 test("version index and individual manifests are downloadable", async () => {

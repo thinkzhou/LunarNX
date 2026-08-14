@@ -14,6 +14,8 @@ client_header = (ROOT / "src/app/dev_bridge_client.h").read_text()
 ui = (ROOT / "src/ui/dev_tools_activity.cpp").read_text()
 platform = (ROOT / "src/ui/platform_activity.cpp").read_text()
 makefile = (ROOT / "Makefile.switch").read_text()
+publisher = (ROOT / "tools/dev_bridge/publish_build.sh").read_text()
+pruner = (ROOT / "tools/dev_bridge/prune_builds.sh").read_text()
 
 require("/dev/versions.json" in client and "cJSON_ArrayForEach" in client,
         "development client must parse the version index")
@@ -23,6 +25,10 @@ require("mbedtls_sha256" in client and "build.sha256" in client,
         "downloaded NRO must be verified with SHA-256")
 require("CURLOPT_XFERINFOFUNCTION" in client and "ProgressCallback" in client_header,
         "streaming download must report progress")
+require("kDownloadTimeoutSeconds = 30L * 60L" in client and
+        "kDownloadLowSpeedBytesPerSecond = 512L" in client and
+        "kDownloadLowSpeedSeconds = 3L * 60L" in client,
+        "Switch downloads must tolerate slow mainland network routes")
 require(client.count("LUNARNX_CURL_VERIFY_SSL ? 1L : 0L") >= 2 and
         client.count("LUNARNX_CURL_VERIFY_SSL ? 2L : 0L") >= 2,
         "downloads and log uploads must follow the Switch TLS build setting")
@@ -31,6 +37,9 @@ require('target_path + ".update"' in client and 'target + ".backup"' in client a
         "installation must preserve temporary, backup, and rollback archive files")
 require("/dev/logs" in client and "LUNARNX_DEV_UPLOAD_TOKEN" in client,
         "log upload must use the authenticated bridge endpoint")
+require("size_t responseWrite(" in client and
+        "CURLOPT_WRITEFUNCTION, responseWrite" in client,
+        "log upload must pass a real C function pointer to libcurl")
 require("X-LunarNX-Commit" in client and "X-LunarNX-Device" in client and
         'jsonString(root, "log_id")' in client,
         "log upload must identify its build and return the server log ID")
@@ -51,5 +60,14 @@ require("lunarnx.tooyang.qzz.io" in client_header,
 require("Historical manifests contain the old workers.dev origin" in client and
         "build.download_url = std::string(DevBridgeClient::kBaseUrl)" in client,
         "historical manifests must download through the custom domain")
+require("compressed_download_url" in client_header and
+        'jsonString(item, "compressed_download_url")' in client and
+        "CURLOPT_ACCEPT_ENCODING" in client,
+        "new clients must prefer and transparently decode gzip builds")
+require("compressed_download_url" in publisher and ".nro.gz" in publisher and
+        "/usr/bin/gzip" in publisher,
+        "publishing must upload a gzip transport artifact alongside the raw NRO")
+require('\\\\.nro(\\\\.gz)?$' in pruner and 'sha=${sha%.gz}' in pruner,
+        "build pruning must remove orphaned raw and gzip artifacts")
 
 print("Development bridge client regression checks passed")
