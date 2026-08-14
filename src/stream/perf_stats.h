@@ -143,6 +143,10 @@ struct PerfStats {
     std::atomic<uint32_t> rtp_queue_drops{0};
     std::atomic<uint32_t> rtp_queue_high_watermark{0};
     std::atomic<uint32_t> srtp_rtp_decrypt_failures{0};
+    std::atomic<uint32_t> srtp_rtp_auth_failures{0};
+    std::atomic<uint32_t> srtp_rtp_replay_failures{0};
+    std::atomic<uint32_t> srtp_rtp_replay_old_failures{0};
+    std::atomic<uint32_t> srtp_rtp_other_failures{0};
     std::atomic<uint32_t> srtp_rtcp_decrypt_failures{0};
     std::atomic<int64_t> last_video_transit_ns{0};
     std::atomic<bool> video_transit_initialized{false};
@@ -214,7 +218,9 @@ struct PerfStats {
         h264_frames = 0; h264_corrupt_frames = 0; h264_unsupported_nalus = 0;
         h264_overflow_frames = 0; h264_max_frame_bytes = 0;
         rtp_queue_drops = 0; rtp_queue_high_watermark = 0;
-        srtp_rtp_decrypt_failures = 0; srtp_rtcp_decrypt_failures = 0;
+        srtp_rtp_decrypt_failures = 0; srtp_rtp_auth_failures = 0;
+        srtp_rtp_replay_failures = 0; srtp_rtp_replay_old_failures = 0;
+        srtp_rtp_other_failures = 0; srtp_rtcp_decrypt_failures = 0;
         last_video_transit_ns = 0; video_transit_initialized = false;
         start_time = std::chrono::steady_clock::now();
     }
@@ -492,6 +498,10 @@ struct PerfStats {
                      uint32_t queue_drops,
                      uint32_t queue_high_watermark,
                      uint32_t srtp_rtp_failures,
+                     uint32_t srtp_auth_failures,
+                     uint32_t srtp_replay_failures,
+                     uint32_t srtp_replay_old_failures,
+                     uint32_t srtp_other_failures,
                      uint32_t srtp_rtcp_failures,
                      uint32_t ice_rtt_ms,
                      uint32_t highest_sequence,
@@ -531,6 +541,10 @@ struct PerfStats {
         rtp_queue_drops = queue_drops;
         rtp_queue_high_watermark = queue_high_watermark;
         srtp_rtp_decrypt_failures = srtp_rtp_failures;
+        srtp_rtp_auth_failures = srtp_auth_failures;
+        srtp_rtp_replay_failures = srtp_replay_failures;
+        srtp_rtp_replay_old_failures = srtp_replay_old_failures;
+        srtp_rtp_other_failures = srtp_other_failures;
         srtp_rtcp_decrypt_failures = srtp_rtcp_failures;
         network_rtt_ms = ice_rtt_ms;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
@@ -692,6 +706,7 @@ struct PerfStats {
             "h264_corrupt=%u h264_overflow=%u h264_max_bytes=%u "
             "rtp_queue_high=%u rtp_queue_drop=%u "
             "rtp_queue_drop_delta=%u srtp_fail=%u "
+            "srtp_auth=%u srtp_replay=%u srtp_replay_old=%u srtp_other=%u "
             "keepalive_interval_s=%u keepalive_duration_ms=%u "
             "keepalive_age_ms=%llu keepalive_ok=%d "
             "keepalive_exception_count=%u keepalive_exception_age_ms=%llu "
@@ -763,6 +778,10 @@ struct PerfStats {
             rtp_queue_drops.load(),
             rtp_queue_drop_delta_diag.load(),
             srtp_rtp_decrypt_failures.load(),
+            srtp_rtp_auth_failures.load(),
+            srtp_rtp_replay_failures.load(),
+            srtp_rtp_replay_old_failures.load(),
+            srtp_rtp_other_failures.load(),
             keep_alive_interval_seconds.load(),
             last_keep_alive_duration_ms.load(),
             static_cast<unsigned long long>(keep_alive_age_ms),

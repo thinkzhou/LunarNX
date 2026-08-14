@@ -51,7 +51,8 @@ def main() -> None:
         "pump_gap_us", "pump_duration_us", "arrival_age_ms",
         "arrival_gap_ms", "highest_seq", "gap_packets", "ssrc_changes",
         "nacks", "resyncs", "jitter_q_packets", "waiting_keyframe",
-        "rtp_queue_drop_delta", "keepalive_exception_count",
+        "rtp_queue_drop_delta", "srtp_auth", "srtp_replay",
+        "srtp_replay_old", "srtp_other", "keepalive_exception_count",
         "keepalive_exception_age_ms", "token_refresh_exception_count",
         "token_refresh_exception_age_ms",
     ):

@@ -6,6 +6,7 @@ PATCH = (ROOT / "tools/chiaki_switch/lunarnx-chiaki-transport-diagnostics.patch"
 KEY_PATCH = (ROOT / "tools/chiaki_switch/lunarnx-chiaki-key-position-diagnostics.patch").read_text()
 BUILD = (ROOT / "tools/chiaki_switch/build_in_docker.sh").read_text()
 ADAPTER = (ROOT / "src/ps/chiaki_log_adapter.cpp").read_text()
+SESSION = (ROOT / "src/ps/ps_stream_session.cpp").read_text()
 
 
 def require(text: str, message: str) -> None:
@@ -15,6 +16,8 @@ def require(text: str, message: str) -> None:
 
 require("LUNARNX-PSRX packets=%llu bytes=%llu", "Takion aggregate throughput is missing")
 require("proc_avg_us=%llu proc_max_us=%llu", "Takion processing timing is missing")
+require("recv_gap_max_us=%llu recv_wait_max_us=%llu recv_timeout=%llu",
+        "Takion receive gaps and timeout pressure are missing")
 require("mac_fail=%llu av_drop=%llu reorder_skip=%llu alloc_fail=%llu",
         "Takion failure counters are missing")
 require("video_q_high=%llu video_q_now=%llu", "Takion reorder depth is missing")
@@ -45,5 +48,7 @@ if "#if LUNARNX_CHIAKI_TRANSPORT_DIAG" not in KEY_PATCH:
 if ("LUNARNX-PSRX " not in ADAPTER or "LUNARNX-PSVIDEO " not in ADAPTER or
         "LUNARNX-PSKEY " not in ADAPTER):
     raise AssertionError("Aggregate records must use the asynchronous diagnostic writer")
+if "connect_info_.enable_idr_on_fec_failure = true;" not in SESSION:
+    raise AssertionError("PS FEC failure must immediately request and wait for an IDR")
 
 print("Chiaki transport diagnostics tests passed")

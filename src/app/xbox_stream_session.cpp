@@ -21,6 +21,7 @@ constexpr std::chrono::seconds kReceiverFeedbackInterval{1};
 constexpr int kGuidePulseFrames = 8;
 constexpr uint32_t kRecoveryMissingPacketsThreshold = 12;
 constexpr uint32_t kRecoveryCorruptFramesThreshold = 4;
+constexpr uint32_t kRecoverySrtpFailureThreshold = 12;
 
 const char* iceCandidateTypeName(uint8_t type) {
     switch (type) {
@@ -651,6 +652,10 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                           media_stats.rtp_queue_drops,
                           media_stats.rtp_queue_high_watermark,
                           media_stats.srtp_rtp_decrypt_failures,
+                          media_stats.srtp_rtp_auth_failures,
+                          media_stats.srtp_rtp_replay_failures,
+                          media_stats.srtp_rtp_replay_old_failures,
+                          media_stats.srtp_rtp_other_failures,
                           media_stats.srtp_rtcp_decrypt_failures,
                           media_stats.ice_rtt_ms,
                           media_stats.video_rtp_highest_seq_ext,
@@ -746,6 +751,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             const bool video_damage_increased =
                 missing_delta >= kRecoveryMissingPacketsThreshold ||
                 corrupt_delta >= kRecoveryCorruptFramesThreshold ||
+                srtp_delta >= kRecoverySrtpFailureThreshold ||
                 queue_drop_delta > 0;
             const uint32_t rendered_frames = perf_.video_frames.load();
             const bool awaiting_first_frame = rendered_frames == 0;
