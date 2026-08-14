@@ -27,7 +27,9 @@ require('"736743823"' in ABOUT and
         'lunarnx/about/qq_group' in ABOUT,
         "About page must show the LunarNX QQ group")
 require('"XBOX"' in ABOUT and '"XCLOUD"' in ABOUT and
-        '"PLAYSTATION"' in ABOUT,
+        '"PLAYSTATION"' in ABOUT and
+        'img/platform/xbox.png' in ABOUT and
+        'img/platform/playstation.png' in ABOUT,
         "About page must describe all supported streaming platforms")
 require('AGPL-3.0-only-OpenSSL' in ABOUT and
         'github.com/thinkzhou/LunarNX' in ABOUT and

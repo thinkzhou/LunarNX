@@ -7,7 +7,8 @@ namespace lunar::ui {
 namespace {
 
 brls::Box* makeInfoCell(const std::string& label, const std::string& value,
-                        const std::string& detail, bool add_margin) {
+                        const std::string& detail,
+                        const std::string& logo_resource, bool add_margin) {
     const auto& p = uiPalette();
     auto* cell = new brls::Box(brls::Axis::COLUMN);
     cell->setGrow(1.0f);
@@ -19,11 +20,22 @@ brls::Box* makeInfoCell(const std::string& label, const std::string& value,
     cell->setCornerRadius(8);
     if (add_margin) cell->setMarginLeft(12);
 
+    auto* platform = new brls::Box(brls::Axis::ROW);
+    platform->setHeight(18);
+    platform->setAlignItems(brls::AlignItems::CENTER);
+    auto* logo = new brls::Image();
+    logo->setWidth(16);
+    logo->setHeight(16);
+    logo->setScalingType(brls::ImageScalingType::FIT);
+    logo->setImageFromRes(logo_resource);
+    platform->addView(logo);
     auto* eyebrow = new brls::Label();
     eyebrow->setText(label);
     eyebrow->setFontSize(11);
     eyebrow->setTextColor(p.accent);
-    cell->addView(eyebrow);
+    eyebrow->setMarginLeft(8);
+    platform->addView(eyebrow);
+    cell->addView(platform);
 
     auto* title = new brls::Label();
     title->setText(value);
@@ -135,13 +147,16 @@ brls::View* AboutActivity::createContentView() {
     capabilities->setMarginBottom(16);
     capabilities->addView(makeInfoCell(
         "XBOX", brls::getStr("lunarnx/about/xbox_title"),
-        brls::getStr("lunarnx/about/xbox_desc"), false));
+        brls::getStr("lunarnx/about/xbox_desc"),
+        "img/platform/xbox.png", false));
     capabilities->addView(makeInfoCell(
         "XCLOUD", brls::getStr("lunarnx/about/cloud_title"),
-        brls::getStr("lunarnx/about/cloud_desc"), true));
+        brls::getStr("lunarnx/about/cloud_desc"),
+        "img/platform/xbox.png", true));
     capabilities->addView(makeInfoCell(
         "PLAYSTATION", brls::getStr("lunarnx/about/ps_title"),
-        brls::getStr("lunarnx/about/ps_desc"), true));
+        brls::getStr("lunarnx/about/ps_desc"),
+        "img/platform/playstation.png", true));
     root->addView(capabilities);
 
     root->addView(makeSectionHeader(

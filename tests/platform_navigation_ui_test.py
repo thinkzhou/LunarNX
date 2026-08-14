@@ -12,11 +12,19 @@ def main():
     ps = Path("src/ui/ps_activity.cpp").read_text()
     xbox = Path("src/ui/main_activity.cpp").read_text()
 
+    require(Path("romfs/img/platform/xbox.png").is_file() and
+            Path("romfs/img/platform/playstation.png").is_file() and
+            Path("res/platform/xbox.svg").is_file() and
+            Path("res/platform/playstation.svg").is_file(),
+            "platform logo sources and runtime images must be packaged")
+
     require("makePlatformTile" in platform and
             "tile->setFocusable" not in platform and
             "tile->registerClickAction" in platform and
-            "ConsoleGlyphView" in platform,
-            "platform selection must use whole-focus console tiles")
+            'img/platform/xbox.png' in platform and
+            'img/platform/playstation.png' in platform and
+            "setImageFromRes" in platform,
+            "platform selection must use whole-focus branded platform tiles")
     require("makeAppFrame" in platform and
             "workspace->setPadding(28, 48, 24, 48)" in platform and
             "makeSidebarButton" not in platform,

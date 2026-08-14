@@ -20,7 +20,7 @@ namespace {
 brls::Button* makePlatformTile(const std::string& title,
                                const std::string& detail,
                                const std::string& account_state,
-                               const std::string& console_type,
+                               const std::string& logo_resource,
                                const std::function<void()>& open) {
     const auto& p = uiPalette();
     auto* tile = new brls::Button();
@@ -36,10 +36,20 @@ brls::Button* makePlatformTile(const std::string& title,
     tile->setAxis(brls::Axis::ROW);
     tile->setAlignItems(brls::AlignItems::CENTER);
 
-    auto* glyph = new ConsoleGlyphView(console_type, true);
-    glyph->setWidth(150);
-    glyph->setHeight(150);
-    tile->addView(glyph);
+    auto* logo_surface = new brls::Box(brls::Axis::COLUMN);
+    logo_surface->setWidth(150);
+    logo_surface->setHeight(150);
+    logo_surface->setAlignItems(brls::AlignItems::CENTER);
+    logo_surface->setJustifyContent(brls::JustifyContent::CENTER);
+    logo_surface->setBackgroundColor(p.surface_alt);
+    logo_surface->setCornerRadius(8);
+    auto* logo = new brls::Image();
+    logo->setWidth(82);
+    logo->setHeight(82);
+    logo->setScalingType(brls::ImageScalingType::FIT);
+    logo->setImageFromRes(logo_resource);
+    logo_surface->addView(logo);
+    tile->addView(logo_surface);
 
     auto* copy = new brls::Box(brls::Axis::COLUMN);
     copy->setGrow(1.0f);
@@ -152,7 +162,7 @@ brls::View* PlatformActivity::createContentView() {
         brls::getStr(xbox_saved
             ? "lunarnx/common/signed_in_microsoft"
             : "lunarnx/common/not_signed_in"),
-        "SeriesX", [this]() {
+        "img/platform/xbox.png", [this]() {
         diagnosticLog("ui-platform", "Xbox Open clicked");
         openXbox();
     });
@@ -165,7 +175,7 @@ brls::View* PlatformActivity::createContentView() {
         brls::getStr(ps_saved
             ? "lunarnx/ps/signed_in"
             : "lunarnx/common/not_signed_in"),
-        "PS5", [this]() {
+        "img/platform/playstation.png", [this]() {
         diagnosticLog("ui-platform", "PlayStation Open clicked");
         openPlayStation();
     });
