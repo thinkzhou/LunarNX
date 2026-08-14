@@ -17,9 +17,8 @@ def main():
             "PsConsoleSource::Local" in ui and "PsConsoleSource::Remote" in ui,
             "PS page must use Xbox-style local and remote source tabs")
     require('return makeAppFrame("PlayStation", workspace);' in ui and
-            'makeSidebarButton(brls::getStr("lunarnx/ps/tab_local"), true)' in ui and
-            'makeSidebarButton(brls::getStr("lunarnx/ps/tab_remote"))' in ui and
-            'makeSidebarButton(brls::getStr("lunarnx/ps/pair_by_ip"))' in ui and
+            'UiIcon::Console' in ui and 'UiIcon::Cloud' in ui and
+            'UiIcon::Link' in ui and
             'lunarnx/ps/account_network' in ui,
             "PS page must use the platform workspace shell and explicit source navigation")
     require('lunarnx/common/playstation_settings' in ui and
@@ -40,7 +39,7 @@ def main():
     require('lunarnx/ps/btn_pair' in ui and 'lunarnx/ps/btn_wake_connect' in ui and
             'lunarnx/ps/btn_connect' in ui,
             "console cards must expose truthful goal-oriented actions")
-    require("card->setHeight(132);" in ui and
+    require("card->setHeight(108);" in ui and
             "name->setFontSize(23);" in ui and
             "local_console_desc" in ui and "remote_console_desc" in ui,
             "dynamic PS console rows must match Xbox card dimensions and typography")
@@ -48,10 +47,10 @@ def main():
             "remote-disabled devices must remain visible with guidance")
     require('lunarnx/ps/pair_ps4' in ui and 'lunarnx/ps/pair_ps5' in ui,
             "manual local pairing must remain available")
-    require('card->setFocusable(true)' in ui and
-            'card->registerClickAction' in ui and
-            'action->setText(action_text)' in ui,
-            "available PS hosts must use whole-card focus with a visible action label")
+    require('card->addView(action)' in ui and
+            'action->registerClickAction' in ui and
+            'stylePrimaryButton(action)' in ui,
+            "available PS hosts must expose focused action buttons without changing flow")
     require('refreshConsoles();' not in ui.split('if (!resumed_once_)', 1)[1].split('} else {', 1)[0],
             "opening the page must not auto-trigger network discovery")
     require("chiaki_discovery_service_init" in discovery,

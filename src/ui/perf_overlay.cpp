@@ -10,7 +10,7 @@ PerfOverlay::PerfOverlay(const stream::PerfStats* perf, app::StreamPlatform plat
     this->setBackgroundColor(p.stream_overlay);
     this->setBorderThickness(1);
     this->setBorderColor(p.border);
-    this->setCornerRadius(4);
+    this->setCornerRadius(8);
     this->setPadding(14, 16, 14, 16);
     this->setWidth(500);
     this->setVisibility(brls::Visibility::GONE);

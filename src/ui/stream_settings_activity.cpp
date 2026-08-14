@@ -289,10 +289,12 @@ bool saveStreamSettings(const StreamSettingsSnapshot& settings) {
 StreamSettingsActivity::StreamSettingsActivity(
     std::shared_ptr<app::StreamController> ctrl,
     StreamSettingsSnapshot settings,
-    CompletionCallback completion)
+    CompletionCallback completion,
+    StreamSettingsScope scope)
     : ctrl_(std::move(ctrl)),
       settings_(settings),
-      completion_(std::move(completion)) {}
+      completion_(std::move(completion)),
+      scope_(scope) {}
 
 brls::View* StreamSettingsActivity::createContentView() {
     const auto& p = uiPalette();
@@ -322,7 +324,9 @@ brls::View* StreamSettingsActivity::createContentView() {
     top->addView(brand);
 
     auto* title = new brls::Label();
-    title->setText(brls::getStr("lunarnx/settings/title"));
+    title->setText(brls::getStr(scope_ == StreamSettingsScope::Global
+        ? "lunarnx/common/global_settings"
+        : "lunarnx/common/xbox_settings"));
     title->setFontSize(30);
     title->setTextColor(p.text);
     title->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
@@ -561,7 +565,9 @@ brls::View* StreamSettingsActivity::createContentView() {
     hint->setHeight(34);
     hint->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
     root->addView(hint);
-    return scroll;
+    return makeAppFrame(brls::getStr(scope_ == StreamSettingsScope::Global
+        ? "lunarnx/common/global_settings"
+        : "lunarnx/common/xbox_settings"), scroll);
 }
 
 void StreamSettingsActivity::closeSettings() {

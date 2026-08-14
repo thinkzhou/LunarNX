@@ -89,18 +89,19 @@ brls::View* MainActivity::createContentView() {
         });
 
     auto* sidebar = new brls::Box(brls::Axis::COLUMN);
-    sidebar->setWidth(286);
-    sidebar->setPadding(24, 24, 24, 30);
+    sidebar->setWidth(220);
+    sidebar->setPadding(24, 18, 24, 18);
     sidebar->setBackgroundColor(p.surface);
 
     source_xbox_ = makeSidebarButton(
-        brls::getStr("lunarnx/common/remote_play"), true);
+        brls::getStr("lunarnx/common/remote_play"), true, UiIcon::Console);
     source_xbox_->registerClickAction([this](brls::View*) -> bool {
         setStreamSource(StreamSource::Xbox);
         return true;
     });
     sidebar->addView(source_xbox_);
-    source_cloud_ = makeSidebarButton(brls::getStr("lunarnx/common/xcloud"));
+    source_cloud_ = makeSidebarButton(brls::getStr("lunarnx/common/xcloud"),
+        false, UiIcon::Cloud);
     source_cloud_->registerClickAction([this](brls::View*) -> bool {
         setStreamSource(StreamSource::Cloud);
         return true;
@@ -108,20 +109,22 @@ brls::View* MainActivity::createContentView() {
     sidebar->addView(source_cloud_);
 
     auto* settings_btn = makeSidebarButton(
-        brls::getStr("lunarnx/common/xbox_settings"));
+        brls::getStr("lunarnx/common/xbox_settings"), false, UiIcon::Settings);
     settings_btn->registerClickAction([this](brls::View*) -> bool {
         openStreamSettings();
         return true;
     });
     sidebar->addView(settings_btn);
-    auto* about_btn = makeSidebarButton(brls::getStr("lunarnx/common/about"));
+    auto* about_btn = makeSidebarButton(brls::getStr("lunarnx/common/about"),
+        false, UiIcon::Info);
     about_btn->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new AboutActivity(), brls::TransitionAnimation::NONE);
         return true;
     });
     sidebar->addView(about_btn);
-    auto* sign_out_btn = makeSidebarButton(brls::getStr("lunarnx/common/sign_out"));
+    auto* sign_out_btn = makeSidebarButton(brls::getStr("lunarnx/common/sign_out"),
+        false, UiIcon::SignOut);
     sign_out_btn->registerClickAction([this](brls::View*) -> bool {
         confirmSignOut();
         return true;
@@ -528,12 +531,12 @@ void MainActivity::refreshConsoles() {
         bool can_connect = on || c.power_state == "ConnectedStandby";
 
         auto* item = makeUiCard(brls::Axis::ROW);
-        item->setHeight(132);
-        item->setPadding(16, 18, 16, 18);
+        item->setHeight(108);
+        item->setPadding(10, 18, 10, 18);
         item->setMarginBottom(12);
         item->setAlignItems(brls::AlignItems::CENTER);
         item->setFocusable(can_connect);
-        item->setHighlightCornerRadius(4);
+        item->setHighlightCornerRadius(10);
         item->addView(new ConsoleGlyphView(c.console_type, can_connect));
 
         auto* details = new brls::Box(brls::Axis::COLUMN);
@@ -884,12 +887,12 @@ void MainActivity::rebuildCloudList() {
         card->setHeight(250);
         card->setPadding(12, 12, 12, 12);
         card->setFocusable(!title.title_id.empty());
-        card->setHighlightCornerRadius(4);
+        card->setHighlightCornerRadius(10);
 
         auto* image = new brls::Image();
         image->setWidth(216);
         image->setHeight(174);
-        image->setCornerRadius(4);
+        image->setCornerRadius(8);
         image->setBackgroundColor(palette.surface_alt);
         image->setScalingType(brls::ImageScalingType::FILL);
         card->addView(image);

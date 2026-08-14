@@ -41,7 +41,7 @@ brls::View* AboutActivity::createContentView() {
     version_chip->setBackgroundColor(p.surface_alt);
     version_chip->setBorderThickness(1);
     version_chip->setBorderColor(p.border);
-    version_chip->setCornerRadius(4);
+    version_chip->setCornerRadius(8);
     version_chip->setAlignItems(brls::AlignItems::CENTER);
     auto* version_mark = new brls::Label();
     version_mark->setText(brls::getStr("lunarnx/about/version_label"));
@@ -73,7 +73,7 @@ brls::View* AboutActivity::createContentView() {
     logo->setFontSize(24);
     logo->setTextColor(p.accent);
     logo->setBackgroundColor(p.accent_soft);
-    logo->setCornerRadius(4);
+    logo->setCornerRadius(8);
     logo->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     logo->setVerticalAlign(brls::VerticalAlign::CENTER);
     intro->addView(logo);
@@ -105,7 +105,7 @@ brls::View* AboutActivity::createContentView() {
     qq_mark->setFontSize(17);
     qq_mark->setTextColor(p.accent);
     qq_mark->setBackgroundColor(p.accent_soft);
-    qq_mark->setCornerRadius(4);
+    qq_mark->setCornerRadius(8);
     qq_mark->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     qq_mark->setVerticalAlign(brls::VerticalAlign::CENTER);
     community_row->addView(qq_mark);

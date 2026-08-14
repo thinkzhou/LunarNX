@@ -14,7 +14,7 @@ def require(condition, message):
 
 require('wordmark->setText("LUNARNX")' in ABOUT and
         'version_chip = new brls::Box(brls::Axis::ROW)' in ABOUT and
-        'version_chip->setCornerRadius(4)' in ABOUT,
+        'version_chip->setCornerRadius(8)' in ABOUT,
         "About page must use the shared LunarNX brand header")
 require('intro = new brls::Box(brls::Axis::ROW)' in ABOUT and
         'makeFlatSection(' in ABOUT and 'addFlatRow(' in ABOUT,

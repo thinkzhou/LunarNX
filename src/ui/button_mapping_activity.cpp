@@ -113,9 +113,9 @@ brls::View* ButtonMappingActivity::createContentView() {
     content->addView(makeMutedLabel(
         brls::getStr("lunarnx/button_mapping/detail"), 14));
 
-    auto* card = makeUiCard();
-    card->setPadding(4, 8, 4, 8);
-    card->setMarginTop(22);
+    auto* mapping_section = makeFlatSection(
+        brls::getStr("lunarnx/settings/button_mapping"),
+        brls::getStr("lunarnx/button_mapping/detail"));
     const size_t row_count = profile_ == input::ButtonMappingProfile::PlayStation
         ? input::kRemoteButtonCount
         : static_cast<size_t>(input::RemoteButton::Touchpad);
@@ -130,10 +130,10 @@ brls::View* ButtonMappingActivity::createContentView() {
             enterCapture(i);
             return true;
         });
-        card->addView(row);
+        addFlatRow(mapping_section, row);
         rows_.push_back(row);
     }
-    content->addView(card);
+    content->addView(mapping_section);
 
     auto* reset = new brls::Button();
     reset->setText(brls::getStr("lunarnx/button_mapping/reset_all"));
@@ -181,7 +181,10 @@ brls::View* ButtonMappingActivity::createContentView() {
     capture_content_->addView(capture_hint);
 
     refreshRows();
-    return root;
+    return makeAppFrame(brls::getStr(
+        profile_ == input::ButtonMappingProfile::PlayStation
+            ? "lunarnx/button_mapping/ps_title"
+            : "lunarnx/button_mapping/xbox_title"), root);
 }
 
 void ButtonMappingActivity::enterCapture(size_t index) {

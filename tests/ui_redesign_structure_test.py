@@ -50,10 +50,10 @@ def main() -> None:
             "Theme::getLightTheme" in style_source,
             "shared UI style must support Borealis light and dark themes")
     for color in (
-        "nvgRGB(41, 41, 41)", "nvgRGB(48, 48, 48)",
-        "nvgRGB(51, 51, 51)", "nvgRGB(8, 237, 206)",
-        "nvgRGB(100, 215, 236)", "nvgRGB(153, 153, 153)",
-        "nvgRGB(72, 72, 72)",
+        "nvgRGB(27, 30, 35)", "nvgRGB(35, 39, 46)",
+        "nvgRGB(38, 43, 50)", "nvgRGB(0, 217, 195)",
+        "nvgRGB(72, 246, 223)", "nvgRGB(154, 163, 173)",
+        "nvgRGB(58, 65, 75)",
     ):
         require(color in style_source, f"approved UI token missing: {color}")
     require("makeFlatSection" in style_header and "addFlatRow" in style_header,
@@ -61,6 +61,9 @@ def main() -> None:
     require("class SidebarButton" in style_source and
             "nvgRect(vg, x, y + 8, 4, height - 16)" in style_source,
             "active sidebar items need the approved four-pixel accent bar")
+    require("enum class UiIcon" in style_header and
+            "UiIcon::Console" in main_source and "UiIcon::Cloud" in ps_source,
+            "sidebar navigation must use local vector icons")
     require("ConsoleGlyphView" in style_header,
             "Remote Play cards need a code-native console identity view")
 
@@ -83,10 +86,10 @@ def main() -> None:
             "stream settings must live in a dedicated Activity")
     require("SelectorCell" in settings_source and "BooleanCell" in settings_source,
             "settings page must use controller-friendly Borealis cells")
-    require("makeUiCard" not in settings_source,
-            "settings groups must be flat continuous lists, not cards")
-    require("makeUiCard" not in ps_settings_source,
-            "PlayStation settings groups must be flat lists, not cards")
+    require("SelectorCell" in settings_source and "BooleanCell" in settings_source,
+            "settings must retain controller-first selectable rows")
+    require("SelectorCell" in ps_settings_source,
+            "PlayStation settings must retain controller-first selectable rows")
     require("makeUiCard" not in mapping_source and
             "makeFlatSection" in mapping_source and "addFlatRow" in mapping_source,
             "button mapping must use the shared flat list hierarchy")
@@ -116,12 +119,13 @@ def main() -> None:
 
     require('#include "ui_style.h"' in loading_source,
             "stream startup page must share the LunarNX palette")
-    require("nvgRGB(16, 16, 16)" in loading_source and
-            "makeUiCard" not in loading_source,
-            "loading and error states must use the full-screen transient surface")
+    require("loading_card_" in loading_source and
+            "loading_card_->setBorderThickness(1)" in loading_source and
+            "loading_card_->setCornerRadius(8)" in loading_source,
+            "loading state must use the centered outlined status card from Stitch")
     require("class PsConnectActivity" in ps_source and
-            "root->setBackgroundColor(nvgRGB(16, 16, 16))" in ps_source,
-            "PlayStation connection state must share the full-screen transient surface")
+            "root->setBackgroundColor" in ps_source,
+            "PlayStation connection state must share the themed transient surface")
     require('#include "ui_style.h"' in stream_overlay + perf_overlay,
             "stream overlays must share the LunarNX palette")
     require("root->registerAction" in stream_view and

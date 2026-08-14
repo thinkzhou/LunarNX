@@ -40,7 +40,19 @@ void styleQuietButton(brls::Button* button);
 
 brls::AppletFrame* makeAppFrame(const std::string& title,
                                 brls::View* content);
-brls::Button* makeSidebarButton(const std::string& label, bool active = false);
+enum class UiIcon {
+    None,
+    Console,
+    Cloud,
+    Search,
+    Settings,
+    Info,
+    Account,
+    Link,
+    SignOut,
+};
+brls::Button* makeSidebarButton(const std::string& label, bool active = false,
+                                UiIcon icon = UiIcon::None);
 void setSidebarButtonActive(brls::Button* button, bool active);
 brls::Box* makePageHeading(const std::string& title,
                            const std::string& subtitle = "");

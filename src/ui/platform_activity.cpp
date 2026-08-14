@@ -31,39 +31,42 @@ brls::Button* makePlatformTile(const std::string& title,
     const auto& p = uiPalette();
     auto* tile = new brls::Button();
     tile->setStyle(&brls::BUTTONSTYLE_BORDERLESS);
-    tile->setWidth(330);
-    tile->setHeight(350);
-    tile->setPadding(20, 22, 20, 22);
+    tile->setWidth(500);
+    tile->setHeight(220);
+    tile->setPadding(24, 28, 24, 28);
     tile->setBackgroundColor(p.card);
-    tile->setCornerRadius(4);
-    tile->setHighlightCornerRadius(4);
-    tile->setAxis(brls::Axis::COLUMN);
+    tile->setBorderThickness(1);
+    tile->setBorderColor(p.border);
+    tile->setCornerRadius(8);
+    tile->setHighlightCornerRadius(10);
+    tile->setAxis(brls::Axis::ROW);
     tile->setAlignItems(brls::AlignItems::CENTER);
 
     auto* glyph = new ConsoleGlyphView(console_type, true);
-    glyph->setWidth(190);
-    glyph->setHeight(190);
+    glyph->setWidth(150);
+    glyph->setHeight(150);
     tile->addView(glyph);
 
+    auto* copy = new brls::Box(brls::Axis::COLUMN);
+    copy->setGrow(1.0f);
+    copy->setPadding(12, 0, 12, 26);
     auto* label = new brls::Label();
     label->setText(title);
-    label->setFontSize(27);
+    label->setFontSize(28);
     label->setTextColor(p.text);
-    label->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     label->setHeight(42);
-    tile->addView(label);
+    copy->addView(label);
     auto* description = makeMutedLabel(detail, 14);
-    description->setWidth(280);
-    description->setHeight(54);
-    description->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    tile->addView(description);
+    description->setHeight(48);
+    description->setIsWrapping(true);
+    copy->addView(description);
     auto* state = new brls::Label();
     state->setText(account_state);
-    state->setFontSize(12);
+    state->setFontSize(13);
     state->setTextColor(p.accent);
-    state->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    state->setHeight(24);
-    tile->addView(state);
+    state->setHeight(28);
+    copy->addView(state);
+    tile->addView(copy);
     tile->registerClickAction([open](brls::View*) -> bool {
         open();
         return true;
@@ -86,52 +89,39 @@ brls::View* PlatformActivity::createContentView() {
     diagnosticLog("ui-platform", "createContentView begin");
     const auto& p = uiPalette();
 
-    auto* workspace = new brls::Box(brls::Axis::ROW);
+    auto* workspace = new brls::Box(brls::Axis::COLUMN);
     workspace->setBackgroundColor(p.background);
-
-    auto* sidebar = new brls::Box(brls::Axis::COLUMN);
-    sidebar->setWidth(286);
-    sidebar->setPadding(30, 28, 30, 34);
-    sidebar->setBackgroundColor(p.surface);
-    sidebar->addView(makeSidebarButton(
-        brls::getStr("lunarnx/platform/subtitle"), true));
-
-    auto* settings = makeSidebarButton(
-        brls::getStr("lunarnx/common/global_settings"));
-    settings->registerClickAction([](brls::View*) -> bool {
+    workspace->setPadding(28, 48, 24, 48);
+    workspace->registerAction(brls::getStr("lunarnx/common/global_settings"),
+        brls::ControllerButton::BUTTON_X, [](brls::View*) -> bool {
         brls::Application::pushActivity(
             new StreamSettingsActivity(nullptr, loadStreamSettings(), {},
                 StreamSettingsScope::Global),
             brls::TransitionAnimation::NONE);
         return true;
     });
-    sidebar->addView(settings);
-
-    auto* browser_test = makeSidebarButton("Browser Test: Baidu");
-    browser_test->registerClickAction([this](brls::View*) -> bool {
+    workspace->registerAction("Browser Test: Baidu",
+        brls::ControllerButton::BUTTON_START, [this](brls::View*) -> bool {
         openBrowserDiagnostic();
         return true;
     });
-    sidebar->addView(browser_test);
-
-    auto* about = makeSidebarButton(brls::getStr("lunarnx/common/about"));
-    about->registerClickAction([](brls::View*) -> bool {
+    workspace->registerAction(brls::getStr("lunarnx/common/about"),
+        brls::ControllerButton::BUTTON_Y, [](brls::View*) -> bool {
         brls::Application::pushActivity(
             new AboutActivity(), brls::TransitionAnimation::NONE);
         return true;
     });
-    sidebar->addView(about);
-    workspace->addView(sidebar);
 
     auto* content = new brls::Box(brls::Axis::COLUMN);
     content->setGrow(1.0f);
-    content->setPadding(30, 48, 28, 48);
+    content->setAlignItems(brls::AlignItems::CENTER);
+    content->setJustifyContent(brls::JustifyContent::CENTER);
     content->addView(makePageHeading(
         brls::getStr("lunarnx/platform/subtitle"),
         "Xbox and PlayStation settings remain separate"));
 
     auto* platforms = new brls::Box(brls::Axis::ROW);
-    platforms->setGrow(1.0f);
+    platforms->setHeight(250);
     platforms->setAlignItems(brls::AlignItems::CENTER);
     platforms->setJustifyContent(brls::JustifyContent::CENTER);
     const bool xbox_saved = savedFileExists(lunar::get_token_path());
@@ -157,7 +147,7 @@ brls::View* PlatformActivity::createContentView() {
         diagnosticLog("ui-platform", "PlayStation Open clicked");
         openPlayStation();
     });
-    ps_card->setMarginLeft(22);
+    ps_card->setMarginLeft(24);
     platforms->addView(ps_card);
     content->addView(platforms);
     workspace->addView(content);

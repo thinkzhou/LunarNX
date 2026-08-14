@@ -117,7 +117,8 @@ brls::View* PsSettingsActivity::createContentView() {
     });
     controller_card->addView(button_mapping); root->addView(controller_card);
     auto* done = new brls::Button(); done->setText(brls::getStr("lunarnx/common/done")); stylePrimaryButton(done); done->setMarginTop(28); done->registerClickAction([this](brls::View*) -> bool { closeSettings(); return true; }); root->addView(done);
-    scroll->setContentView(root); return scroll;
+    scroll->setContentView(root);
+    return makeAppFrame(brls::getStr("lunarnx/ps/settings_title"), scroll);
 }
 
 void PsSettingsActivity::closeSettings() {

@@ -18,8 +18,12 @@ def main():
             "ConsoleGlyphView" in platform,
             "platform selection must use whole-focus console tiles")
     require("makeAppFrame" in platform and
-            "makeSidebarButton" in platform,
-            "platform selection must use the shared Borealis workspace shell")
+            "workspace->setPadding(28, 48, 24, 48)" in platform and
+            "makeSidebarButton" not in platform,
+            "platform selection must use the centered sidebar-free Stitch layout")
+    require("BUTTON_X" in platform and "BUTTON_Y" in platform and
+            "BUTTON_START" in platform,
+            "platform utilities must remain reachable through controller actions")
     require("new StreamSettingsActivity(nullptr, loadStreamSettings(), {}," in platform and
             "StreamSettingsScope::Global" in platform,
             "platform selection must expose global settings without constructing a controller")

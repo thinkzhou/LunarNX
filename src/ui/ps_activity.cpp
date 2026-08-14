@@ -312,10 +312,9 @@ PsActivity::~PsActivity() {
 
 brls::View* PsActivity::createContentView() {
     const auto& p = uiPalette();
-    auto* scroll = new brls::ScrollingFrame();
-    scroll->setBackgroundColor(p.background);
-    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
-    scroll->registerAction("Back", brls::ControllerButton::BUTTON_B,
+    auto* workspace = new brls::Box(brls::Axis::ROW);
+    workspace->setBackgroundColor(p.background);
+    workspace->registerAction("Back", brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
             const auto now = std::chrono::steady_clock::now();
             if (now < back_navigation_ready_at_) return true;
@@ -323,53 +322,98 @@ brls::View* PsActivity::createContentView() {
             return true;
         });
 
-    auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(26, 48, 36, 48);
-    root->setBackgroundColor(p.background);
-
-    auto* header = new brls::Box(brls::Axis::ROW);
-    header->setHeight(84);
-    header->setAlignItems(brls::AlignItems::CENTER);
-    auto* brand = new brls::Box(brls::Axis::COLUMN);
-    brand->setGrow(1.0f);
+    auto* sidebar = new brls::Box(brls::Axis::COLUMN);
+    sidebar->setWidth(220);
+    sidebar->setPadding(24, 18, 24, 18);
+    sidebar->setBackgroundColor(p.surface);
     auto* wordmark = new brls::Label();
     wordmark->setText("LUNARNX");
-    wordmark->setFontSize(29);
+    wordmark->setFontSize(23);
     wordmark->setTextColor(p.accent);
-    brand->addView(wordmark);
-    brand->addView(makeMutedLabel(brls::getStr("lunarnx/ps/subtitle"), 13));
-    header->addView(brand);
+    wordmark->setHeight(58);
+    sidebar->addView(wordmark);
 
-    auto* settings_button = new brls::Button();
-    settings_button->setText(brls::getStr("lunarnx/common/settings"));
-    styleSecondaryButton(settings_button);
+    local_tab_ = makeSidebarButton(brls::getStr("lunarnx/ps/tab_local"), true,
+        UiIcon::Console);
+    local_tab_->registerClickAction([this](brls::View*) -> bool {
+        setConsoleSource(PsConsoleSource::Local);
+        return true;
+    });
+    sidebar->addView(local_tab_);
+    remote_tab_ = makeSidebarButton(brls::getStr("lunarnx/ps/tab_remote"), false,
+        UiIcon::Cloud);
+    remote_tab_->registerClickAction([this](brls::View*) -> bool {
+        setConsoleSource(PsConsoleSource::Remote);
+        return true;
+    });
+    sidebar->addView(remote_tab_);
+
+    auto* pair_button = makeSidebarButton(brls::getStr("lunarnx/ps/pair_by_ip"),
+        false, UiIcon::Link);
+    pair_button->registerClickAction([this](brls::View*) -> bool {
+        ps::PsConsole console;
+        console.target = 1000100;
+        console.nickname = "PS5";
+        pairConsole(console);
+        return true;
+    });
+    sidebar->addView(pair_button);
+
+    auto* settings_button = makeSidebarButton(
+        brls::getStr("lunarnx/common/playstation_settings"), false,
+        UiIcon::Settings);
     settings_button->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new PsSettingsActivity(loadPsSettings()),
             brls::TransitionAnimation::NONE);
         return true;
     });
-    header->addView(settings_button);
+    sidebar->addView(settings_button);
 
-    auto* about_button = new brls::Button();
-    about_button->setText(brls::getStr("lunarnx/common/about"));
-    styleSecondaryButton(about_button);
-    about_button->setMarginLeft(8);
+    auto* about_button = makeSidebarButton(brls::getStr("lunarnx/common/about"),
+        false, UiIcon::Info);
     about_button->registerClickAction([](brls::View*) -> bool {
         brls::Application::pushActivity(
             new AboutActivity(), brls::TransitionAnimation::NONE);
         return true;
     });
-    header->addView(about_button);
+    sidebar->addView(about_button);
 
-    account_button_ = new brls::Button();
-    styleQuietButton(account_button_);
-    account_button_->setMarginLeft(8);
+    auto* account_space = new brls::Box(brls::Axis::COLUMN);
+    account_space->setGrow(1.0f);
+    account_space->setJustifyContent(brls::JustifyContent::FLEX_END);
+    account_space->addView(makeMutedLabel(
+        brls::getStr("lunarnx/ps/account_network"), 11));
+    account_button_ = makeSidebarButton("", false, UiIcon::Account);
     account_button_->registerClickAction([this](brls::View*) -> bool {
         handleAccountAction();
         return true;
     });
-    header->addView(account_button_);
+    account_space->addView(account_button_);
+    sidebar->addView(account_space);
+    workspace->addView(sidebar);
+
+    auto* scroll = new brls::ScrollingFrame();
+    scroll->setGrow(1.0f);
+    scroll->setBackgroundColor(p.background);
+    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
+
+    auto* root = new brls::Box(brls::Axis::COLUMN);
+    root->setPadding(24, 42, 36, 42);
+    root->setBackgroundColor(p.background);
+
+    auto* header = new brls::Box(brls::Axis::ROW);
+    header->setHeight(76);
+    header->setAlignItems(brls::AlignItems::CENTER);
+    auto* brand = new brls::Box(brls::Axis::COLUMN);
+    brand->setGrow(1.0f);
+    auto* page_title = new brls::Label();
+    page_title->setText("PlayStation");
+    page_title->setFontSize(30);
+    page_title->setTextColor(p.text);
+    brand->addView(page_title);
+    brand->addView(makeMutedLabel(brls::getStr("lunarnx/ps/subtitle"), 13));
+    header->addView(brand);
 
     auto* account_chip = makeUiCard(brls::Axis::ROW);
     account_chip->setWidth(306);
@@ -407,29 +451,6 @@ brls::View* PsActivity::createContentView() {
     account_chip->addView(account_copy);
     header->addView(account_chip);
     root->addView(header);
-
-    auto* source_card = makeUiCard(brls::Axis::ROW);
-    source_card->setHeight(68);
-    source_card->setPadding(8, 8, 8, 8);
-    source_card->setMarginBottom(18);
-    local_tab_ = new brls::Button();
-    local_tab_->setText(brls::getStr("lunarnx/ps/tab_local"));
-    local_tab_->setGrow(1.0f);
-    local_tab_->registerClickAction([this](brls::View*) -> bool {
-        setConsoleSource(PsConsoleSource::Local);
-        return true;
-    });
-    source_card->addView(local_tab_);
-    remote_tab_ = new brls::Button();
-    remote_tab_->setText(brls::getStr("lunarnx/ps/tab_remote"));
-    remote_tab_->setGrow(1.0f);
-    remote_tab_->setMarginLeft(8);
-    remote_tab_->registerClickAction([this](brls::View*) -> bool {
-        setConsoleSource(PsConsoleSource::Remote);
-        return true;
-    });
-    source_card->addView(remote_tab_);
-    root->addView(source_card);
 
     remote_actions_ = new brls::Box(brls::Axis::COLUMN);
     auto* remote_header = new brls::Box(brls::Axis::ROW);
@@ -545,13 +566,14 @@ brls::View* PsActivity::createContentView() {
     root->addView(status_card);
 
     scroll->setContentView(root);
+    workspace->addView(scroll);
     updateAccountUi();
     hosts_ = ps_manager_ ? ps_manager_->getDiscoveredHosts()
                          : std::vector<ps::PsConsole>{};
     appendMockReplayConsole(hosts_);
     updateSourceUi();
     rebuildConsoleList(hosts_);
-    return scroll;
+    return makeAppFrame("PlayStation", workspace);
 }
 
 void PsActivity::onResume() {
@@ -738,8 +760,8 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         if (!visible) continue;
         visible_count++;
         auto* card = makeUiCard(brls::Axis::ROW);
-        card->setHeight(132);
-        card->setPadding(16, 18, 16, 18);
+        card->setHeight(108);
+        card->setPadding(10, 18, 10, 18);
         card->setMarginBottom(12);
         card->setAlignItems(brls::AlignItems::CENTER);
 

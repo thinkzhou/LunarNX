@@ -8,19 +8,19 @@ namespace lunar::ui {
 namespace {
 
 const UiPalette kDarkPalette{
-    .background = nvgRGB(41, 41, 41),
-    .surface = nvgRGB(48, 48, 48),
-    .surface_alt = nvgRGB(51, 51, 51),
-    .card = nvgRGB(51, 51, 51),
-    .card_muted = nvgRGB(56, 56, 56),
-    .accent = nvgRGB(8, 237, 206),
-    .accent_soft = nvgRGBA(8, 237, 206, 42),
-    .text = nvgRGB(244, 244, 244),
-    .text_muted = nvgRGB(153, 153, 153),
-    .border = nvgRGB(72, 72, 72),
-    .success = nvgRGB(84, 214, 139),
-    .warning = nvgRGB(244, 197, 74),
-    .error = nvgRGB(255, 112, 112),
+    .background = nvgRGB(27, 30, 35),
+    .surface = nvgRGB(35, 39, 46),
+    .surface_alt = nvgRGB(48, 54, 63),
+    .card = nvgRGB(38, 43, 50),
+    .card_muted = nvgRGB(48, 54, 63),
+    .accent = nvgRGB(0, 217, 195),
+    .accent_soft = nvgRGBA(14, 46, 43, 220),
+    .text = nvgRGB(244, 246, 248),
+    .text_muted = nvgRGB(154, 163, 173),
+    .border = nvgRGB(58, 65, 75),
+    .success = nvgRGB(76, 195, 138),
+    .warning = nvgRGB(224, 169, 75),
+    .error = nvgRGB(229, 96, 90),
     .stream_overlay = nvgRGBA(16, 16, 16, 238),
 };
 
@@ -43,11 +43,81 @@ const UiPalette kLightPalette{
 
 class SidebarButton final : public brls::Button {
 public:
+    explicit SidebarButton(UiIcon icon) : icon_(icon) {}
     void setActive(bool active) { active_ = active; }
 
     void draw(NVGcontext* vg, float x, float y, float width, float height,
               brls::Style style, brls::FrameContext* ctx) override {
         brls::Button::draw(vg, x, y, width, height, style, ctx);
+        const auto color = active_ ? uiPalette().accent : uiPalette().text_muted;
+        const float cx = x + 25.0f;
+        const float cy = y + height * 0.5f;
+        nvgSave(vg);
+        nvgStrokeWidth(vg, 2.0f);
+        nvgStrokeColor(vg, color);
+        nvgFillColor(vg, color);
+        nvgLineCap(vg, NVG_ROUND);
+        nvgLineJoin(vg, NVG_ROUND);
+        nvgBeginPath(vg);
+        switch (icon_) {
+            case UiIcon::Console:
+                nvgRoundedRect(vg, cx - 10, cy - 7, 20, 14, 3);
+                nvgMoveTo(vg, cx - 5, cy + 7);
+                nvgLineTo(vg, cx - 8, cy + 11);
+                nvgMoveTo(vg, cx + 5, cy + 7);
+                nvgLineTo(vg, cx + 8, cy + 11);
+                break;
+            case UiIcon::Cloud:
+                nvgMoveTo(vg, cx - 10, cy + 6);
+                nvgBezierTo(vg, cx - 15, cy + 1, cx - 10, cy - 5, cx - 5, cy - 4);
+                nvgBezierTo(vg, cx - 2, cy - 12, cx + 9, cy - 10, cx + 10, cy - 3);
+                nvgBezierTo(vg, cx + 16, cy - 2, cx + 16, cy + 7, cx + 9, cy + 7);
+                nvgClosePath(vg);
+                break;
+            case UiIcon::Settings:
+                nvgCircle(vg, cx, cy, 9);
+                nvgMoveTo(vg, cx - 13, cy); nvgLineTo(vg, cx - 9, cy);
+                nvgMoveTo(vg, cx + 9, cy); nvgLineTo(vg, cx + 13, cy);
+                nvgMoveTo(vg, cx, cy - 13); nvgLineTo(vg, cx, cy - 9);
+                nvgMoveTo(vg, cx, cy + 9); nvgLineTo(vg, cx, cy + 13);
+                nvgStroke(vg);
+                nvgBeginPath(vg); nvgCircle(vg, cx, cy, 3); nvgStroke(vg);
+                nvgRestore(vg);
+                if (active_) {
+                    nvgBeginPath(vg); nvgRect(vg, x, y + 8, 4, height - 16);
+                    nvgFillColor(vg, uiPalette().accent); nvgFill(vg);
+                }
+                return;
+            case UiIcon::Info:
+                nvgCircle(vg, cx, cy, 10); nvgStroke(vg);
+                nvgBeginPath(vg); nvgCircle(vg, cx, cy - 5, 1.5f); nvgFill(vg);
+                nvgBeginPath(vg); nvgMoveTo(vg, cx, cy - 1); nvgLineTo(vg, cx, cy + 6);
+                break;
+            case UiIcon::Account:
+                nvgCircle(vg, cx, cy - 5, 5);
+                nvgMoveTo(vg, cx - 9, cy + 10);
+                nvgBezierTo(vg, cx - 8, cy + 2, cx + 8, cy + 2, cx + 9, cy + 10);
+                break;
+            case UiIcon::Link:
+                nvgRoundedRect(vg, cx - 11, cy - 6, 14, 12, 5);
+                nvgRoundedRect(vg, cx - 3, cy - 6, 14, 12, 5);
+                break;
+            case UiIcon::SignOut:
+                nvgMoveTo(vg, cx - 10, cy - 10); nvgLineTo(vg, cx - 10, cy + 10);
+                nvgLineTo(vg, cx, cy + 10);
+                nvgMoveTo(vg, cx - 2, cy); nvgLineTo(vg, cx + 11, cy);
+                nvgMoveTo(vg, cx + 6, cy - 5); nvgLineTo(vg, cx + 11, cy);
+                nvgLineTo(vg, cx + 6, cy + 5);
+                break;
+            case UiIcon::Search:
+                nvgCircle(vg, cx - 2, cy - 2, 7);
+                nvgMoveTo(vg, cx + 4, cy + 4); nvgLineTo(vg, cx + 11, cy + 11);
+                break;
+            case UiIcon::None:
+                break;
+        }
+        nvgStroke(vg);
+        nvgRestore(vg);
         if (!active_) return;
         nvgBeginPath(vg);
         nvgRect(vg, x, y + 8, 4, height - 16);
@@ -57,6 +127,7 @@ public:
 
 private:
     bool active_ = false;
+    UiIcon icon_ = UiIcon::None;
 };
 
 void installThemeVariant(brls::Theme& theme, const UiPalette& p, bool dark) {
@@ -66,13 +137,13 @@ void installThemeVariant(brls::Theme& theme, const UiPalette& p, bool dark) {
     theme.addColor("brls/accent", p.accent);
     theme.addColor("brls/click_pulse", p.accent_soft);
     theme.addColor("brls/highlight/background", dark
-        ? nvgRGB(59, 59, 59)
+        ? nvgRGB(48, 54, 63)
         : nvgRGB(220, 235, 234));
     theme.addColor("brls/highlight/color1", dark
-        ? nvgRGB(100, 215, 236)
+        ? p.accent
         : nvgRGB(0, 137, 120));
     theme.addColor("brls/highlight/color2", dark
-        ? nvgRGB(100, 215, 236)
+        ? nvgRGB(72, 246, 223)
         : nvgRGB(0, 137, 120));
     theme.addColor("brls/applet_frame/separator", p.border);
     theme.addColor("brls/sidebar/background", p.surface);
@@ -122,7 +193,7 @@ brls::Box* makeUiCard(brls::Axis axis) {
     card->setBackgroundColor(p.card);
     card->setBorderThickness(1);
     card->setBorderColor(p.border);
-    card->setCornerRadius(4);
+    card->setCornerRadius(8);
     card->setPadding(18, 20, 18, 20);
     return card;
 }
@@ -146,7 +217,7 @@ void addFlatRow(brls::Box* section, brls::View* row) {
     const auto& p = uiPalette();
     row->setHeight(64);
     row->setBackgroundColor(nvgRGBA(0, 0, 0, 0));
-    row->setHighlightCornerRadius(3);
+    row->setHighlightCornerRadius(8);
     section->addView(row);
     auto* divider = new brls::Box();
     divider->setHeight(1);
@@ -201,16 +272,16 @@ void stylePrimaryButton(brls::Button* button) {
     if (!button) return;
     button->setStyle(&brls::BUTTONSTYLE_PRIMARY);
     button->setHeight(48);
-    button->setCornerRadius(4);
-    button->setHighlightCornerRadius(4);
+    button->setCornerRadius(8);
+    button->setHighlightCornerRadius(10);
 }
 
 void styleSecondaryButton(brls::Button* button) {
     if (!button) return;
     button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
     button->setHeight(48);
-    button->setCornerRadius(4);
-    button->setHighlightCornerRadius(4);
+    button->setCornerRadius(8);
+    button->setHighlightCornerRadius(10);
     button->setBorderThickness(1);
     button->setBorderColor(uiPalette().border);
 }
@@ -219,7 +290,7 @@ void styleQuietButton(brls::Button* button) {
     if (!button) return;
     button->setStyle(&brls::BUTTONSTYLE_BORDERLESS);
     button->setHeight(44);
-    button->setHighlightCornerRadius(4);
+    button->setHighlightCornerRadius(8);
 }
 
 brls::AppletFrame* makeAppFrame(const std::string& title,
@@ -229,15 +300,15 @@ brls::AppletFrame* makeAppFrame(const std::string& title,
     return frame;
 }
 
-brls::Button* makeSidebarButton(const std::string& label, bool active) {
-    auto* button = new SidebarButton();
+brls::Button* makeSidebarButton(const std::string& label, bool active, UiIcon icon) {
+    auto* button = new SidebarButton(icon);
     button->setText(label);
     button->setStyle(&brls::BUTTONSTYLE_BORDERLESS);
-    button->setHeight(58);
+    button->setHeight(52);
     button->setCornerRadius(0);
-    button->setHighlightCornerRadius(3);
+    button->setHighlightCornerRadius(8);
     button->setJustifyContent(brls::JustifyContent::FLEX_START);
-    button->setPaddingLeft(18);
+    button->setPaddingLeft(icon == UiIcon::None ? 18 : 46);
     setSidebarButtonActive(button, active);
     return button;
 }
@@ -246,7 +317,7 @@ void setSidebarButtonActive(brls::Button* button, bool active) {
     if (!button) return;
     const auto& p = uiPalette();
     button->setTextColor(active ? p.accent : p.text);
-    button->setBackgroundColor(active ? p.surface_alt : p.surface);
+    button->setBackgroundColor(active ? p.accent_soft : p.surface);
     if (auto* sidebar = dynamic_cast<SidebarButton*>(button)) {
         sidebar->setActive(active);
     }
@@ -256,10 +327,10 @@ brls::Box* makePageHeading(const std::string& title,
                            const std::string& subtitle) {
     const auto& p = uiPalette();
     auto* heading = new brls::Box(brls::Axis::COLUMN);
-    heading->setHeight(subtitle.empty() ? 48 : 62);
+    heading->setHeight(subtitle.empty() ? 52 : 68);
     auto* title_label = new brls::Label();
     title_label->setText(title);
-    title_label->setFontSize(25);
+    title_label->setFontSize(30);
     title_label->setTextColor(p.text);
     heading->addView(title_label);
     if (!subtitle.empty()) {

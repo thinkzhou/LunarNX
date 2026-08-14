@@ -129,7 +129,7 @@ brls::View* PsnLoginActivity::createContentView() {
     startPhoneLogin();
     scroll->setContentView(root);
     lunar::diagnosticLog("ui-psn-login", "phone sign-in content ready");
-    return scroll;
+    return makeAppFrame(brls::getStr("lunarnx/ps/login_title"), scroll);
 }
 
 void PsnLoginActivity::startPhoneLogin() {

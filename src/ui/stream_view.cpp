@@ -339,7 +339,7 @@ brls::View* StreamView::createContentView() {
     quick_menu_->setBackgroundColor(nvgRGBA(48, 48, 48, 248));
     quick_menu_->setBorderThickness(1);
     quick_menu_->setBorderColor(p.border);
-    quick_menu_->setCornerRadius(4);
+    quick_menu_->setCornerRadius(8);
     quick_menu_->setVisibility(brls::Visibility::GONE);
     quick_menu_->detach();
     quick_menu_->setDetachedPosition(
@@ -479,7 +479,7 @@ brls::View* StreamView::createContentView() {
     confirm_box_->setBackgroundColor(p.stream_overlay);
     confirm_box_->setBorderThickness(1);
     confirm_box_->setBorderColor(p.accent);
-    confirm_box_->setCornerRadius(4);
+    confirm_box_->setCornerRadius(8);
     confirm_box_->setPadding(24, 20, 24, 20);
     confirm_box_->setWidth(420);
     confirm_box_->setHeight(110);
