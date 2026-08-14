@@ -42,7 +42,9 @@ git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-recv-allocation.pat
 git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-holepunch-reliability.patch
 git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-stream-rtt.patch
 git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-recvbuf.patch
+git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-packetstats-wrap.patch
 git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-transport-diagnostics.patch
+git -C "$src" apply /work/tools/chiaki_switch/lunarnx-chiaki-key-position-diagnostics.patch
 mkdir -p "$stage/include"
 mkdir -p /tmp/lunarnx-chiaki-tools
 cp /work/tools/chiaki_switch/protoc_from_pbgen.sh /tmp/lunarnx-chiaki-tools/protoc

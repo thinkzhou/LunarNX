@@ -1,0 +1,26 @@
+diff --git a/lib/src/takion.c b/lib/src/takion.c
+index 52e5bd32..b348251a 100644
+--- a/lib/src/takion.c
++++ b/lib/src/takion.c
+@@ -1320,6 +1320,7 @@ static ChiakiErrorCode takion_handle_packet_mac(ChiakiTakion *takion, uint8_t ba
+ 	uint8_t mac[CHIAKI_GKCRYPT_GMAC_SIZE];
+ 	uint8_t mac_expected[CHIAKI_GKCRYPT_GMAC_SIZE];
+ 	uint64_t key_pos;
++	uint64_t key_pos_prev = takion->key_state.prev;
+ 	ChiakiErrorCode err = chiaki_takion_packet_read_key_pos(takion, buf, buf_size, &key_pos);
+ 	if(err != CHIAKI_ERR_SUCCESS)
+ 	{
+@@ -1345,6 +1346,13 @@ static ChiakiErrorCode takion_handle_packet_mac(ChiakiTakion *takion, uint8_t ba
+ 		return CHIAKI_ERR_INVALID_MAC;
+ 	}
+ 
++	uint32_t epoch_prev = (uint32_t)(key_pos_prev >> 32);
++	uint32_t epoch_next = (uint32_t)(key_pos >> 32);
++	if(epoch_prev != epoch_next)
++		CHIAKI_LOGI(takion->log,
++			"LUNARNX-PSKEY epoch_prev=%u epoch_next=%u low=%#x key_pos=%#llx",
++			epoch_prev, epoch_next, (unsigned int)(uint32_t)key_pos,
++			(unsigned long long)key_pos);
+ 	chiaki_key_state_commit(&takion->key_state, key_pos);
+ 
+ 	return CHIAKI_ERR_SUCCESS;
