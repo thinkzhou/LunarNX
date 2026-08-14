@@ -3,6 +3,31 @@
 The bridge publishes versioned Nintendo Switch NRO builds and receives bounded
 development logs through a Cloudflare Worker backed by Workers KV.
 
+## Build and publish with one version
+
+Use the unified entry point for release-like development builds. It chooses a
+short version such as `0.1.0-d260814.1` before compilation, writes that exact
+version into the NRO, publishes it under the same Cloudflare version, and uses
+it in the optional Feishu notification:
+
+```sh
+tools/dev_bridge/build_and_publish.sh \
+  --drop-diag 1 \
+  --notes "Investigate long-running PlayStation packet loss"
+```
+
+Pass `--version 0.1.0-dev.4` to choose the version explicitly. Versions are
+limited to 15 ASCII characters so they fit the Switch NACP display-version
+field. The generated `build/switch/build-manifest.json` records the version,
+Git revision, diagnostic switches, curl provider, size, SHA-256, and publish
+time for the current local artifact. It is build output and is intentionally
+not committed. Cloudflare's `/dev/versions.json` remains the durable release
+history, avoiding a second manually maintained history file.
+
+A successful Cloudflare publish sends the Feishu notification by default. Pass
+`--no-feishu` only when a publish intentionally should not notify the configured
+release chat.
+
 ## Publish a version
 
 ```sh
@@ -20,6 +45,28 @@ Binary objects are addressed by SHA-256, so identical builds share one KV value.
 
 Workers KV limits each value to 25 MiB. The publish script rejects larger NROs
 before uploading them.
+
+After all Cloudflare KV writes succeed, the publish command sends a Feishu
+notification by default:
+
+```sh
+LUNARNX_DEV_BRIDGE_URL=https://lunarnx-dev-bridge.zy741870701.workers.dev \
+  tools/dev_bridge/publish_build.sh \
+  build/switch/LunarNX.nro \
+  0.1.0-dev.20260814.2 \
+  "Describe the changes in this build"
+```
+
+Pass `--no-feishu`, or set `LUNARNX_FEISHU_NOTIFY=0`, to suppress the
+notification explicitly. The notification is sent
+as the configured bot to the chat stored in the macOS Keychain item
+`feishu-chat-id`, using the authenticated `lark-cli` profile. It includes the
+version, notes, Git revision, size, and immutable NRO download link; no Feishu
+credentials or chat IDs are stored in the repository. A missing configuration
+or send failure is reported as a warning after the Cloudflare publish succeeds,
+so retrying the command cannot accidentally be mistaken for a required deploy
+retry. Re-publishing an identical NRO within Feishu's idempotency window does
+not create a duplicate notification.
 
 ## Prune old versions
 

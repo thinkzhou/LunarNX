@@ -14,13 +14,16 @@ DOCKER_IMG="${DOCKER_IMG:-devkitpro/devkita64:20251117}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 NETWORK_DIAG="${NETWORK_DIAG:-0}"
 APP_DIAG="${APP_DIAG:-0}"
+DROP_DIAG="${DROP_DIAG:-0}"
 XBOX_RESPONSE_TRACE="${XBOX_RESPONSE_TRACE:-0}"
 IPV6="${IPV6:-0}"
 CURL_PROVIDER="${CURL_PROVIDER:-wiliwili}"
 CURL_VERIFY="${CURL_VERIFY:-0}"
 CURL_VERBOSE="${CURL_VERBOSE:-0}"
 CURL_TIMEOUT_MS="${CURL_TIMEOUT_MS:-30000}"
+APP_VERSION="${APP_VERSION:-0.1.0}"
 LUNAR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+GIT_COMMIT="${GIT_COMMIT:-$(git -C "$LUNAR_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
 
 if [[ ! -d "$LUNAR_DIR/lib/borealis/.git" || ! -d "$LUNAR_DIR/lib/libpeer/.git" ]]; then
     echo "Missing local dependencies. Run ./scripts/setup_dependencies.sh first." >&2
@@ -34,12 +37,15 @@ fi
 docker run --rm --platform "$DOCKER_PLATFORM" \
     -e NETWORK_DIAG="$NETWORK_DIAG" \
     -e APP_DIAG="$APP_DIAG" \
+    -e DROP_DIAG="$DROP_DIAG" \
     -e XBOX_RESPONSE_TRACE="$XBOX_RESPONSE_TRACE" \
     -e IPV6="$IPV6" \
     -e CURL_PROVIDER="$CURL_PROVIDER" \
     -e CURL_VERIFY="$CURL_VERIFY" \
     -e CURL_VERBOSE="$CURL_VERBOSE" \
     -e CURL_TIMEOUT_MS="$CURL_TIMEOUT_MS" \
+    -e APP_VERSION="$APP_VERSION" \
+    -e GIT_COMMIT="$GIT_COMMIT" \
     -v "$LUNAR_DIR:/work" -w /work \
     "$DOCKER_IMG" bash -lc '
 set -e
@@ -48,12 +54,15 @@ export PATH=/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin:$PATH
 echo "Docker image: '"$DOCKER_IMG"'"
 echo "NETWORK_DIAG: $NETWORK_DIAG"
 echo "APP_DIAG: $APP_DIAG"
+echo "DROP_DIAG: $DROP_DIAG"
 echo "XBOX_RESPONSE_TRACE: $XBOX_RESPONSE_TRACE"
 echo "IPV6: $IPV6"
 echo "CURL_PROVIDER: $CURL_PROVIDER"
 echo "CURL_VERIFY: $CURL_VERIFY"
 echo "CURL_VERBOSE: $CURL_VERBOSE"
 echo "CURL_TIMEOUT_MS: $CURL_TIMEOUT_MS"
+echo "APP_VERSION: $APP_VERSION"
+echo "GIT_COMMIT: $GIT_COMMIT"
 aarch64-none-elf-g++ --version | head -1
 
 case "$CURL_PROVIDER" in
@@ -129,12 +138,15 @@ make -f Makefile.switch clean
 make -f Makefile.switch -j$(nproc) \
     NETWORK_DIAG="$NETWORK_DIAG" \
     APP_DIAG="$APP_DIAG" \
+    DROP_DIAG="$DROP_DIAG" \
     XBOX_RESPONSE_TRACE="$XBOX_RESPONSE_TRACE" \
     IPV6="$IPV6" \
     CURL_PROVIDER="$CURL_PROVIDER" \
     CURL_VERIFY="$CURL_VERIFY" \
     CURL_VERBOSE="$CURL_VERBOSE" \
-    CURL_TIMEOUT_MS="$CURL_TIMEOUT_MS"
+    CURL_TIMEOUT_MS="$CURL_TIMEOUT_MS" \
+    APP_VERSION="$APP_VERSION" \
+    GIT_COMMIT="$GIT_COMMIT"
 
 echo ""
 echo "========================================="

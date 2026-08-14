@@ -9,6 +9,18 @@ CLOUDFLARE_DIR="$SCRIPT_DIR/cloudflare"
 NRO_INPUT=${1:-build/switch/LunarNX.nro}
 VERSION_INPUT=${2:-}
 NOTES=${3:-Development build}
+FEISHU_NOTIFY=${LUNARNX_FEISHU_NOTIFY:-1}
+if [[ "${1:-}" == "--notify-feishu" || "${1:-}" == "--no-feishu" ]]; then
+    [[ "$1" == "--notify-feishu" ]] && FEISHU_NOTIFY=1 || FEISHU_NOTIFY=0
+    shift
+    NRO_INPUT=${1:-build/switch/LunarNX.nro}
+    VERSION_INPUT=${2:-}
+    NOTES=${3:-Development build}
+fi
+if [[ "$FEISHU_NOTIFY" != 0 && "$FEISHU_NOTIFY" != 1 ]]; then
+    print -u2 -- 'LUNARNX_FEISHU_NOTIFY must be 0 or 1'
+    exit 8
+fi
 if [[ "$NRO_INPUT" = /* ]]; then
     NRO_PATH=$NRO_INPUT
 else
@@ -93,3 +105,36 @@ print -- "Size: $SIZE bytes"
 print -- "SHA-256: $SHA256"
 print -- "Manifest: $BASE_URL/dev/latest.json"
 print -- "Versions: $BASE_URL/dev/versions.json"
+
+if (( FEISHU_NOTIFY )); then
+    if ! command -v lark-cli >/dev/null 2>&1; then
+        print -u2 -- 'Warning: build was published, but Feishu notification was skipped because lark-cli is unavailable'
+        exit 0
+    fi
+    CHAT_ID=$(/usr/bin/security find-generic-password -s feishu-chat-id -w 2>/dev/null) || {
+        print -u2 -- 'Warning: build was published, but Feishu notification was skipped because Keychain item feishu-chat-id is unavailable'
+        exit 0
+    }
+    FEISHU_MESSAGE=$(print -r -- \
+        "## LunarNX 开发版已发布
+
+- 版本：$VERSION
+- 说明：$NOTES
+- Git：$COMMIT
+- 大小：$SIZE bytes
+- [下载 NRO]($BASE_URL/dev/builds/$SHA256.nro)")
+    FEISHU_IDEMPOTENCY_KEY="lunarnx-cf-${SHA256[1,32]}"
+    if LARKSUITE_CLI_NO_UPDATE_NOTIFIER=1 \
+        LARKSUITE_CLI_NO_SKILLS_NOTIFIER=1 \
+        lark-cli im +messages-send \
+            --as bot \
+            --chat-id "$CHAT_ID" \
+            --markdown "$FEISHU_MESSAGE" \
+            --idempotency-key "$FEISHU_IDEMPOTENCY_KEY" \
+            --format json >/dev/null; then
+        print -- 'Sent Feishu release notification'
+    else
+        print -u2 -- 'Warning: build was published, but the Feishu notification failed'
+    fi
+    unset CHAT_ID
+fi
