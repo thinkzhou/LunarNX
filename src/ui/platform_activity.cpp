@@ -92,7 +92,7 @@ brls::View* PlatformActivity::createContentView() {
     auto* workspace = new brls::Box(brls::Axis::COLUMN);
     workspace->setBackgroundColor(p.background);
     workspace->setPadding(28, 48, 24, 48);
-    workspace->registerAction(brls::getStr("lunarnx/common/global_settings"),
+    workspace->registerAction(brls::getStr("lunarnx/common/settings"),
         brls::ControllerButton::BUTTON_X, [](brls::View*) -> bool {
         brls::Application::pushActivity(
             new StreamSettingsActivity(nullptr, loadStreamSettings(), {},
@@ -104,7 +104,7 @@ brls::View* PlatformActivity::createContentView() {
         brls::ControllerButton::BUTTON_START, [this](brls::View*) -> bool {
         openBrowserDiagnostic();
         return true;
-    });
+    }, true);
     workspace->registerAction(brls::getStr("lunarnx/common/about"),
         brls::ControllerButton::BUTTON_Y, [](brls::View*) -> bool {
         brls::Application::pushActivity(
@@ -117,8 +117,7 @@ brls::View* PlatformActivity::createContentView() {
     content->setAlignItems(brls::AlignItems::CENTER);
     content->setJustifyContent(brls::JustifyContent::CENTER);
     content->addView(makePageHeading(
-        brls::getStr("lunarnx/platform/subtitle"),
-        "Xbox and PlayStation settings remain separate"));
+        brls::getStr("lunarnx/platform/subtitle")));
 
     auto* platforms = new brls::Box(brls::Axis::ROW);
     platforms->setHeight(250);

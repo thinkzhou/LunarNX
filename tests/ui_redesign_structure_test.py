@@ -96,7 +96,7 @@ def main() -> None:
     require("ButtonMappingProfile::Xbox" in settings_source and
             "ButtonMappingProfile::PlayStation" in ps_settings_source,
             "settings must keep Xbox and PlayStation mapping profiles separate")
-    require('"lunarnx/common/global_settings"' in platform_source and
+    require("StreamSettingsScope::Global" in platform_source and
             '"lunarnx/common/xbox_settings"' in main_source and
             '"lunarnx/common/playstation_settings"' in ps_source,
             "navigation must make global Xbox and PlayStation settings scope explicit")

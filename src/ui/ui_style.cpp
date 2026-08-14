@@ -309,6 +309,7 @@ brls::Button* makeSidebarButton(const std::string& label, bool active, UiIcon ic
     button->setHighlightCornerRadius(8);
     button->setJustifyContent(brls::JustifyContent::FLEX_START);
     button->setPaddingLeft(icon == UiIcon::None ? 18 : 46);
+    button->setFontSize(16);
     setSidebarButtonActive(button, active);
     return button;
 }

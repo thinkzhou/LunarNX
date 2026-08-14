@@ -89,7 +89,7 @@ brls::View* MainActivity::createContentView() {
         });
 
     auto* sidebar = new brls::Box(brls::Axis::COLUMN);
-    sidebar->setWidth(220);
+    sidebar->setWidth(250);
     sidebar->setPadding(24, 18, 24, 18);
     sidebar->setBackgroundColor(p.surface);
 
