@@ -12,30 +12,42 @@ def require(condition, message):
         raise SystemExit(f"FAIL: {message}")
 
 
-require('wordmark->setText("LUNARNX")' in ABOUT and
-        'version_chip = makeUiCard(brls::Axis::ROW)' in ABOUT,
-        "About page must use the shared LunarNX brand header")
-require('intro = makeUiCard(brls::Axis::ROW)' in ABOUT and
-        'makeSectionHeader(' in ABOUT,
-        "About content must use the shared card and section hierarchy")
-require('qq_number->setText("736743823")' in ABOUT and
+require('product->setText("LunarNX")' in ABOUT and
+        'version->setText("v" LUNARNX_VERSION)' in ABOUT and
+        'makeAppFrame(brls::getStr("lunarnx/common/about"), root)' in ABOUT,
+        "About page must have one frame title and compact product identity")
+require('ScrollingFrame' not in ABOUT and
+        'root->registerAction("Back"' not in ABOUT and
+        'root->setFocusable(true)' in ABOUT and
+        'root->setHideHighlight(true)' in ABOUT and
+        'capabilities = new brls::Box(brls::Axis::ROW)' in ABOUT and
+        ABOUT.count('makeInfoCell(') >= 4,
+        "About content must fit a single screen without a root focus ring")
+require('"736743823"' in ABOUT and
         'lunarnx/about/qq_group' in ABOUT,
         "About page must show the LunarNX QQ group")
-require('add_feature("XBOX"' in ABOUT and
-        'add_feature("XCLOUD"' in ABOUT and
-        'add_feature("PS"' in ABOUT,
+require('"XBOX"' in ABOUT and '"XCLOUD"' in ABOUT and
+        '"PLAYSTATION"' in ABOUT and
+        'img/platform/xbox.png' in ABOUT and
+        'img/platform/playstation.png' in ABOUT,
         "About page must describe all supported streaming platforms")
 require('AGPL-3.0-only-OpenSSL' in ABOUT and
-        'lunarnx/about/components' in ABOUT,
+        'github.com/thinkzhou/LunarNX' in ABOUT and
+        'lunarnx/about/acknowledgements' in ABOUT,
         "About page must retain license and component attribution")
+require('row->setWidth(586)' in ABOUT and 'row->setGrow(1.0f)' not in ABOUT,
+        "Project metadata must use matching fixed-width columns")
 require('lunarnx/common/about' in MAIN,
         "main page About button must be localized")
 
 for locale in ("en-US", "zh-Hans", "zh-Hant"):
     text = (ROOT / f"romfs/i18n/{locale}/lunarnx.json").read_text()
-    for key in ("community_title", "qq_group", "features_title",
-                "open_source_title", "footer"):
+    for key in ("qq_group", "features_title", "project_title", "repository",
+                "license", "acknowledgements", "components_short",
+                "build_label"):
         require(f'"{key}"' in text,
                 f"missing About localization {key} for {locale}")
+    require('xStreaming' in text and 'Moonlight-Switch' in text,
+            f"missing streaming project acknowledgements for {locale}")
 
 print("About page tests passed")

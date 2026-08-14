@@ -1,197 +1,201 @@
 #ifdef __SWITCH__
 #include "about_activity.h"
 #include "ui_style.h"
-#include "../diagnostics.h"
 #include <string>
 
 namespace lunar::ui {
+namespace {
+
+brls::Box* makeInfoCell(const std::string& label, const std::string& value,
+                        const std::string& detail,
+                        const std::string& logo_resource, bool add_margin) {
+    const auto& p = uiPalette();
+    auto* cell = new brls::Box(brls::Axis::COLUMN);
+    cell->setGrow(1.0f);
+    cell->setHeight(96);
+    cell->setPadding(14, 18, 14, 18);
+    cell->setBackgroundColor(p.surface_alt);
+    cell->setBorderThickness(1);
+    cell->setBorderColor(p.border);
+    cell->setCornerRadius(8);
+    if (add_margin) cell->setMarginLeft(12);
+
+    auto* platform = new brls::Box(brls::Axis::ROW);
+    platform->setHeight(18);
+    platform->setAlignItems(brls::AlignItems::CENTER);
+    auto* logo = new brls::Image();
+    logo->setWidth(16);
+    logo->setHeight(16);
+    logo->setScalingType(brls::ImageScalingType::FIT);
+    logo->setImageFromRes(logo_resource);
+    platform->addView(logo);
+    auto* eyebrow = new brls::Label();
+    eyebrow->setText(label);
+    eyebrow->setFontSize(11);
+    eyebrow->setTextColor(p.accent);
+    eyebrow->setMarginLeft(8);
+    platform->addView(eyebrow);
+    cell->addView(platform);
+
+    auto* title = new brls::Label();
+    title->setText(value);
+    title->setFontSize(16);
+    title->setTextColor(p.text);
+    title->setMarginTop(5);
+    cell->addView(title);
+
+    auto* copy = makeMutedLabel(detail, 11);
+    copy->setIsWrapping(false);
+    copy->setMarginTop(3);
+    cell->addView(copy);
+    return cell;
+}
+
+brls::Box* makeMetadataRow(const std::string& label, const std::string& value,
+                           bool add_margin) {
+    const auto& p = uiPalette();
+    auto* row = new brls::Box(brls::Axis::ROW);
+    row->setWidth(586);
+    row->setHeight(58);
+    row->setPadding(0, 16, 0, 16);
+    row->setAlignItems(brls::AlignItems::CENTER);
+    row->setBackgroundColor(p.surface);
+    row->setBorderThickness(1);
+    row->setBorderColor(p.border);
+    row->setCornerRadius(8);
+    if (add_margin) row->setMarginLeft(12);
+
+    auto* key = makeMutedLabel(label, 12);
+    key->setWidth(116);
+    row->addView(key);
+    auto* text = new brls::Label();
+    text->setGrow(1.0f);
+    text->setText(value);
+    text->setFontSize(12);
+    text->setTextColor(p.text);
+    text->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
+    row->addView(text);
+    return row;
+}
+
+} // namespace
 
 brls::View* AboutActivity::createContentView() {
     const auto& p = uiPalette();
 
-    auto* scroll = new brls::ScrollingFrame();
-    scroll->setBackgroundColor(p.background);
-    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
-    scroll->registerAction("Back", brls::ControllerButton::BUTTON_B,
-        [](brls::View*) -> bool {
-            brls::Application::popActivity(brls::TransitionAnimation::NONE);
-            return true;
-        });
-
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(26, 48, 36, 48);
+    root->setPadding(18, 48, 18, 48);
     root->setBackgroundColor(p.background);
+    root->setFocusable(true);
+    root->setHideHighlight(true);
+    auto* identity = new brls::Box(brls::Axis::ROW);
+    identity->setHeight(92);
+    identity->setAlignItems(brls::AlignItems::CENTER);
+    identity->setMarginBottom(16);
 
-    auto* header = new brls::Box(brls::Axis::ROW);
-    header->setHeight(84);
-    header->setAlignItems(brls::AlignItems::CENTER);
-    auto* brand = new brls::Box(brls::Axis::COLUMN);
-    brand->setGrow(1.0f);
-    auto* wordmark = new brls::Label();
-    wordmark->setText("LUNARNX");
-    wordmark->setFontSize(29);
-    wordmark->setTextColor(p.accent);
-    brand->addView(wordmark);
-    brand->addView(makeMutedLabel(brls::getStr("lunarnx/about/subtitle"), 13));
-    header->addView(brand);
-
-    auto* version_chip = makeUiCard(brls::Axis::ROW);
-    version_chip->setHeight(52);
-    version_chip->setPadding(8, 16, 8, 16);
-    version_chip->setCornerRadius(14);
-    version_chip->setAlignItems(brls::AlignItems::CENTER);
-    auto* version_mark = new brls::Label();
-    version_mark->setText(brls::getStr("lunarnx/about/version_label"));
-    version_mark->setFontSize(11);
-    version_mark->setTextColor(p.accent);
-    version_chip->addView(version_mark);
-    auto* version = new brls::Label();
-    version->setText("v" LUNARNX_VERSION);
-    version->setFontSize(16);
-    version->setTextColor(p.text);
-    version->setMarginLeft(10);
-    version_chip->addView(version);
-    header->addView(version_chip);
-    root->addView(header);
-
-    auto* intro = makeUiCard(brls::Axis::ROW);
-    intro->setHeight(132);
-    intro->setPadding(18, 22, 18, 22);
-    intro->setAlignItems(brls::AlignItems::CENTER);
-    intro->setMarginBottom(18);
     auto* logo = new brls::Label();
-    logo->setWidth(82);
-    logo->setHeight(82);
+    logo->setWidth(64);
+    logo->setHeight(64);
     logo->setText("LN");
-    logo->setFontSize(24);
+    logo->setFontSize(19);
     logo->setTextColor(p.accent);
     logo->setBackgroundColor(p.accent_soft);
-    logo->setCornerRadius(22);
+    logo->setCornerRadius(8);
     logo->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     logo->setVerticalAlign(brls::VerticalAlign::CENTER);
-    intro->addView(logo);
-    auto* intro_copy = new brls::Box(brls::Axis::COLUMN);
-    intro_copy->setGrow(1.0f);
-    intro_copy->setPadding(8, 12, 8, 22);
-    auto* intro_title = new brls::Label();
-    intro_title->setText(brls::getStr("lunarnx/about/title"));
-    intro_title->setFontSize(25);
-    intro_title->setTextColor(p.text);
-    intro_copy->addView(intro_title);
-    auto* intro_desc = makeMutedLabel(brls::getStr("lunarnx/about/description"), 14);
-    intro_desc->setIsWrapping(true);
-    intro_copy->addView(intro_desc);
-    intro->addView(intro_copy);
-    root->addView(intro);
+    identity->addView(logo);
+
+    auto* identity_copy = new brls::Box(brls::Axis::COLUMN);
+    identity_copy->setGrow(1.0f);
+    identity_copy->setPadding(10, 18, 10, 18);
+    auto* product = new brls::Label();
+    product->setText("LunarNX");
+    product->setFontSize(22);
+    product->setTextColor(p.text);
+    identity_copy->addView(product);
+    auto* description = makeMutedLabel(
+        brls::getStr("lunarnx/about/description"), 13);
+    description->setIsWrapping(false);
+    identity_copy->addView(description);
+    identity->addView(identity_copy);
+
+    auto* version = new brls::Label();
+    version->setWidth(112);
+    version->setHeight(38);
+    version->setText("v" LUNARNX_VERSION);
+    version->setFontSize(14);
+    version->setTextColor(p.text_muted);
+    version->setBackgroundColor(p.surface_alt);
+    version->setBorderThickness(1);
+    version->setBorderColor(p.border);
+    version->setCornerRadius(8);
+    version->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    version->setVerticalAlign(brls::VerticalAlign::CENTER);
+    identity->addView(version);
+    root->addView(identity);
+
+    auto* divider = new brls::Box();
+    divider->setHeight(1);
+    divider->setBackgroundColor(p.border);
+    divider->setMarginBottom(16);
+    root->addView(divider);
 
     root->addView(makeSectionHeader(
-        brls::getStr("lunarnx/about/community_title"),
-        brls::getStr("lunarnx/about/community_subtitle")));
-    auto* community = makeUiCard(brls::Axis::ROW);
-    community->setHeight(104);
-    community->setPadding(16, 22, 16, 22);
-    community->setAlignItems(brls::AlignItems::CENTER);
-    community->setMarginBottom(18);
-    auto* qq_mark = new brls::Label();
-    qq_mark->setWidth(64);
-    qq_mark->setHeight(64);
-    qq_mark->setText("QQ");
-    qq_mark->setFontSize(17);
-    qq_mark->setTextColor(p.accent);
-    qq_mark->setBackgroundColor(p.accent_soft);
-    qq_mark->setCornerRadius(32);
-    qq_mark->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    qq_mark->setVerticalAlign(brls::VerticalAlign::CENTER);
-    community->addView(qq_mark);
-    auto* qq_copy = new brls::Box(brls::Axis::COLUMN);
-    qq_copy->setGrow(1.0f);
-    qq_copy->setPadding(4, 14, 4, 18);
-    auto* qq_title = new brls::Label();
-    qq_title->setText(brls::getStr("lunarnx/about/qq_group"));
-    qq_title->setFontSize(15);
-    qq_title->setTextColor(p.text);
-    qq_copy->addView(qq_title);
-    qq_copy->addView(makeMutedLabel(brls::getStr("lunarnx/about/qq_hint"), 13));
-    community->addView(qq_copy);
-    auto* qq_number = new brls::Label();
-    qq_number->setText("736743823");
-    qq_number->setFontSize(27);
-    qq_number->setTextColor(p.accent);
-    qq_number->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
-    community->addView(qq_number);
-    root->addView(community);
+        brls::getStr("lunarnx/about/features_title")));
+    auto* capabilities = new brls::Box(brls::Axis::ROW);
+    capabilities->setHeight(96);
+    capabilities->setMarginBottom(16);
+    capabilities->addView(makeInfoCell(
+        "XBOX", brls::getStr("lunarnx/about/xbox_title"),
+        brls::getStr("lunarnx/about/xbox_desc"),
+        "img/platform/xbox.png", false));
+    capabilities->addView(makeInfoCell(
+        "XCLOUD", brls::getStr("lunarnx/about/cloud_title"),
+        brls::getStr("lunarnx/about/cloud_desc"),
+        "img/platform/xbox.png", true));
+    capabilities->addView(makeInfoCell(
+        "PLAYSTATION", brls::getStr("lunarnx/about/ps_title"),
+        brls::getStr("lunarnx/about/ps_desc"),
+        "img/platform/playstation.png", true));
+    root->addView(capabilities);
 
     root->addView(makeSectionHeader(
-        brls::getStr("lunarnx/about/features_title"),
-        brls::getStr("lunarnx/about/features_subtitle")));
-    auto* features = new brls::Box(brls::Axis::ROW);
-    features->setHeight(126);
-    features->setMarginBottom(18);
-    auto add_feature = [features, &p](const std::string& eyebrow,
-                                      const std::string& title,
-                                      const std::string& detail,
-                                      bool add_margin) {
-        auto* card = makeUiCard(brls::Axis::COLUMN);
-        card->setGrow(1.0f);
-        card->setHeight(126);
-        card->setPadding(16, 18, 16, 18);
-        if (add_margin) card->setMarginLeft(10);
-        auto* mark = new brls::Label();
-        mark->setText(eyebrow);
-        mark->setFontSize(11);
-        mark->setTextColor(p.accent);
-        card->addView(mark);
-        auto* heading = new brls::Label();
-        heading->setText(title);
-        heading->setFontSize(18);
-        heading->setTextColor(p.text);
-        card->addView(heading);
-        auto* copy = makeMutedLabel(detail, 12);
-        copy->setIsWrapping(true);
-        card->addView(copy);
-        features->addView(card);
-    };
-    add_feature("XBOX", brls::getStr("lunarnx/about/xbox_title"),
-                brls::getStr("lunarnx/about/xbox_desc"), false);
-    add_feature("XCLOUD", brls::getStr("lunarnx/about/cloud_title"),
-                brls::getStr("lunarnx/about/cloud_desc"), true);
-    add_feature("PS", brls::getStr("lunarnx/about/ps_title"),
-                brls::getStr("lunarnx/about/ps_desc"), true);
-    root->addView(features);
+        brls::getStr("lunarnx/about/project_title")));
+    auto* first_row = new brls::Box(brls::Axis::ROW);
+    first_row->setHeight(58);
+    first_row->setMarginBottom(10);
+    first_row->addView(makeMetadataRow(
+        brls::getStr("lunarnx/about/repository"),
+        "github.com/thinkzhou/LunarNX", false));
+    first_row->addView(makeMetadataRow(
+        brls::getStr("lunarnx/about/qq_group"), "736743823", true));
+    root->addView(first_row);
 
-    root->addView(makeSectionHeader(brls::getStr("lunarnx/about/open_source_title")));
-    auto* project = makeUiCard(brls::Axis::ROW);
-    project->setHeight(92);
-    project->setPadding(16, 22, 16, 22);
-    project->setAlignItems(brls::AlignItems::CENTER);
-    auto* project_copy = new brls::Box(brls::Axis::COLUMN);
-    project_copy->setGrow(1.0f);
-    auto* project_title = new brls::Label();
-    project_title->setText(brls::getStr("lunarnx/about/open_source_desc"));
-    project_title->setFontSize(15);
-    project_title->setTextColor(p.text);
-    project_copy->addView(project_title);
-    project_copy->addView(makeMutedLabel(
-        brls::getStr("lunarnx/about/components"), 12));
-    project->addView(project_copy);
-    auto* build = new brls::Label();
-    build->setText(
-        std::string("AGPL-3.0-only-OpenSSL\n") +
-        __DATE__ + "  " + __TIME__);
-    build->setFontSize(12);
-    build->setTextColor(p.text_muted);
-    build->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
-    project->addView(build);
-    root->addView(project);
+    auto* second_row = new brls::Box(brls::Axis::ROW);
+    second_row->setHeight(58);
+    second_row->setMarginBottom(14);
+    second_row->addView(makeMetadataRow(
+        brls::getStr("lunarnx/about/license"),
+        "AGPL-3.0-only-OpenSSL", false));
+    second_row->addView(makeMetadataRow(
+        brls::getStr("lunarnx/about/acknowledgements"),
+        brls::getStr("lunarnx/about/components_short"), true));
+    root->addView(second_row);
 
-    auto* footer = makeMutedLabel(brls::getStr("lunarnx/about/footer"), 12);
-    footer->setHeight(54);
-    footer->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-    footer->setVerticalAlign(brls::VerticalAlign::CENTER);
-    root->addView(footer);
+    auto* build = new brls::Box(brls::Axis::ROW);
+    build->setHeight(34);
+    build->setAlignItems(brls::AlignItems::CENTER);
+    auto* build_label = makeMutedLabel(
+        brls::getStr("lunarnx/about/build_label"), 11);
+    build->addView(build_label);
+    auto* build_value = makeMutedLabel(
+        std::string(__DATE__) + "  " + __TIME__, 11);
+    build_value->setGrow(1.0f);
+    build_value->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
+    build->addView(build_value);
+    root->addView(build);
 
-    scroll->setContentView(root);
-    return scroll;
+    return makeAppFrame(brls::getStr("lunarnx/common/about"), root);
 }
 
 } // namespace lunar::ui

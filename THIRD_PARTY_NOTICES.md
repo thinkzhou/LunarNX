@@ -50,3 +50,12 @@ engineering inventory, not legal advice.
 Protocol and platform behavior was studied using XStreaming, Greenlight,
 xbox-xcloud-player, libnxbox, Moonlight-Switch, and wiliwili. LunarNX does not
 include their trademarks and is not endorsed by their maintainers.
+
+## Platform marks
+
+The monochrome Xbox and PlayStation glyph source paths under `res/platform/`
+were obtained from the Simple Icons project (<https://simpleicons.org/>). Xbox
+and the Xbox Sphere mark are trademarks of Microsoft. PlayStation and the
+PlayStation family mark are trademarks of Sony Interactive Entertainment.
+Their appearance identifies supported platforms and does not imply endorsement
+of LunarNX by either trademark owner.

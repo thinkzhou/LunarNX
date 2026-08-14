@@ -35,21 +35,48 @@ brls::View* PsRegistrationActivity::createContentView() {
         });
 
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(40, 80, 40, 20);
+    root->setPadding(24, 80, 24, 80);
     root->setAlignItems(brls::AlignItems::CENTER);
 
-    // Title
-    auto* title = new brls::Label();
-    title->setText(brls::getStr("lunarnx/ps/reg_title"));
-    title->setFontSize(24);
-    title->setTextColor(p.text);
-    title->setMargins(0, 0, 0, 8);
-    root->addView(title);
+    auto* pairing_card = makeUiCard(brls::Axis::ROW);
+    pairing_card->setWidth(920);
+    pairing_card->setHeight(470);
+    pairing_card->setPadding(24, 28, 24, 28);
+    pairing_card->setAlignItems(brls::AlignItems::CENTER);
+
+    auto* details = new brls::Box(brls::Axis::COLUMN);
+    details->setWidth(500);
+    details->setHeight(420);
+    details->setJustifyContent(brls::JustifyContent::CENTER);
+
+    auto* console_type = new brls::Box(brls::Axis::ROW);
+    console_type->setWidth(480);
+    console_type->setHeight(58);
+    console_type->setMarginBottom(12);
+    console_type->setAlignItems(brls::AlignItems::CENTER);
+    console_type->setBorderThickness(1);
+    console_type->setBorderColor(p.border);
+    auto* console_type_label = new brls::Label();
+    console_type_label->setText("Console Type");
+    console_type_label->setFontSize(15);
+    console_type_label->setTextColor(p.text);
+    console_type_label->setGrow(1.0f);
+    console_type_label->setMarginLeft(18);
+    console_type->addView(console_type_label);
+    auto* console_type_value = new brls::Label();
+    console_type_value->setText(target_ >= 1000000 ? "PlayStation 5" : "PlayStation 4");
+    console_type_value->setFontSize(14);
+    console_type_value->setTextColor(p.accent);
+    console_type_value->setMarginRight(18);
+    console_type->addView(console_type_value);
+    details->addView(console_type);
 
     if (host_addr_.empty()) {
         auto* host_input = new brls::InputCell();
-        host_input->setWidth(520);
-        host_input->setMargins(0, 0, 0, 24);
+        host_input->setWidth(480);
+        host_input->setHeight(58);
+        host_input->setMarginBottom(12);
+        host_input->setBackgroundColor(p.surface_alt);
         auto alive = alive_;
         host_input->init(
             brls::getStr("lunarnx/ps/reg_ip_title"),
@@ -61,14 +88,21 @@ brls::View* PsRegistrationActivity::createContentView() {
             brls::getStr("lunarnx/ps/reg_ip_example"),
             64,
             0);
-        root->addView(host_input);
+        details->addView(host_input);
     } else {
         auto* host_label = new brls::Label();
         host_label->setText(host_name_ + " (" + host_addr_ + ")");
         host_label->setFontSize(14);
         host_label->setTextColor(p.text_muted);
-        host_label->setMargins(0, 0, 0, 30);
-        root->addView(host_label);
+        host_label->setWidth(480);
+        host_label->setHeight(58);
+        host_label->setMarginBottom(12);
+        host_label->setBackgroundColor(p.surface_alt);
+        host_label->setBorderThickness(1);
+        host_label->setBorderColor(p.border);
+        host_label->setMarginLeft(18);
+        host_label->setVerticalAlign(brls::VerticalAlign::CENTER);
+        details->addView(host_label);
     }
 
     // PIN display
@@ -76,20 +110,45 @@ brls::View* PsRegistrationActivity::createContentView() {
     pin_display_->setText(brls::getStr("lunarnx/ps/reg_enter_pin"));
     pin_display_->setFontSize(28);
     pin_display_->setTextColor(p.text);
-    pin_display_->setMargins(0, 0, 0, 30);
-    root->addView(pin_display_);
+    pin_display_->setWidth(480);
+    pin_display_->setHeight(72);
+    pin_display_->setMarginBottom(14);
+    pin_display_->setBackgroundColor(p.surface_alt);
+    pin_display_->setBorderThickness(1);
+    pin_display_->setBorderColor(p.border);
+    pin_display_->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    pin_display_->setVerticalAlign(brls::VerticalAlign::CENTER);
+    details->addView(pin_display_);
+
+    status_ = new brls::Label();
+    status_->setText(brls::getStr("lunarnx/ps/reg_instructions"));
+    status_->setFontSize(12);
+    status_->setTextColor(p.text_muted);
+    status_->setWidth(480);
+    status_->setHeight(76);
+    status_->setIsWrapping(true);
+    status_->setVerticalAlign(brls::VerticalAlign::CENTER);
+    details->addView(status_);
+    pairing_card->addView(details);
+
+    auto* keypad = new brls::Box(brls::Axis::COLUMN);
+    keypad->setGrow(1.0f);
+    keypad->setHeight(420);
+    keypad->setAlignItems(brls::AlignItems::CENTER);
+    keypad->setJustifyContent(brls::JustifyContent::CENTER);
 
     // Number pad
     static const char* kRows[] = {"123", "456", "789", " 0 "};
     for (const auto* row : kRows) {
         auto* row_box = new brls::Box(brls::Axis::ROW);
+        row_box->setHeight(64);
         row_box->setJustifyContent(brls::JustifyContent::CENTER);
-        row_box->setMargins(0, 0, 0, 8);
 
         for (const char* c = row; *c; c++) {
             if (*c == ' ') {
                 auto* spacer = new brls::Box(brls::Axis::ROW);
-                spacer->setDimensions(60, 50);
+                spacer->setDimensions(72, 56);
+                spacer->setMargins(4, 4, 4, 4);
                 row_box->addView(spacer);
                 continue;
             }
@@ -97,8 +156,9 @@ brls::View* PsRegistrationActivity::createContentView() {
             char digit = *c;
             auto* btn = new brls::Button();
             btn->setText(std::string(1, digit));
-            btn->setWidth(60);
-            btn->setHeight(50);
+            btn->setWidth(72);
+            btn->setHeight(56);
+            btn->setMargins(4, 4, 4, 4);
             styleSecondaryButton(btn);
             btn->registerClickAction([this, digit](brls::View*) -> bool {
                 onDigit(digit);
@@ -106,18 +166,22 @@ brls::View* PsRegistrationActivity::createContentView() {
             });
             row_box->addView(btn);
         }
-        root->addView(row_box);
+        keypad->addView(row_box);
     }
 
     // Action row
     auto* action_row = new brls::Box(brls::Axis::ROW);
+    action_row->setWidth(240);
+    action_row->setHeight(64);
     action_row->setJustifyContent(brls::JustifyContent::CENTER);
-    action_row->setMargins(0, 12, 0, 0);
+    action_row->setMarginTop(10);
 
     auto* back_btn = new brls::Button();
     back_btn->setText(brls::getStr("lunarnx/ps/reg_backspace"));
-    back_btn->setWidth(120);
-    styleQuietButton(back_btn);
+    back_btn->setWidth(112);
+    back_btn->setHeight(54);
+    back_btn->setMarginRight(8);
+    styleSecondaryButton(back_btn);
     back_btn->registerClickAction([this](brls::View*) -> bool {
         onBackspace();
         return true;
@@ -126,26 +190,20 @@ brls::View* PsRegistrationActivity::createContentView() {
 
     auto* submit_btn = new brls::Button();
     submit_btn->setText(brls::getStr("lunarnx/ps/reg_pair"));
-    submit_btn->setWidth(120);
+    submit_btn->setWidth(112);
+    submit_btn->setHeight(54);
     stylePrimaryButton(submit_btn);
     submit_btn->registerClickAction([this](brls::View*) -> bool {
         onSubmitPin();
         return true;
     });
-    submit_btn->setMargins(20, 0, 0, 0);
     action_row->addView(submit_btn);
-    root->addView(action_row);
-
-    // Status
-    status_ = new brls::Label();
-    status_->setText(brls::getStr("lunarnx/ps/reg_instructions"));
-    status_->setFontSize(12);
-    status_->setTextColor(p.text_muted);
-    status_->setMargins(0, 20, 0, 0);
-    root->addView(status_);
+    keypad->addView(action_row);
+    pairing_card->addView(keypad);
+    root->addView(pairing_card);
 
     scroll->setContentView(root);
-    return scroll;
+    return makeAppFrame(brls::getStr("lunarnx/ps/reg_title"), scroll);
 }
 
 void PsRegistrationActivity::onDigit(char digit) {

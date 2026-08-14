@@ -15,9 +15,11 @@ def main() -> None:
     overlay_header = (ROOT / "src/ui/stream_overlay.h").read_text()
     overlay_source = (ROOT / "src/ui/stream_overlay.cpp").read_text()
 
-    require("account_chip" in main_source and
-            '"lunarnx/common/account"' in main_source,
-            "the signed-in identity must have a dedicated top-right account chip")
+    require("account->setJustifyContent(brls::JustifyContent::FLEX_END)" in
+                main_source and
+            '"lunarnx/common/account"' in main_source and
+            "account->addView(gamer_tag_)" in main_source,
+            "the signed-in identity must have a dedicated sidebar account area")
     require(main_source.count("gamer_tag_->setText(") == 3,
             "content loading and result counts must not overwrite account identity")
 

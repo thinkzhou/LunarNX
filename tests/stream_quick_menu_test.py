@@ -18,8 +18,9 @@ def main():
             "ORIGINAL_WINDOW_WIDTH - kQuickMenuEdgeWidth" in view and
             "distance <= -kQuickMenuSwipeDistance" in view,
             "stream menu must open from a deliberate right-edge left swipe")
-    require("ORIGINAL_WINDOW_WIDTH - 390" in view,
-            "stream menu must be anchored to the right edge")
+    require("(brls::Application::ORIGINAL_WINDOW_WIDTH - 520) / 2" in view and
+            "(brls::Application::ORIGINAL_WINDOW_HEIGHT - 620) / 2" in view,
+            "stream menu must use the approved centered dialog position")
     require("menu_handle_" not in view and "menu_handle_" not in header,
             "stream view must not permanently cover video with a menu handle")
     require("quick_menu_->setVisibility" in view and
@@ -36,10 +37,21 @@ def main():
     require("getStreamPlatform() == app::StreamPlatform::PlayStation" in view and
             "menu_ps_button" in view and "menu_xbox_button" in view,
             "platform home button must use PlayStation or Xbox labeling")
+    require("menu_stream_settings" in view and
+            "new PsSettingsActivity" in view and
+            "new StreamSettingsActivity" in view,
+            "stream menu must open settings for the active platform")
+    require("menu_button_mapping" in view and
+            "ButtonMappingProfile::PlayStation" in view and
+            "ButtonMappingProfile::Xbox" in view,
+            "stream menu must open the active platform button mapping")
+    require("menu_resume" in view and "setQuickMenuVisible(false)" in view,
+            "stream menu must expose an explicit Resume action")
     require("child_activity_visible_ = true" in view and
+            "quick_menu_visible_ || child_activity_visible_ || exit_pending_.load()" in view and
             "void StreamView::onResume()" in view and
             "child_activity_visible_ = false" in view,
-            "settings and mapping activities must suppress input until resume")
+            "settings and mapping activities must keep remote input suppressed until resume")
     require("kQuickDisconnectConfirmWindow" in view and
             "menu_disconnect_confirm" in view and
             "std::atomic<bool> disconnect_armed_" in header,

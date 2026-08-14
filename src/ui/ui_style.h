@@ -28,12 +28,34 @@ void installLunarTheme();
 const UiPalette& uiPalette();
 
 brls::Box* makeUiCard(brls::Axis axis = brls::Axis::COLUMN);
+brls::Box* makeFlatSection(const std::string& title,
+                           const std::string& subtitle = "");
+void addFlatRow(brls::Box* section, brls::View* row);
 brls::Box* makeSectionHeader(const std::string& title,
                              const std::string& subtitle = "");
 brls::Label* makeMutedLabel(const std::string& text, float font_size = 14);
 void stylePrimaryButton(brls::Button* button);
 void styleSecondaryButton(brls::Button* button);
 void styleQuietButton(brls::Button* button);
+
+brls::AppletFrame* makeAppFrame(const std::string& title,
+                                brls::View* content);
+enum class UiIcon {
+    None,
+    Console,
+    Cloud,
+    Search,
+    Settings,
+    Info,
+    Account,
+    Link,
+    SignOut,
+};
+brls::Button* makeSidebarButton(const std::string& label, bool active = false,
+                                UiIcon icon = UiIcon::None);
+void setSidebarButtonActive(brls::Button* button, bool active);
+brls::Box* makePageHeading(const std::string& title,
+                           const std::string& subtitle = "");
 
 class ConsoleGlyphView : public brls::View {
 public:

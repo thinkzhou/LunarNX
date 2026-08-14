@@ -38,6 +38,10 @@ require("envSetNextLoad" in ui and "Application::quit" in ui,
         "successful installation must relaunch the installed NRO")
 require("new DevToolsActivity" in platform,
         "platform page must expose development tools without account login")
+require('makeAppFrame(brls::getStr("lunarnx/dev/title"), scroll)' in ui and
+        'title->setText(brls::getStr("lunarnx/dev/title"))' not in ui and
+        'card->setHeight(92)' in ui,
+        "development tools must use the shared title and compact card hierarchy")
 require("src/app/dev_bridge_client.cpp" in makefile and
         "src/ui/dev_tools_activity.cpp" in makefile and
         "DEV_BRIDGE_UPLOAD_TOKEN" in makefile,

@@ -22,6 +22,11 @@ struct StreamSettingsSnapshot {
     int rumble_strength_percent = 50;
 };
 
+enum class StreamSettingsScope {
+    Global,
+    Xbox,
+};
+
 StreamSettingsSnapshot loadStreamSettings();
 bool saveStreamSettings(const StreamSettingsSnapshot& settings);
 
@@ -31,7 +36,8 @@ public:
 
     StreamSettingsActivity(std::shared_ptr<app::StreamController> ctrl,
                            StreamSettingsSnapshot settings,
-                           CompletionCallback completion);
+                           CompletionCallback completion,
+                           StreamSettingsScope scope = StreamSettingsScope::Xbox);
 
     brls::View* createContentView() override;
 
@@ -39,6 +45,7 @@ private:
     std::shared_ptr<app::StreamController> ctrl_;
     StreamSettingsSnapshot settings_;
     CompletionCallback completion_;
+    StreamSettingsScope scope_ = StreamSettingsScope::Xbox;
     bool closed_ = false;
 
     void closeSettings();

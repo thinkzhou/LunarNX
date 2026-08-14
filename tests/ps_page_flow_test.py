@@ -16,16 +16,16 @@ def main():
             'lunarnx/ps/tab_remote' in ui and
             "PsConsoleSource::Local" in ui and "PsConsoleSource::Remote" in ui,
             "PS page must use Xbox-style local and remote source tabs")
-    require('wordmark->setText("LUNARNX")' in ui and
-            'account_chip = makeUiCard(brls::Axis::ROW)' in ui and
-            'account_mark->setText("PS")' in ui and
+    require('return makeAppFrame("PlayStation", workspace);' in ui and
+            'UiIcon::Console' in ui and 'UiIcon::Cloud' in ui and
+            'UiIcon::Link' in ui and
             'lunarnx/ps/account_network' in ui,
-            "PS page must share the Xbox brand header and compact account chip")
-    require('lunarnx/common/settings' in ui and
+            "PS page must use the platform workspace shell and explicit source navigation")
+    require('lunarnx/common/playstation_settings' in ui and
             'new PsSettingsActivity(' in ui and
             'lunarnx/common/about' in ui and
             'new AboutActivity()' in ui,
-            "PS page must expose the shared settings and about activities")
+            "PS page must expose scoped settings and the shared About activity")
     require('back_navigation_ready_at_' in ui and
             'now < back_navigation_ready_at_' in ui,
             "PS page must consume a held Back input after returning from streaming")
@@ -39,14 +39,20 @@ def main():
     require('lunarnx/ps/btn_pair' in ui and 'lunarnx/ps/btn_wake_connect' in ui and
             'lunarnx/ps/btn_connect' in ui,
             "console cards must expose truthful goal-oriented actions")
-    require("card->setHeight(132);" in ui and
-            "name->setFontSize(23);" in ui and
-            "local_console_desc" in ui and "remote_console_desc" in ui,
-            "dynamic PS console rows must match Xbox card dimensions and typography")
+    require("card->setHeight(92);" in ui and
+            "name->setFontSize(20);" in ui and
+            "name->setSingleLine(true);" in ui and
+            "meta->setHeight(28);" in ui and
+            "local_console_desc" not in ui and "remote_console_desc" not in ui,
+            "dynamic PS console rows must use the compact two-line card hierarchy")
     require('detail_remote_disabled' in ui and 'btn_how_enable' in ui,
             "remote-disabled devices must remain visible with guidance")
     require('lunarnx/ps/pair_ps4' in ui and 'lunarnx/ps/pair_ps5' in ui,
             "manual local pairing must remain available")
+    require('card->addView(action)' in ui and
+            'action->registerClickAction' in ui and
+            'stylePrimaryButton(action)' in ui,
+            "available PS hosts must expose focused action buttons without changing flow")
     require('refreshConsoles();' not in ui.split('if (!resumed_once_)', 1)[1].split('} else {', 1)[0],
             "opening the page must not auto-trigger network discovery")
     require("chiaki_discovery_service_init" in discovery,

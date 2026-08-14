@@ -3,50 +3,120 @@
 #include "auth_activity.h"
 #include "main_activity.h"
 #include "ps_activity.h"
+#include "about_activity.h"
+#include "stream_settings_activity.h"
 #include "dev_tools_activity.h"
 #include "ui_style.h"
 #include "../common.h"
 #include "../diagnostics.h"
 
+#include <cstdio>
 #include <functional>
+#include <string>
 
 namespace lunar::ui {
 namespace {
 
-brls::Box* makePlatformRow(const std::string& title,
-                           const std::string& detail,
-                           const std::function<void()>& open) {
+brls::Button* makePlatformTile(const std::string& title,
+                               const std::string& detail,
+                               const std::string& account_state,
+                               const std::string& logo_resource,
+                               const std::function<void()>& open) {
     const auto& p = uiPalette();
-    auto* row = makeUiCard(brls::Axis::ROW);
-    row->setWidth(760);
-    row->setHeight(132);
-    row->setPadding(22, 26, 22, 26);
-    row->setAlignItems(brls::AlignItems::CENTER);
+    auto* tile = new brls::Button();
+    tile->setStyle(&brls::BUTTONSTYLE_BORDERLESS);
+    tile->setWidth(500);
+    tile->setHeight(220);
+    tile->setPadding(24, 28, 24, 28);
+    tile->setBackgroundColor(p.card);
+    tile->setBorderThickness(1);
+    tile->setBorderColor(p.border);
+    tile->setCornerRadius(8);
+    tile->setHighlightCornerRadius(10);
+    tile->setAxis(brls::Axis::ROW);
+    tile->setAlignItems(brls::AlignItems::CENTER);
+
+    auto* logo_surface = new brls::Box(brls::Axis::COLUMN);
+    logo_surface->setWidth(150);
+    logo_surface->setHeight(150);
+    logo_surface->setAlignItems(brls::AlignItems::CENTER);
+    logo_surface->setJustifyContent(brls::JustifyContent::CENTER);
+    logo_surface->setBackgroundColor(p.surface_alt);
+    logo_surface->setCornerRadius(8);
+    auto* logo = new brls::Image();
+    logo->setWidth(82);
+    logo->setHeight(82);
+    logo->setScalingType(brls::ImageScalingType::FIT);
+    logo->setImageFromRes(logo_resource);
+    logo_surface->addView(logo);
+    tile->addView(logo_surface);
 
     auto* copy = new brls::Box(brls::Axis::COLUMN);
     copy->setGrow(1.0f);
-    copy->setPadding(4, 12, 4, 0);
+    copy->setPadding(12, 0, 12, 26);
     auto* label = new brls::Label();
     label->setText(title);
-    label->setFontSize(24);
+    label->setFontSize(28);
     label->setTextColor(p.text);
+    label->setHeight(42);
     copy->addView(label);
     auto* description = makeMutedLabel(detail, 14);
-    description->setMarginTop(8);
+    description->setHeight(48);
+    description->setIsWrapping(true);
     copy->addView(description);
-    row->addView(copy);
-
-    auto* button = new brls::Button();
-    button->setWidth(180);
-    button->setHeight(64);
-    button->setText(brls::getStr("lunarnx/platform/open"));
-    stylePrimaryButton(button);
-    button->registerClickAction([open](brls::View*) -> bool {
+    auto* state = new brls::Label();
+    state->setText(account_state);
+    state->setFontSize(13);
+    state->setTextColor(p.accent);
+    state->setHeight(28);
+    copy->addView(state);
+    tile->addView(copy);
+    tile->registerClickAction([open](brls::View*) -> bool {
         open();
         return true;
     });
-    row->addView(button);
-    return row;
+    return tile;
+}
+
+brls::Button* makeUtilityTile(const std::string& title,
+                              const std::string& detail,
+                              const std::function<void()>& open) {
+    const auto& p = uiPalette();
+    auto* tile = new brls::Button();
+    tile->setStyle(&brls::BUTTONSTYLE_BORDERLESS);
+    tile->setWidth(1024);
+    tile->setHeight(72);
+    tile->setPadding(10, 22, 10, 22);
+    tile->setBackgroundColor(p.surface_alt);
+    tile->setBorderThickness(1);
+    tile->setBorderColor(p.border);
+    tile->setCornerRadius(8);
+    tile->setHighlightCornerRadius(10);
+    tile->setAxis(brls::Axis::ROW);
+    tile->setAlignItems(brls::AlignItems::CENTER);
+
+    auto* label = new brls::Label();
+    label->setText(title);
+    label->setFontSize(18);
+    label->setTextColor(p.text);
+    label->setWidth(240);
+    tile->addView(label);
+    auto* description = makeMutedLabel(detail, 13);
+    description->setGrow(1.0f);
+    description->setSingleLine(true);
+    tile->addView(description);
+    tile->registerClickAction([open](brls::View*) -> bool {
+        open();
+        return true;
+    });
+    return tile;
+}
+
+bool savedFileExists(const char* path) {
+    FILE* file = std::fopen(path, "rb");
+    if (!file) return false;
+    std::fclose(file);
+    return true;
 }
 
 } // namespace
@@ -57,51 +127,68 @@ brls::View* PlatformActivity::createContentView() {
     diagnosticLog("ui-platform", "createContentView begin");
     const auto& p = uiPalette();
 
-    auto* scroll = new brls::ScrollingFrame();
-    scroll->setBackgroundColor(p.background);
-    scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
+    auto* workspace = new brls::Box(brls::Axis::COLUMN);
+    workspace->setBackgroundColor(p.background);
+    workspace->setPadding(28, 48, 24, 48);
+    workspace->registerAction(brls::getStr("lunarnx/common/settings"),
+        brls::ControllerButton::BUTTON_X, [](brls::View*) -> bool {
+        brls::Application::pushActivity(
+            new StreamSettingsActivity(nullptr, loadStreamSettings(), {},
+                StreamSettingsScope::Global),
+            brls::TransitionAnimation::NONE);
+        return true;
+    });
+    workspace->registerAction(brls::getStr("lunarnx/common/about"),
+        brls::ControllerButton::BUTTON_Y, [](brls::View*) -> bool {
+        brls::Application::pushActivity(
+            new AboutActivity(), brls::TransitionAnimation::NONE);
+        return true;
+    });
 
-    auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(40, 60, 40, 20);
-    root->setAlignItems(brls::AlignItems::CENTER);
+    auto* content = new brls::Box(brls::Axis::COLUMN);
+    content->setGrow(1.0f);
+    content->setAlignItems(brls::AlignItems::CENTER);
+    content->setJustifyContent(brls::JustifyContent::CENTER);
+    content->addView(makePageHeading(
+        brls::getStr("lunarnx/platform/subtitle")));
 
-    // Title
-    auto* title = new brls::Label();
-    title->setText("LunarNX");
-    title->setFontSize(32);
-    title->setTextColor(p.text);
-    title->setMargins(0, 20, 0, 30);
-    root->addView(title);
-
-    // Subtitle
-    auto* subtitle = new brls::Label();
-    subtitle->setText(brls::getStr("lunarnx/platform/subtitle"));
-    subtitle->setFontSize(16);
-    subtitle->setTextColor(p.text_muted);
-    subtitle->setMargins(0, 0, 0, 40);
-    root->addView(subtitle);
-
-    auto* xbox_card = makePlatformRow(brls::getStr("lunarnx/platform/xbox_title"),
-        brls::getStr("lunarnx/platform/xbox_desc"), [this]() {
+    auto* platforms = new brls::Box(brls::Axis::ROW);
+    platforms->setHeight(250);
+    platforms->setAlignItems(brls::AlignItems::CENTER);
+    platforms->setJustifyContent(brls::JustifyContent::CENTER);
+    const bool xbox_saved = savedFileExists(lunar::get_token_path());
+    auto* xbox_card = makePlatformTile(brls::getStr("lunarnx/platform/xbox_title"),
+        brls::getStr("lunarnx/platform/xbox_desc"),
+        brls::getStr(xbox_saved
+            ? "lunarnx/common/signed_in_microsoft"
+            : "lunarnx/common/not_signed_in"),
+        "img/platform/xbox.png", [this]() {
         diagnosticLog("ui-platform", "Xbox Open clicked");
         openXbox();
     });
-    xbox_card->setMarginBottom(18);
-    root->addView(xbox_card);
+    platforms->addView(xbox_card);
 
-    auto* ps_card = makePlatformRow(brls::getStr("lunarnx/platform/ps_title"),
-        brls::getStr("lunarnx/platform/ps_desc"), [this]() {
+    const bool ps_saved = savedFileExists(lunar::get_ps_credentials_path()) ||
+        savedFileExists(lunar::get_psn_token_path());
+    auto* ps_card = makePlatformTile(brls::getStr("lunarnx/platform/ps_title"),
+        brls::getStr("lunarnx/platform/ps_desc"),
+        brls::getStr(ps_saved
+            ? "lunarnx/ps/signed_in"
+            : "lunarnx/common/not_signed_in"),
+        "img/platform/playstation.png", [this]() {
         diagnosticLog("ui-platform", "PlayStation Open clicked");
         openPlayStation();
     });
-    ps_card->setMarginBottom(18);
-    root->addView(ps_card);
+    ps_card->setMarginLeft(24);
+    platforms->addView(ps_card);
+    content->addView(platforms);
+    content->addView(makeUtilityTile(
+        brls::getStr("lunarnx/dev/title"),
+        brls::getStr("lunarnx/dev/entry_desc"),
+        [this]() { openDevTools(); }));
+    workspace->addView(content);
 
-    auto* dev_card = makePlatformRow(brls::getStr("lunarnx/dev/title"),
-        brls::getStr("lunarnx/dev/entry_desc"), [this]() { openDevTools(); });
-    root->addView(dev_card);
-
-    scroll->registerAction("Exit", brls::ControllerButton::BUTTON_B,
+    workspace->registerAction("Exit", brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
             const auto now = std::chrono::steady_clock::now();
             if (now < exit_navigation_ready_at_) return true;
@@ -109,9 +196,8 @@ brls::View* PlatformActivity::createContentView() {
             return true;
         });
 
-    scroll->setContentView(root);
     diagnosticLog("ui-platform", "createContentView complete");
-    return scroll;
+    return makeAppFrame("LunarNX", workspace);
 }
 
 void PlatformActivity::onResume() {

@@ -14,11 +14,15 @@ def main() -> None:
     stream_view = (ROOT / "src/ui/stream_view.cpp").read_text()
     stream_overlay = (ROOT / "src/ui/stream_overlay.cpp").read_text()
 
-    for name in ("overlay_", "perf_overlay_", "confirm_box_"):
+    for name in ("overlay_", "perf_overlay_", "quick_menu_"):
         detach = stream_view.find(f"{name}->detach();")
         add = stream_view.find(f"root->addView({name});")
         require(detach >= 0 and add >= 0 and detach < add,
                 f"{name} must be detached before it is added to the stream root")
+
+    require("(brls::Application::ORIGINAL_WINDOW_WIDTH - 520) / 2" in stream_view and
+            "menu_disconnect_confirm" in stream_view,
+            "the centered stream menu must retain disconnect confirmation")
 
     require("setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);" in stream_overlay,
             "The detached top status bar must have an explicit full-screen width")

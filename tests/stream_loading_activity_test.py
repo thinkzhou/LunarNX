@@ -45,8 +45,11 @@ def main() -> None:
             "TransitionAnimation::NONE" in activity_source,
             "successful startup must hand off to the stream page without a Metal fade")
 
-    require("return scroll;" in main_source,
-            "MainActivity must retain its known-good ScrollingFrame root")
+    require("auto* scroll = new brls::ScrollingFrame();" in main_source and
+            "scroll_frame_ = scroll;" in main_source and
+            "scroll->setContentView(root);" in main_source and
+            "workspace->addView(scroll);" in main_source,
+            "MainActivity must retain its known-good ScrollingFrame content host")
     require("StreamLoadingOverlay" not in main_header + main_source,
             "MainActivity must not construct the crashing hidden overlay")
     require("connecting_overlay_" not in main_header + main_source,

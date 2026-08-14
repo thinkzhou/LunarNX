@@ -26,21 +26,16 @@ brls::View* DevToolsActivity::createContentView() {
         });
 
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(30, 54, 40, 54);
+    root->setPadding(18, 52, 32, 52);
     root->setBackgroundColor(p.background);
 
     auto* header = new brls::Box(brls::Axis::ROW);
-    header->setHeight(86);
+    header->setHeight(64);
     header->setAlignItems(brls::AlignItems::CENTER);
-    auto* copy = new brls::Box(brls::Axis::COLUMN);
-    copy->setGrow(1.0f);
-    auto* title = new brls::Label();
-    title->setText(brls::getStr("lunarnx/dev/title"));
-    title->setFontSize(28);
-    title->setTextColor(p.text);
-    copy->addView(title);
-    copy->addView(makeMutedLabel(brls::getStr("lunarnx/dev/subtitle"), 13));
-    header->addView(copy);
+    auto* subtitle = makeMutedLabel(brls::getStr("lunarnx/dev/subtitle"), 13);
+    subtitle->setGrow(1.0f);
+    subtitle->setSingleLine(true);
+    header->addView(subtitle);
 
     refresh_ = new brls::Button();
     refresh_->setText(brls::getStr("lunarnx/dev/refresh"));
@@ -63,14 +58,15 @@ brls::View* DevToolsActivity::createContentView() {
     root->addView(header);
 
     status_ = makeMutedLabel(brls::getStr("lunarnx/dev/loading"), 13);
-    status_->setHeight(42);
+    status_->setHeight(34);
+    status_->setSingleLine(true);
     root->addView(status_);
     versions_ = new brls::Box(brls::Axis::COLUMN);
     root->addView(versions_);
     scroll->setContentView(root);
 
     refreshVersions();
-    return scroll;
+    return makeAppFrame(brls::getStr("lunarnx/dev/title"), scroll);
 }
 
 void DevToolsActivity::setBusy(bool busy) {
@@ -113,8 +109,8 @@ void DevToolsActivity::renderVersions(const std::vector<app::DevBuild>& builds) 
     const auto& p = uiPalette();
     for (const auto& build : builds) {
         auto* card = makeUiCard(brls::Axis::ROW);
-        card->setHeight(124);
-        card->setPadding(16, 20, 16, 20);
+        card->setHeight(92);
+        card->setPadding(10, 18, 10, 18);
         card->setMarginBottom(10);
         card->setAlignItems(brls::AlignItems::CENTER);
         auto* copy = new brls::Box(brls::Axis::COLUMN);
@@ -125,7 +121,7 @@ void DevToolsActivity::renderVersions(const std::vector<app::DevBuild>& builds) 
         version->setTextColor(p.text);
         copy->addView(version);
         auto* notes = makeMutedLabel(build.notes, 13);
-        notes->setIsWrapping(true);
+        notes->setSingleLine(true);
         copy->addView(notes);
         copy->addView(makeMutedLabel(build.published_at + "  " +
             std::to_string(build.size / (1024 * 1024)) + " MiB  " +

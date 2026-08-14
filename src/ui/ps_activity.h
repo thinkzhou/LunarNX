@@ -13,6 +13,7 @@ namespace lunar::ui {
 enum class PsConsoleSource {
     Local,
     Remote,
+    Pair,
 };
 
 class PsActivity : public brls::Activity {
@@ -37,12 +38,14 @@ private:
     brls::Box* console_list_ = nullptr;
     brls::Box* local_actions_ = nullptr;
     brls::Box* remote_actions_ = nullptr;
+    brls::Box* pair_actions_ = nullptr;
     brls::Label* account_state_ = nullptr;
     brls::Label* lan_state_ = nullptr;
     brls::Label* psn_state_ = nullptr;
     brls::Label* action_status_ = nullptr;
     brls::Button* local_tab_ = nullptr;
     brls::Button* remote_tab_ = nullptr;
+    brls::Button* pair_tab_ = nullptr;
     brls::Button* account_button_ = nullptr;
     brls::Button* lan_button_ = nullptr;
     brls::Button* psn_button_ = nullptr;

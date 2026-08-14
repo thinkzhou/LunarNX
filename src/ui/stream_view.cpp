@@ -379,20 +379,20 @@ brls::View* StreamView::createContentView() {
     touchpad_feedback->setDetachedPosition(0, 0);
     root->addView(touchpad_feedback);
 
-    // Right-edge quick menu. It remains detached and hidden until the edge
-    // swipe is recognized, so normal streaming and controller input stay
-    // untouched.
+    // The menu remains detached and hidden until the button chord is pressed.
     quick_menu_ = new brls::Box(brls::Axis::COLUMN);
-    quick_menu_->setWidth(390);
-    quick_menu_->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
-    quick_menu_->setPadding(42, 28, 36, 28);
-    quick_menu_->setBackgroundColor(nvgRGBA(15, 22, 19, 246));
+    quick_menu_->setWidth(520);
+    quick_menu_->setHeight(620);
+    quick_menu_->setPadding(28, 32, 24, 32);
+    quick_menu_->setBackgroundColor(nvgRGBA(48, 48, 48, 248));
     quick_menu_->setBorderThickness(1);
     quick_menu_->setBorderColor(p.border);
+    quick_menu_->setCornerRadius(8);
     quick_menu_->setVisibility(brls::Visibility::GONE);
     quick_menu_->detach();
     quick_menu_->setDetachedPosition(
-        brls::Application::ORIGINAL_WINDOW_WIDTH - 390, 0);
+        (brls::Application::ORIGINAL_WINDOW_WIDTH - 520) / 2,
+        (brls::Application::ORIGINAL_WINDOW_HEIGHT - 620) / 2);
     quick_menu_->registerAction(brls::getStr("lunarnx/stream/menu_close"),
         brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
@@ -410,13 +410,15 @@ brls::View* StreamView::createContentView() {
     auto* menu_hint = new brls::Label();
     menu_hint->setText(brls::getStr("lunarnx/stream/menu_hint"));
     menu_hint->setFontSize(13);
-    menu_hint->setTextColor(nvgRGB(159, 178, 164));
+    menu_hint->setTextColor(p.text_muted);
     menu_hint->setHeight(58);
     quick_menu_->addView(menu_hint);
 
     performance_button_ = new brls::Button();
     performance_button_->setHeight(64);
     performance_button_->setStyle(&brls::BUTTONSTYLE_DEFAULT);
+    performance_button_->setCornerRadius(0);
+    performance_button_->setHighlightCornerRadius(3);
     performance_button_->registerClickAction([this](brls::View*) -> bool {
         performance_visible_ = !performance_visible_;
         updatePerformanceVisibility();
@@ -427,16 +429,21 @@ brls::View* StreamView::createContentView() {
     auto* settings_button = new brls::Button();
     settings_button->setHeight(64);
     settings_button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
-    settings_button->setText(brls::getStr("lunarnx/stream/menu_stream_settings"));
+    settings_button->setCornerRadius(0);
+    settings_button->setHighlightCornerRadius(3);
+    settings_button->setText(
+        brls::getStr("lunarnx/stream/menu_stream_settings"));
     settings_button->registerClickAction([this](brls::View*) -> bool {
         child_activity_visible_ = true;
         setQuickMenuVisible(false);
         if (runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation) {
-            brls::Application::pushActivity(new PsSettingsActivity(loadPsSettings()),
-                                             brls::TransitionAnimation::NONE);
+            brls::Application::pushActivity(
+                new PsSettingsActivity(loadPsSettings()),
+                brls::TransitionAnimation::NONE);
         } else {
             brls::Application::pushActivity(
-                new StreamSettingsActivity(nullptr, loadStreamSettings(), {}),
+                new StreamSettingsActivity(nullptr, loadStreamSettings(), {},
+                    StreamSettingsScope::Xbox),
                 brls::TransitionAnimation::NONE);
         }
         return true;
@@ -446,6 +453,8 @@ brls::View* StreamView::createContentView() {
     auto* mapping_button = new brls::Button();
     mapping_button->setHeight(64);
     mapping_button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
+    mapping_button->setCornerRadius(0);
+    mapping_button->setHighlightCornerRadius(3);
     mapping_button->setText(brls::getStr("lunarnx/stream/menu_button_mapping"));
     mapping_button->registerClickAction([this](brls::View*) -> bool {
         child_activity_visible_ = true;
@@ -453,7 +462,8 @@ brls::View* StreamView::createContentView() {
         brls::Application::pushActivity(new ButtonMappingActivity(
             runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation
                 ? input::ButtonMappingProfile::PlayStation
-                : input::ButtonMappingProfile::Xbox), brls::TransitionAnimation::NONE);
+                : input::ButtonMappingProfile::Xbox),
+            brls::TransitionAnimation::NONE);
         return true;
     });
     quick_menu_->addView(mapping_button);
@@ -461,6 +471,8 @@ brls::View* StreamView::createContentView() {
     auto* platform_button = new brls::Button();
     platform_button->setHeight(64);
     platform_button->setStyle(&brls::BUTTONSTYLE_DEFAULT);
+    platform_button->setCornerRadius(0);
+    platform_button->setHighlightCornerRadius(3);
     platform_button->setText(brls::getStr(
         runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation
             ? "lunarnx/stream/menu_ps_button"
@@ -475,6 +487,8 @@ brls::View* StreamView::createContentView() {
     resume_button_ = new brls::Button();
     resume_button_->setHeight(64);
     resume_button_->setStyle(&brls::BUTTONSTYLE_DEFAULT);
+    resume_button_->setCornerRadius(0);
+    resume_button_->setHighlightCornerRadius(3);
     resume_button_->setText(brls::getStr("lunarnx/stream/menu_resume"));
     resume_button_->registerClickAction([this](brls::View*) -> bool {
         setQuickMenuVisible(false);
@@ -489,7 +503,9 @@ brls::View* StreamView::createContentView() {
     disconnect_button_ = new brls::Button();
     disconnect_button_->setHeight(64);
     disconnect_button_->setStyle(&brls::BUTTONSTYLE_BORDERED);
-    disconnect_button_->setTextColor(nvgRGB(255, 125, 120));
+    disconnect_button_->setCornerRadius(0);
+    disconnect_button_->setHighlightCornerRadius(3);
+    disconnect_button_->setTextColor(p.error);
     disconnect_button_->registerClickAction([this](brls::View*) -> bool {
         handleQuickDisconnect();
         return true;
@@ -499,7 +515,7 @@ brls::View* StreamView::createContentView() {
     auto* close_hint = new brls::Label();
     close_hint->setText(brls::getStr("lunarnx/stream/menu_close_hint"));
     close_hint->setFontSize(12);
-    close_hint->setTextColor(nvgRGB(159, 178, 164));
+    close_hint->setTextColor(p.text_muted);
     close_hint->setHeight(36);
     close_hint->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     quick_menu_->addView(close_hint);
@@ -511,7 +527,7 @@ brls::View* StreamView::createContentView() {
     confirm_box_->setBackgroundColor(p.stream_overlay);
     confirm_box_->setBorderThickness(1);
     confirm_box_->setBorderColor(p.accent);
-    confirm_box_->setCornerRadius(16);
+    confirm_box_->setCornerRadius(8);
     confirm_box_->setPadding(24, 20, 24, 20);
     confirm_box_->setWidth(420);
     confirm_box_->setHeight(110);
