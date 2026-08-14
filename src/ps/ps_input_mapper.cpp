@@ -43,7 +43,6 @@ ChiakiControllerState PsInputMapper::map(const input::GamepadState& state,
     if (state.view)  s.buttons |= CHIAKI_CONTROLLER_BUTTON_SHARE;
     if (state.menu)  s.buttons |= CHIAKI_CONTROLLER_BUTTON_OPTIONS;
     if (state.guide) s.buttons |= CHIAKI_CONTROLLER_BUTTON_PS;
-    if (state.touchpad) s.buttons |= CHIAKI_CONTROLLER_BUTTON_TOUCHPAD;
 
     for (size_t i = 0; i < touchpad.touches.size(); ++i) {
         const auto& touch = touchpad.touches[i];
