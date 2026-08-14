@@ -469,6 +469,12 @@
   "open_source_title": "Open source",
   "open_source_desc": "Developed by the LunarNX Team for real Nintendo Switch hardware.",
   "components": "Built with chiaki-ng, Borealis, libpeer, FFmpeg, and libnx.",
+  "project_title": "Project & community",
+  "repository": "Repository",
+  "license": "License",
+  "acknowledgements": "Acknowledgements",
+  "components_short": "Borealis · libpeer · chiaki-ng",
+  "build_label": "BUILD",
   "footer": "B  Back"
  },
  "platform": {
