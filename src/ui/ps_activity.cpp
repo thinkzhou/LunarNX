@@ -190,6 +190,7 @@ public:
                             if (auth_error_kind == ps::PsnAuthErrorKind::SessionExpired) {
                                 manager->psnAuth().signOut();
                                 std::remove(lunar::get_psn_token_path());
+                                manager->clearPsnDeviceCache();
                             }
                         } else if (token_refreshed &&
                                    !manager->psnAuth().saveToken(
@@ -295,6 +296,7 @@ PsActivity::PsActivity() {
         ps_manager_ = std::make_shared<ps::PsManager>();
         ps_manager_->loadCredentials();
         ps_manager_->psnAuth().loadToken(lunar::get_psn_token_path());
+        psn_cache_loaded_ = ps_manager_->loadPsnDeviceCache();
         diagnosticLog("ui-ps", "initial state loaded stored_session=%s",
                       ps_manager_->hasStoredPsnSession() ? "true" : "false");
     } catch (...) {
@@ -465,6 +467,9 @@ brls::View* PsActivity::createContentView() {
     local_labels->setGrow(1.0f);
     auto* local_title = new brls::Label();
     local_title->setText(brls::getStr("lunarnx/ps/tab_local"));
+    if (psn_cache_loaded_) {
+        psn_state_->setText(brls::getStr("lunarnx/ps/psn_cache_loaded"));
+    }
     local_title->setFontSize(25);
     local_title->setTextColor(p.text);
     local_labels->addView(local_title);
@@ -663,6 +668,7 @@ void PsActivity::fetchPsnConsoles() {
         });
     if (!started) {
         fetching->store(false);
+                        manager->clearPsnDeviceCache();
         if (psn_state_) psn_state_->setText(brls::getStr("lunarnx/ps/psn_could_not_start"));
     }
 }
@@ -1043,6 +1049,7 @@ void PsActivity::signInToPsn() {
         updateAccountUi();
         return;
     }
+        ps_manager_->clearPsnDeviceCache();
     auth.loadToken(lunar::get_psn_token_path());
     if (auth.hasValidToken()) {
         updateAccountUi();
@@ -1086,6 +1093,7 @@ void PsActivity::signInToPsn() {
             });
         if (!started && psn_state_) psn_state_->setText(brls::getStr("lunarnx/ps/psn_could_not_restore"));
         return;
+                            manager->clearPsnDeviceCache();
     }
     brls::Application::pushActivity(
         new PsnLoginActivity(auth), brls::TransitionAnimation::NONE);

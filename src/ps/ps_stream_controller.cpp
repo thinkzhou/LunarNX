@@ -74,6 +74,11 @@ void PsStreamController::setInputSuppressed(bool suppressed) {
     if (suppressed && rumble_) rumble_->stop();
 }
 
+app::TouchpadFeedback PsStreamController::getTouchpadFeedback() const {
+    std::lock_guard<std::mutex> lock(touchpad_feedback_mutex_);
+    return touchpad_feedback_;
+}
+
 bool PsStreamController::startStream() {
     std::unique_lock<std::shared_mutex> operation_lock(stream_operation_mutex_);
     if (state_.load() != app::StreamState::Idle) return false;
@@ -453,6 +458,10 @@ void PsStreamController::stopStream(bool set_disconnected) {
     ps_button_pulse_frames_remaining_ = 0;
     ps_button_release_pending_ = false;
     if (touchpad_reader_) touchpad_reader_->reset();
+    {
+        std::lock_guard<std::mutex> lock(touchpad_feedback_mutex_);
+        touchpad_feedback_ = {};
+    }
     if (input_mapper_) input_mapper_->reset();
     if (set_disconnected) setState(app::StreamState::Disconnected, "Stopped");
     diagnosticLog("ps-controller", "stop stream complete");
@@ -479,6 +488,35 @@ void PsStreamController::update() {
     PsTouchpadState touchpad = touchpad_reader_
         ? touchpad_reader_->read(input_suppressed)
         : PsTouchpadState{};
+    if (touchpad_reader_) {
+        const auto feedback = touchpad_reader_->feedback();
+        app::TouchpadFeedback snapshot{};
+        switch (feedback.gesture) {
+            case PsTouchpadGesture::Touch:
+                snapshot.gesture = app::TouchpadFeedbackGesture::Touch;
+                break;
+            case PsTouchpadGesture::Tap:
+                snapshot.gesture = app::TouchpadFeedbackGesture::Tap;
+                break;
+            case PsTouchpadGesture::Pan:
+                snapshot.gesture = app::TouchpadFeedbackGesture::Pan;
+                break;
+            case PsTouchpadGesture::LongPress:
+                snapshot.gesture = app::TouchpadFeedbackGesture::LongPress;
+                break;
+            case PsTouchpadGesture::None:
+                break;
+        }
+        for (size_t i = 0; i < snapshot.points.size(); ++i) {
+            snapshot.points[i] = {
+                feedback.points[i].active,
+                feedback.points[i].screen_x,
+                feedback.points[i].screen_y,
+            };
+        }
+        std::lock_guard<std::mutex> lock(touchpad_feedback_mutex_);
+        touchpad_feedback_ = snapshot;
+    }
     if (ps_button_requested_.exchange(false)) {
         ps_button_pulse_frames_remaining_ = kPsButtonPulseFrames;
         ps_button_release_pending_ = true;

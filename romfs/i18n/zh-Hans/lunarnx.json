@@ -4,6 +4,7 @@
   "exit": "退出",
   "cancel": "取消",
   "done": "完成",
+  "confirm": "确认",
   "status": "状态",
   "settings": "设置",
   "about": "关于",
@@ -282,10 +283,16 @@
   "menu_open": "菜单",
   "menu_close": "关闭快捷菜单",
   "menu_close_hint": "B  关闭",
+  "touchpad_tap": "触控板点击",
+  "touchpad_pan": "触控板滑动",
+  "touchpad_long_press": "触控板长按",
   "menu_hide_performance": "隐藏性能信息",
   "menu_show_performance": "显示性能信息",
   "menu_xbox_button": "按下 Xbox 键",
   "menu_ps_button": "按下 PS 键",
+  "menu_stream_settings": "串流设置",
+  "menu_button_mapping": "按键映射",
+  "menu_resume": "继续串流",
   "menu_disconnect": "断开串流",
   "menu_disconnect_confirm": "再次点击确认断开"
  },
@@ -338,6 +345,7 @@
   "remote_desc": "已登录 PlayStation 账户绑定的 PS5 主机",
   "refresh_psn": "刷新 PSN",
   "psn_not_checked": "PSN:未检查",
+  "psn_cache_loaded": "已显示保存的主机，如需更新请重新查找。",
   "local_desc": "在局域网中搜索、配对、唤醒和连接",
   "local_console_desc": "通过当前局域网直接连接主机",
   "remote_console_desc": "通过 PlayStation Network 远程连接",
@@ -440,11 +448,11 @@
   "footer": "B  返回"
  },
  "platform": {
-  "subtitle": "选择你的串流平台",
-  "open": "打开",
+    "subtitle": "Xbox 与 PlayStation 串流客户端",
+    "open": "进入",
   "xbox_title": "Xbox",
-  "xbox_desc": "远程串流与 xCloud",
+    "xbox_desc": "Remote Play 与云游戏",
   "ps_title": "PlayStation",
-  "ps_desc": "PS4 与 PS5 远程串流"
+    "ps_desc": "PS4 / PS5 Remote Play"
  }
 }

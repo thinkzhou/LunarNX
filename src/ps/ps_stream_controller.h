@@ -52,6 +52,7 @@ public:
     }
     void setInputSuppressed(bool suppressed) override;
     void requestPlatformHomeButton() override { ps_button_requested_ = true; }
+    app::TouchpadFeedback getTouchpadFeedback() const override;
     void update() override;
     void presentVideoFrame() override;
 
@@ -111,6 +112,8 @@ private:
     // controller packets.
     mutable std::shared_mutex stream_operation_mutex_;
     std::atomic<bool> input_suppressed_{false};
+    mutable std::mutex touchpad_feedback_mutex_;
+    app::TouchpadFeedback touchpad_feedback_{};
     std::atomic<bool> rumble_enabled_{true};
     std::atomic<int> rumble_strength_percent_{50};
     std::atomic<bool> ps_button_requested_{false};

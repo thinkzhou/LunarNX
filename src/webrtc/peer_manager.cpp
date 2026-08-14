@@ -857,6 +857,9 @@ PeerMediaStats PeerManager::getMediaStats() const {
     stats.video_h264_overflow_frames = video.overflow_frames;
     stats.video_h264_max_frame_bytes = video.max_frame_bytes;
     stats.video_rtp_highest_seq_ext = video.highest_sequence;
+    // Recovery state drives Xbox PLI requests and must not depend on whether
+    // diagnostic-only counters are compiled into the release build.
+    stats.video_waiting_keyframe = video_jitter_.waitingForKeyframe();
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     stats.video_rtp_nacks = video.nacks;
     stats.video_rtp_nack_retries = video.nack_retries;
@@ -880,7 +883,6 @@ PeerMediaStats PeerManager::getMediaStats() const {
         std::min<size_t>(UINT32_MAX, video.buffered_frames));
     stats.video_jitter_buffered_bytes = static_cast<uint32_t>(
         std::min<size_t>(UINT32_MAX, video.buffered_bytes));
-    stats.video_waiting_keyframe = video_jitter_.waitingForKeyframe();
 #endif
     return stats;
 }

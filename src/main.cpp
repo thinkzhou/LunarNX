@@ -71,9 +71,9 @@ int main(int argc, char* argv[]) {
     }
     lunar::diagnosticLog("main", "borealis init done");
     lunar::ui::installLunarTheme();
-
     lunar::diagnosticLog("main", "createWindow begin");
     brls::Application::createWindow("LunarNX");
+    brls::Application::getPlatform()->setThemeVariant(brls::ThemeVariant::DARK);
     brls::Application::setGlobalQuit(false);
     brls::Application::setFPSStatus(false);
     lunar::diagnosticLog("main", "createWindow done");

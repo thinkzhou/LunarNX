@@ -21,6 +21,20 @@ The focused receive-buffer patch keeps Takion's protocol receive window intact
 while increasing the Switch UDP socket buffer to 512 KiB in both LAN and PSN
 socket paths. This gives 1080p high-bitrate bursts enough scheduling headroom
 without changing the behavior of other Chiaki platforms.
+The focused video reorder-capacity patch raises only the Switch video AV
+reorder window from 64 to 256 packets. A 30 Mbit/s PS5 IDR observed on hardware
+uses up to 94 source and FEC units, so the upstream 64-packet window can discard
+valid tail packets while waiting 16 ms for one missing head packet. The larger
+window is dynamically allocated and adds roughly 4 KiB per session.
+The receive-allocation patch has a build-time A/B switch. `CHIAKI_RECV_OPT=0`
+keeps the upstream per-datagram shrink `realloc`; the default
+`CHIAKI_RECV_OPT=1` passes the already allocated 1500-byte receive block to the
+packet handler directly. Packet length and ownership are unchanged.
+The transport-diagnostics patch aggregates Takion receive throughput, complete
+per-packet processing time, MAC failures, reorder drops/skips, allocation
+failures, video queue depth, frame flush/FEC work, and LunarNX video callback
+time. It emits only two info records per ten seconds, so 20/30 Mbit hardware
+comparisons do not add per-packet SD-card logging pressure.
 The fork's native libnx crypto backend is used directly.
 
 The pinned devkitA64 image does not include `protoc` or the Python protobuf

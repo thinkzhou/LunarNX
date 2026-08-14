@@ -81,6 +81,8 @@ echo "========================================="
 echo " Step 1: Build Borealis (CMake, like Moonlight)"
 echo "========================================="
 cd /work/lib/borealis
+git apply --reverse --check \
+    /work/tools/borealis_switch/lunarnx-borealis-gpu-lifecycle.patch
 rm -rf build_switch
 cmake -S . -B build_switch \
     -DCMAKE_TOOLCHAIN_FILE=/opt/devkitpro/cmake/Switch.cmake \

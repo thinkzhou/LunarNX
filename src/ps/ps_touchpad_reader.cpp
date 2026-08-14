@@ -72,6 +72,10 @@ void PsTouchpadReader::updateTrackedTouches(const HidTouchScreenState& state) {
         if (slot == touches_.size()) continue;
 
         found[slot] = true;
+        touches_[slot].screen_x = static_cast<uint16_t>(
+            std::min(input.x, kScreenMaxX));
+        touches_[slot].screen_y = static_cast<uint16_t>(
+            std::min(input.y, kScreenMaxY));
         touches_[slot].x = scaleCoordinate(input.x, kScreenMaxX, max_x);
         touches_[slot].y = scaleCoordinate(input.y, kScreenMaxY, max_y);
     }
@@ -79,6 +83,36 @@ void PsTouchpadReader::updateTrackedTouches(const HidTouchScreenState& state) {
     for (size_t i = 0; i < touches_.size(); ++i) {
         if (touches_[i].active && !found[i]) touches_[i].active = false;
     }
+}
+
+PsTouchpadFeedback PsTouchpadReader::feedback() const {
+    PsTouchpadFeedback feedback{};
+    switch (gesture_) {
+        case GestureState::Pending:
+            feedback.gesture = PsTouchpadGesture::Touch;
+            break;
+        case GestureState::Pan:
+            feedback.gesture = PsTouchpadGesture::Pan;
+            break;
+        case GestureState::LongPress:
+            feedback.gesture = PsTouchpadGesture::LongPress;
+            break;
+        case GestureState::ReleaseHold:
+            feedback.gesture = release_was_long_press_
+                ? PsTouchpadGesture::LongPress
+                : PsTouchpadGesture::Tap;
+            break;
+        case GestureState::Idle:
+            return feedback;
+    }
+    for (size_t i = 0; i < touches_.size(); ++i) {
+        feedback.points[i] = {
+            touches_[i].active,
+            touches_[i].screen_x,
+            touches_[i].screen_y,
+        };
+    }
+    return feedback;
 }
 
 PsTouchpadState PsTouchpadReader::read(bool suppressed) {
@@ -90,6 +124,7 @@ PsTouchpadState PsTouchpadReader::read(bool suppressed) {
         gesture_ = GestureState::Idle;
         touches_ = {};
         had_multiple_touches_ = false;
+        release_was_long_press_ = false;
         // The menu may open between HID samples. Require a later, valid empty
         // sample before accepting another touch so a held finger cannot leak.
         blocked_until_release_ = true;
@@ -101,6 +136,7 @@ PsTouchpadState PsTouchpadReader::read(bool suppressed) {
         gesture_ = GestureState::Idle;
         touches_ = {};
         had_multiple_touches_ = false;
+        release_was_long_press_ = false;
         if (samples == 0) return {};
         if (state.count > 0) blocked_until_release_ = true;
         return {};
@@ -140,6 +176,7 @@ PsTouchpadState PsTouchpadReader::read(bool suppressed) {
                  now - gesture_started_ <= kTapMaxDuration &&
                  max_distance_squared_ <= kTapMaxDistance * kTapMaxDistance) ||
                 gesture_ == GestureState::LongPress) {
+                release_was_long_press_ = gesture_ == GestureState::LongPress;
                 gesture_ = GestureState::ReleaseHold;
                 release_hold_until_ = now + kReleaseHoldDuration;
                 return currentState(true);
@@ -154,6 +191,7 @@ PsTouchpadState PsTouchpadReader::read(bool suppressed) {
     if (gesture_ == GestureState::Idle && count > 0) {
         primary = &state.touches[0];
         gesture_ = GestureState::Pending;
+        release_was_long_press_ = false;
         primary_finger_id_ = primary->finger_id;
         max_distance_squared_ = 0;
         had_multiple_touches_ = count > 1;
@@ -207,6 +245,7 @@ void PsTouchpadReader::reset() {
     gesture_ = GestureState::Idle;
     touches_ = {};
     had_multiple_touches_ = false;
+    release_was_long_press_ = false;
     blocked_until_release_ = true;
 }
 

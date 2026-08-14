@@ -352,29 +352,12 @@ bool StreamController::fetchConsoles() {
         } else {
             lunar::diagnosticLog("stream-controller", "Fetch consoles succeeded count=%zu",
                                  consoles_.size());
-            // Persist the console list so the UI shows it immediately on next launch.
-            // consoles_ is already locked by the enclosing scope.
-            cJSON* root = cJSON_CreateObject();
-            cJSON* arr = cJSON_CreateArray();
-            for (const auto& c : consoles_) {
-                cJSON* entry = cJSON_CreateObject();
-                cJSON_AddStringToObject(entry, "id", c.id.c_str());
-                cJSON_AddStringToObject(entry, "name", c.name.c_str());
-                cJSON_AddStringToObject(entry, "console_type", c.console_type.c_str());
-                cJSON_AddStringToObject(entry, "power_state", c.power_state.c_str());
-                cJSON_AddItemToObject(arr, "", entry);
-            }
-            cJSON_AddItemToObject(root, "consoles", arr);
-            char* json = cJSON_PrintUnformatted(root);
-            cJSON_Delete(root);
-            if (json) {
-                FILE* f = std::fopen(lunar::get_xbox_console_cache_path(), "wb");
-                if (f) { std::fputs(json, f); std::fclose(f); }
-                free(json);
-            }
         }
-        return found;
     }
+    // Snapshot under stream_lifecycle_mutex_, then serialize and write after
+    // releasing it. SD-card latency must not block other lifecycle readers.
+    if (found) saveConsoleCache();
+    return found;
 }
 
 std::vector<api::XboxConsole> StreamController::getConsoles() const {

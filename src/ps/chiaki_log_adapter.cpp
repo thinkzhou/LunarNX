@@ -68,6 +68,15 @@ static void logCallback(ChiakiLogLevel level, const char* msg, void* user) {
     const auto* name = static_cast<const char*>(user);
     if (!name || !msg) return;
 
+    // These are ten-second aggregate records produced by the patched Chiaki
+    // receive/video paths. Route them through the asynchronous sparse writer
+    // even when APP_DIAG=0; never perform SD I/O on the Takion thread.
+    if (std::strncmp(msg, "LUNARNX-PSRX ", 13) == 0 ||
+        std::strncmp(msg, "LUNARNX-PSVIDEO ", 16) == 0) {
+        lunar::dropDiagnosticLog("ps-transport", "%s", msg);
+        return;
+    }
+
     // Debug/verbose and per-packet diagnostics can starve the Switch UDP
     // receive loop. Drop them before touching the SD card. Keep this callback
     // deliberately stateless: it runs inside Chiaki's PSN and UDP threads.

@@ -121,6 +121,115 @@ private:
     std::shared_ptr<app::IStreamRuntime> runtime_;
 };
 
+class TouchpadFeedbackView : public brls::View {
+public:
+    explicit TouchpadFeedbackView(std::shared_ptr<app::IStreamRuntime> runtime)
+        : runtime_(std::move(runtime)) {}
+
+    void draw(NVGcontext* vg, float x, float y, float width, float height,
+              brls::Style style, brls::FrameContext* ctx) override {
+        (void)style;
+        (void)ctx;
+        if (!runtime_ || runtime_->getStreamPlatform() != app::StreamPlatform::PlayStation) return;
+        const auto feedback = runtime_->getTouchpadFeedback();
+        const bool has_points = std::any_of(feedback.points.begin(), feedback.points.end(),
+            [](const app::TouchpadFeedbackPoint& point) { return point.active; });
+        const auto now = std::chrono::steady_clock::now();
+        if (feedback.gesture != app::TouchpadFeedbackGesture::None || has_points) {
+            if (feedback.gesture == app::TouchpadFeedbackGesture::Touch &&
+                last_feedback_.gesture != app::TouchpadFeedbackGesture::Touch) {
+                trail_counts_.fill(0);
+            }
+            if (feedback.gesture == app::TouchpadFeedbackGesture::Pan) {
+                for (size_t i = 0; i < feedback.points.size(); ++i) {
+                    appendTrail(i, feedback.points[i]);
+                }
+            }
+            last_feedback_ = feedback;
+            last_feedback_at_ = now;
+        }
+        if (last_feedback_at_.time_since_epoch().count() == 0) return;
+        const float age = std::chrono::duration<float>(now - last_feedback_at_).count();
+        const bool current = feedback.gesture != app::TouchpadFeedbackGesture::None || has_points;
+        const float alpha = current ? 0.82f : std::max(0.0f, 1.0f - age / 0.5f);
+        if (alpha <= 0.0f) return;
+
+        nvgSave(vg);
+        nvgGlobalAlpha(vg, alpha);
+        for (size_t i = 0; i < trails_.size(); ++i) {
+            if (trail_counts_[i] < 2) continue;
+            nvgBeginPath(vg);
+            for (size_t j = 0; j < trail_counts_[i]; ++j) {
+                const auto& point = trails_[i][j];
+                const float px = x + width * static_cast<float>(point.screen_x) / 1279.0f;
+                const float py = y + height * static_cast<float>(point.screen_y) / 719.0f;
+                if (j == 0) nvgMoveTo(vg, px, py);
+                else nvgLineTo(vg, px, py);
+            }
+            nvgStrokeColor(vg, nvgRGBA(115, 235, 180, 150));
+            nvgStrokeWidth(vg, 5.0f);
+            nvgStroke(vg);
+        }
+        for (const auto& point : last_feedback_.points) {
+            if (!point.active) continue;
+            const float px = x + width * static_cast<float>(point.screen_x) / 1279.0f;
+            const float py = y + height * static_cast<float>(point.screen_y) / 719.0f;
+            nvgBeginPath(vg);
+            nvgCircle(vg, px, py, 24.0f);
+            nvgStrokeColor(vg, nvgRGBA(115, 235, 180, 235));
+            nvgStrokeWidth(vg, 3.0f);
+            nvgStroke(vg);
+            nvgBeginPath(vg);
+            nvgCircle(vg, px, py, 7.0f);
+            nvgFillColor(vg, nvgRGBA(115, 235, 180, 210));
+            nvgFill(vg);
+        }
+
+        std::string label;
+        switch (last_feedback_.gesture) {
+            case app::TouchpadFeedbackGesture::Tap: label = brls::getStr("lunarnx/stream/touchpad_tap"); break;
+            case app::TouchpadFeedbackGesture::Pan: label = brls::getStr("lunarnx/stream/touchpad_pan"); break;
+            case app::TouchpadFeedbackGesture::LongPress: label = brls::getStr("lunarnx/stream/touchpad_long_press"); break;
+            default: break;
+        }
+        if (!label.empty()) {
+            nvgBeginPath(vg);
+            nvgRoundedRect(vg, x + width * 0.5f - 86.0f, y + 58.0f, 172.0f, 38.0f, 12.0f);
+            nvgFillColor(vg, nvgRGBA(10, 20, 16, 210));
+            nvgFill(vg);
+            nvgFontSize(vg, 16.0f);
+            nvgFontFace(vg, "sans-bold");
+            nvgFillColor(vg, nvgRGBA(240, 255, 246, 255));
+            nvgTextAlign(vg, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+            nvgText(vg, x + width * 0.5f, y + 77.0f, label.c_str(), nullptr);
+        }
+        nvgRestore(vg);
+    }
+
+private:
+    static constexpr size_t kTrailPoints = 12;
+
+    void appendTrail(size_t index, const app::TouchpadFeedbackPoint& point) {
+        if (index >= trails_.size() || !point.active) return;
+        auto& count = trail_counts_[index];
+        auto& trail = trails_[index];
+        if (count > 0 && trail[count - 1].screen_x == point.screen_x &&
+            trail[count - 1].screen_y == point.screen_y) return;
+        if (count < trail.size()) {
+            trail[count++] = point;
+            return;
+        }
+        std::move(trail.begin() + 1, trail.end(), trail.begin());
+        trail.back() = point;
+    }
+
+    std::shared_ptr<app::IStreamRuntime> runtime_;
+    app::TouchpadFeedback last_feedback_{};
+    std::chrono::steady_clock::time_point last_feedback_at_{};
+    std::array<std::array<app::TouchpadFeedbackPoint, kTrailPoints>, 2> trails_{};
+    std::array<size_t, 2> trail_counts_{};
+};
+
 }
 
 StreamView::StreamView(std::shared_ptr<app::IStreamRuntime> runtime)
@@ -131,13 +240,12 @@ StreamView::~StreamView() {
     running_ = false;
     runtime_->setInputSuppressed(false);
     if (update_thread_.joinable()) update_thread_.join();
-    auto runtime = runtime_;
-    const auto state = runtime_->getState();
-    const bool already_reported_failure =
-        state == app::StreamState::Disconnected || state == app::StreamState::Error;
-    lunar::platform::startNetworkWorker("stop-stream", [runtime, already_reported_failure]() {
-        runtime->stopStream(!already_reported_failure);
-    });
+    if (!stop_started_.load()) {
+        auto runtime = runtime_;
+        lunar::platform::startNetworkWorker("stop-stream-fallback", [runtime]() {
+            runtime->stopStream(false);
+        });
+    }
 }
 
 brls::View* StreamView::createContentView() {
@@ -177,7 +285,7 @@ brls::View* StreamView::createContentView() {
         if (exit_pending_.load() && std::chrono::duration_cast<std::chrono::seconds>(
                 now - exit_press_time_).count() < 3) {
             running_ = false;
-            brls::Application::popActivity(brls::TransitionAnimation::NONE);
+            stopAndReturn();
             return true;
         }
         exit_pending_ = true;
@@ -216,6 +324,12 @@ brls::View* StreamView::createContentView() {
     perf_overlay_->detach();
     perf_overlay_->setDetachedPosition(10, 76);
     root->addView(perf_overlay_);
+
+    auto* touchpad_feedback = new TouchpadFeedbackView(runtime_);
+    touchpad_feedback->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
+    touchpad_feedback->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
+    touchpad_feedback->setDetachedPosition(0, 0);
+    root->addView(touchpad_feedback);
 
     // The menu remains detached and hidden until the button chord is pressed.
     quick_menu_ = new brls::Box(brls::Axis::COLUMN);
@@ -407,6 +521,30 @@ brls::View* StreamView::createContentView() {
     return root;
 }
 
+void StreamView::stopAndReturn() {
+    if (stop_started_.exchange(true)) return;
+    running_ = false;
+    runtime_->setInputSuppressed(false);
+    auto runtime = runtime_;
+    auto alive = alive_;
+    const auto state = runtime_->getState();
+    const bool report_disconnect =
+        state != app::StreamState::Disconnected && state != app::StreamState::Error;
+    const bool started = lunar::platform::startNetworkWorker(
+        "stop-stream", [runtime, alive, report_disconnect]() {
+            runtime->stopStream(report_disconnect);
+            brls::sync([alive]() {
+                if (alive->load()) {
+                    brls::Application::popActivity(brls::TransitionAnimation::NONE);
+                }
+            });
+        });
+    if (!started) {
+        stop_started_ = false;
+        running_ = true;
+    }
+}
+
 void StreamView::setQuickMenuVisible(bool visible) {
     if (!quick_menu_ || quick_menu_visible_ == visible) return;
     quick_menu_visible_ = visible;
@@ -461,9 +599,7 @@ void StreamView::handleQuickDisconnect() {
         const auto armed_at = std::chrono::steady_clock::time_point(
             std::chrono::steady_clock::duration(disconnect_arm_ticks_.load()));
         if (now - armed_at < kQuickDisconnectConfirmWindow) {
-            running_ = false;
-            runtime_->setInputSuppressed(false);
-            brls::Application::popActivity(brls::TransitionAnimation::NONE);
+            stopAndReturn();
             return;
         }
     }
@@ -547,9 +683,9 @@ void StreamView::runLoop() {
         if (state == app::StreamState::Disconnected || state == app::StreamState::Error) {
             running_ = false;
             auto alive = alive_;
-            brls::sync([alive]() {
+            brls::sync([alive, this]() {
                 if (!alive->load()) return;
-                brls::Application::popActivity(brls::TransitionAnimation::NONE);
+                stopAndReturn();
             });
             return;
         }

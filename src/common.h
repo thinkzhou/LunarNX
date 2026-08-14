@@ -29,6 +29,7 @@ inline const char* get_log_path()    { return "sdmc:/switch/LunarNX/debug.log"; 
 inline const char* get_cloud_library_cache_path() { return "sdmc:/switch/LunarNX/xcloud_library_cache.json"; }
 inline const char* get_ps_credentials_path() { return "sdmc:/switch/LunarNX/ps_credentials.json"; }
 inline const char* get_psn_token_path() { return "sdmc:/switch/LunarNX/psn_token.json"; }
+inline const char* get_ps_console_cache_path() { return "sdmc:/switch/LunarNX/ps_console_cache.json"; }
 inline const char* get_psn_callback_import_path() { return "sdmc:/switch/LunarNX/psn_callback.txt"; }
 inline const char* get_xbox_console_cache_path() { return "sdmc:/switch/LunarNX/xbox_console_cache.json"; }
 #else
@@ -38,6 +39,7 @@ inline const char* get_log_path()    { return "./debug.log"; }
 inline const char* get_cloud_library_cache_path() { return "./xcloud_library_cache.json"; }
 inline const char* get_ps_credentials_path() { return "./ps_credentials.json"; }
 inline const char* get_psn_token_path() { return "./psn_token.json"; }
+inline const char* get_ps_console_cache_path() { return "./ps_console_cache.json"; }
 inline const char* get_psn_callback_import_path() { return "./psn_callback.txt"; }
 inline const char* get_xbox_console_cache_path() { return "./xbox_console_cache.json"; }
 #endif
