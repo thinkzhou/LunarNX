@@ -3,6 +3,7 @@
 #include "auth_activity.h"
 #include "main_activity.h"
 #include "ps_activity.h"
+#include "dev_tools_activity.h"
 #include "ui_style.h"
 #include "../common.h"
 #include "../diagnostics.h"
@@ -93,7 +94,12 @@ brls::View* PlatformActivity::createContentView() {
         diagnosticLog("ui-platform", "PlayStation Open clicked");
         openPlayStation();
     });
+    ps_card->setMarginBottom(18);
     root->addView(ps_card);
+
+    auto* dev_card = makePlatformRow(brls::getStr("lunarnx/dev/title"),
+        brls::getStr("lunarnx/dev/entry_desc"), [this]() { openDevTools(); });
+    root->addView(dev_card);
 
     scroll->registerAction("Exit", brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
@@ -139,6 +145,12 @@ void PlatformActivity::openPlayStation() {
         ps_activity,
         brls::TransitionAnimation::NONE);
     diagnosticLog("ui-platform", "PlayStation navigation complete");
+}
+
+void PlatformActivity::openDevTools() {
+    diagnosticLog("ui-platform", "Dev tools navigation begin");
+    brls::Application::pushActivity(
+        new DevToolsActivity(), brls::TransitionAnimation::NONE);
 }
 
 } // namespace lunar::ui

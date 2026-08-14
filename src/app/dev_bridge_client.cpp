@@ -1,0 +1,380 @@
+#include "dev_bridge_client.h"
+
+#include "../api/http_client.h"
+#include "../diagnostics.h"
+
+#include <cJSON.h>
+#include <curl/curl.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/version.h>
+
+#include <cstdio>
+#include <cerrno>
+#include <cstring>
+#include <map>
+#include <array>
+
+#ifdef __SWITCH__
+#include <switch.h>
+#endif
+
+#ifndef LUNARNX_DEV_UPLOAD_TOKEN
+#define LUNARNX_DEV_UPLOAD_TOKEN ""
+#endif
+
+#ifndef LUNARNX_GIT_COMMIT
+#define LUNARNX_GIT_COMMIT "unknown"
+#endif
+
+#ifndef LUNARNX_CURL_VERIFY_SSL
+#define LUNARNX_CURL_VERIFY_SSL 1
+#endif
+
+namespace lunar::app {
+namespace {
+
+constexpr long long kMaxNroBytes = 25LL * 1024LL * 1024LL;
+constexpr long long kMaxLogBytes = 2LL * 1024LL * 1024LL;
+
+int sha256Starts(mbedtls_sha256_context* context) {
+#if defined(MBEDTLS_VERSION_MAJOR) && MBEDTLS_VERSION_MAJOR >= 3
+    return mbedtls_sha256_starts(context, 0);
+#else
+    return mbedtls_sha256_starts_ret(context, 0);
+#endif
+}
+
+int sha256Update(mbedtls_sha256_context* context,
+                 const unsigned char* data, size_t size) {
+#if defined(MBEDTLS_VERSION_MAJOR) && MBEDTLS_VERSION_MAJOR >= 3
+    return mbedtls_sha256_update(context, data, size);
+#else
+    return mbedtls_sha256_update_ret(context, data, size);
+#endif
+}
+
+int sha256Finish(mbedtls_sha256_context* context, unsigned char digest[32]) {
+#if defined(MBEDTLS_VERSION_MAJOR) && MBEDTLS_VERSION_MAJOR >= 3
+    return mbedtls_sha256_finish(context, digest);
+#else
+    return mbedtls_sha256_finish_ret(context, digest);
+#endif
+}
+
+std::string jsonString(cJSON* object, const char* key) {
+    cJSON* value = cJSON_GetObjectItemCaseSensitive(object, key);
+    return cJSON_IsString(value) && value->valuestring ? value->valuestring : "";
+}
+
+bool parseBuild(cJSON* item, DevBuild& build) {
+    if (!cJSON_IsObject(item)) return false;
+    build.version = jsonString(item, "version");
+    build.notes = jsonString(item, "notes");
+    build.build_id = jsonString(item, "build_id");
+    build.git_commit = jsonString(item, "git_commit");
+    build.published_at = jsonString(item, "published_at");
+    build.sha256 = jsonString(item, "sha256");
+    build.download_url = jsonString(item, "download_url");
+    cJSON* size = cJSON_GetObjectItemCaseSensitive(item, "size");
+    build.size = cJSON_IsNumber(size) ? static_cast<long long>(size->valuedouble) : 0;
+    const bool lowercase_sha = build.sha256.size() == 64 &&
+        build.sha256.find_first_not_of("0123456789abcdef") == std::string::npos;
+    const std::string expected_url = std::string(DevBridgeClient::kBaseUrl) +
+        "/dev/builds/" + build.sha256 + ".nro";
+    return !build.version.empty() && lowercase_sha &&
+        build.download_url == expected_url && build.size > 0 && build.size <= kMaxNroBytes;
+}
+
+struct DownloadState {
+    FILE* file = nullptr;
+    long long bytes = 0;
+    mbedtls_sha256_context sha{};
+    bool write_failed = false;
+    DevBridgeClient::ProgressCallback progress;
+    int last_percent = -1;
+};
+
+size_t downloadWrite(void* data, size_t size, size_t count, void* user) {
+    auto* state = static_cast<DownloadState*>(user);
+    const size_t bytes = size * count;
+    if (!state || !state->file || state->bytes + static_cast<long long>(bytes) > kMaxNroBytes) {
+        if (state) state->write_failed = true;
+        return 0;
+    }
+    const size_t written = std::fwrite(data, 1, bytes, state->file);
+    if (written != bytes) state->write_failed = true;
+    if (written > 0) {
+        sha256Update(&state->sha,
+            static_cast<const unsigned char*>(data), written);
+        state->bytes += static_cast<long long>(written);
+    }
+    return written;
+}
+
+int downloadProgress(void* user, curl_off_t total, curl_off_t downloaded,
+                     curl_off_t, curl_off_t) {
+    auto* state = static_cast<DownloadState*>(user);
+    if (!state || !state->progress) return 0;
+    const long long expected = total > 0 ? static_cast<long long>(total) : 0;
+    const int percent = expected > 0
+        ? static_cast<int>((static_cast<long long>(downloaded) * 100) / expected)
+        : -1;
+    if (percent != state->last_percent) {
+        state->last_percent = percent;
+        state->progress(static_cast<long long>(downloaded), expected);
+    }
+    return 0;
+}
+
+std::string hexDigest(const unsigned char digest[32]) {
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string result(64, '0');
+    for (size_t i = 0; i < 32; ++i) {
+        result[i * 2] = hex[digest[i] >> 4];
+        result[i * 2 + 1] = hex[digest[i] & 0x0f];
+    }
+    return result;
+}
+
+bool replaceFile(const std::string& target, const std::string& temporary,
+                 std::string& error) {
+    const std::string backup = target + ".backup";
+    const std::string previous_backup = backup + ".previous";
+    if (std::remove(previous_backup.c_str()) != 0 && errno != ENOENT) {
+        error = "Could not clear the previous backup archive";
+        return false;
+    }
+    const bool had_backup = std::rename(backup.c_str(), previous_backup.c_str()) == 0;
+    if (std::rename(target.c_str(), backup.c_str()) != 0) {
+        if (had_backup) std::rename(previous_backup.c_str(), backup.c_str());
+        error = "Could not back up the current NRO";
+        return false;
+    }
+    if (std::rename(temporary.c_str(), target.c_str()) != 0) {
+        const bool restored_current = std::rename(backup.c_str(), target.c_str()) == 0;
+        if (had_backup) std::rename(previous_backup.c_str(), backup.c_str());
+        if (!restored_current) {
+            error = "Update failed and the current NRO could not be restored; use the backup file";
+            return false;
+        }
+        error = "Could not replace the current NRO";
+        return false;
+    }
+    if (had_backup) std::remove(previous_backup.c_str());
+    return true;
+}
+
+std::string deviceIdPath() {
+    return "sdmc:/switch/LunarNX/device_id.txt";
+}
+
+std::string loadOrCreateDeviceId() {
+    const std::string path = deviceIdPath();
+    std::array<char, 33> saved{};
+    if (FILE* input = std::fopen(path.c_str(), "rb")) {
+        const size_t read = std::fread(saved.data(), 1, 32, input);
+        std::fclose(input);
+        if (read == 32 && std::string(saved.data(), read).find_first_not_of(
+                "0123456789abcdef") == std::string::npos) {
+            return std::string(saved.data(), read);
+        }
+    }
+    std::array<unsigned char, 16> random{};
+#ifdef __SWITCH__
+    randomGet(random.data(), random.size());
+#else
+    for (size_t i = 0; i < random.size(); ++i) random[i] = static_cast<unsigned char>(i);
+#endif
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string id(32, '0');
+    for (size_t i = 0; i < random.size(); ++i) {
+        id[i * 2] = hex[random[i] >> 4];
+        id[i * 2 + 1] = hex[random[i] & 0x0f];
+    }
+    if (FILE* output = std::fopen(path.c_str(), "wb")) {
+        std::fwrite(id.data(), 1, id.size(), output);
+        std::fclose(output);
+    }
+    return id;
+}
+
+} // namespace
+
+bool DevBridgeClient::fetchVersions(std::vector<DevBuild>& builds,
+                                    std::string& error) const {
+    api::HttpClient http;
+    const auto response = http.get(std::string(kBaseUrl) + "/dev/versions.json");
+    if (response.network_error || response.status_code != 200) {
+        error = response.network_error ? response.error_message
+                                       : "Server returned HTTP " + std::to_string(response.status_code);
+        return false;
+    }
+    cJSON* root = cJSON_Parse(response.body.c_str());
+    cJSON* versions = root ? cJSON_GetObjectItemCaseSensitive(root, "versions") : nullptr;
+    if (!cJSON_IsArray(versions)) {
+        cJSON_Delete(root);
+        error = "Invalid version index";
+        return false;
+    }
+    builds.clear();
+    cJSON* item = nullptr;
+    cJSON_ArrayForEach(item, versions) {
+        DevBuild build;
+        if (parseBuild(item, build)) builds.push_back(std::move(build));
+    }
+    cJSON_Delete(root);
+    if (builds.empty()) {
+        error = "No downloadable versions";
+        return false;
+    }
+    return true;
+}
+
+bool DevBridgeClient::install(const DevBuild& build, const std::string& target_path,
+                              std::string& error, ProgressCallback progress) const {
+    if (target_path.rfind("sdmc:/", 0) != 0 ||
+        target_path.size() < 5 || target_path.substr(target_path.size() - 4) != ".nro" ||
+        build.size <= 0 || build.size > kMaxNroBytes ||
+        build.sha256.size() != 64) {
+        error = "Invalid build metadata or application path";
+        return false;
+    }
+    FILE* current = std::fopen(target_path.c_str(), "rb");
+    if (!current) {
+        error = "The running NRO path does not exist";
+        return false;
+    }
+    std::fclose(current);
+    const std::string temporary = target_path + ".update";
+    FILE* output = std::fopen(temporary.c_str(), "wb");
+    if (!output) {
+        error = "Could not create the update file";
+        return false;
+    }
+
+    DownloadState state;
+    state.file = output;
+    state.progress = std::move(progress);
+    mbedtls_sha256_init(&state.sha);
+    sha256Starts(&state.sha);
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        std::fclose(output);
+        std::remove(temporary.c_str());
+        mbedtls_sha256_free(&state.sha);
+        error = "Could not initialize download";
+        return false;
+    }
+    curl_easy_setopt(curl, CURLOPT_URL, build.download_url.c_str());
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 180L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "LunarNX-Updater");
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, LUNARNX_CURL_VERIFY_SSL ? 1L : 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, LUNARNX_CURL_VERIFY_SSL ? 2L : 0L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, downloadWrite);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &state);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, downloadProgress);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &state);
+    const CURLcode result = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(curl);
+    const bool close_ok = std::fclose(output) == 0;
+
+    unsigned char digest[32]{};
+    sha256Finish(&state.sha, digest);
+    mbedtls_sha256_free(&state.sha);
+    if (result != CURLE_OK || status != 200 || state.write_failed || !close_ok ||
+        state.bytes != build.size || hexDigest(digest) != build.sha256) {
+        std::remove(temporary.c_str());
+        error = result != CURLE_OK ? curl_easy_strerror(result)
+            : status != 200 ? "Download returned HTTP " + std::to_string(status)
+            : "Downloaded file failed size or SHA-256 verification";
+        diagnosticLog("dev-update", "download rejected version=%s status=%ld bytes=%lld",
+                      build.version.c_str(), status, state.bytes);
+        return false;
+    }
+    if (!replaceFile(target_path, temporary, error)) return false;
+    diagnosticLog("dev-update", "installed version=%s bytes=%lld target=%s",
+                  build.version.c_str(), state.bytes, target_path.c_str());
+    return true;
+}
+
+bool DevBridgeClient::uploadLog(const std::string& log_path, std::string& log_id,
+                                std::string& error) const {
+    if (std::strlen(LUNARNX_DEV_UPLOAD_TOKEN) == 0) {
+        error = "This build does not contain a development upload token";
+        return false;
+    }
+    FILE* input = std::fopen(log_path.c_str(), "rb");
+    if (!input) {
+        error = "No log file is available";
+        return false;
+    }
+    std::fseek(input, 0, SEEK_END);
+    const long size = std::ftell(input);
+    std::rewind(input);
+    if (size <= 0 || size > kMaxLogBytes) {
+        std::fclose(input);
+        error = "Log is empty or exceeds 2 MiB";
+        return false;
+    }
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        std::fclose(input);
+        error = "Could not initialize upload";
+        return false;
+    }
+    const std::string authorization = "Authorization: Bearer " +
+        std::string(LUNARNX_DEV_UPLOAD_TOKEN);
+    const std::string version = "X-LunarNX-Build: " + std::string(LUNARNX_VERSION);
+    const std::string commit = "X-LunarNX-Commit: " + std::string(LUNARNX_GIT_COMMIT);
+    const std::string device = "X-LunarNX-Device: " + loadOrCreateDeviceId();
+    curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, authorization.c_str());
+    headers = curl_slist_append(headers, version.c_str());
+    headers = curl_slist_append(headers, commit.c_str());
+    headers = curl_slist_append(headers, device.c_str());
+    headers = curl_slist_append(headers, "Content-Type: text/plain; charset=utf-8");
+    const std::string url = std::string(kBaseUrl) + "/dev/logs";
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(curl, CURLOPT_READDATA, input);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(size));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, LUNARNX_CURL_VERIFY_SSL ? 1L : 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, LUNARNX_CURL_VERIFY_SSL ? 2L : 0L);
+    std::string response_body;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, [](void* data, size_t unit, size_t count, void* user) -> size_t {
+        const size_t bytes = unit * count;
+        static_cast<std::string*>(user)->append(static_cast<const char*>(data), bytes);
+        return bytes;
+    });
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
+    const CURLcode result = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    std::fclose(input);
+    if (result != CURLE_OK || status != 201) {
+        error = result != CURLE_OK ? curl_easy_strerror(result)
+                                  : "Upload returned HTTP " + std::to_string(status);
+        return false;
+    }
+    cJSON* root = cJSON_Parse(response_body.c_str());
+    log_id = root ? jsonString(root, "log_id") : "";
+    cJSON_Delete(root);
+    if (log_id.empty()) log_id = "uploaded";
+    diagnosticLog("dev-log", "uploaded bytes=%ld log_id=%s", size, log_id.c_str());
+    return true;
+}
+
+} // namespace lunar::app
