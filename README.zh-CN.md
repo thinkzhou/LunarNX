@@ -16,8 +16,11 @@ LunarNX 将 Xbox Remote Play、Xbox Cloud Gaming 和 PlayStation Remote Play 整
 - PlayStation 局域网发现、配对、唤醒与串流
 - 登录 PlayStation Network、发现账号中的 PS5，并通过 PSN 进行远程串流
 - Xbox 与 PlayStation 共用 720p、1080p 和 1080p HQ 画质配置
-- 硬件 H.264 视频解码、低延迟音频与高频手柄输入
+- 硬件 H.264 与 PS5 HEVC 视频解码、低延迟音频与高频手柄输入
+- Xbox 与 PlayStation 独立按键映射，支持组合键
+- PlayStation 触摸板手势与 Switch 六轴体感转发
 - 串流性能监控、平台 Home/Guide 按钮和安全退出菜单
+- 从 HOME 菜单返回后自动恢复串流会话
 - 可选的画面放大与锐化
 - 英文、简体中文和繁体中文界面
 
@@ -79,7 +82,7 @@ LunarNX 启动后会先显示平台选择页面，请选择 Xbox 或 PlayStation
 ### Xbox
 
 1. 开始 Microsoft 登录。
-2. 在手机或电脑上打开显示的设备登录地址并输入验证码。
+2. 使用同一网络中的手机扫描二维码，或打开显示的设备登录地址并输入验证码。
 3. 选择账号中的 Xbox 主机，或者打开 Xbox Cloud Gaming 游戏库。
 4. 在设置中选择画质配置。
 5. 选择 **开始游戏**、**连接** 或 **唤醒并连接**。
@@ -95,10 +98,11 @@ LunarNX 启动后会先显示平台选择页面，请选择 Xbox 或 PlayStation
 
 通过 PSN 远程连接 PS5：
 
-1. 打开 PlayStation 页面并登录 PlayStation Network。
-2. 刷新 PSN 设备列表。
-3. 选择已经启用 Remote Play 的 PS5。
-4. 等待 LunarNX 创建 PSN 会话、建立控制与数据通道，并启动 Chiaki 串流会话。
+1. 打开 PlayStation 页面并选择登录 PlayStation Network。
+2. 使用同一网络中的手机扫描页面二维码，在手机上完成 Sony 登录，并通过手机辅助页面将结果传回 LunarNX。
+3. 刷新 PSN 设备列表。
+4. 选择已经启用 Remote Play 的 PS5。
+5. 等待 LunarNX 创建 PSN 会话、建立控制与数据通道，并启动 Chiaki 串流会话。
 
 如果 PlayStation 用户档案设置了四位登录 PIN，连接期间 LunarNX 会要求输入该 PIN。
 
@@ -124,17 +128,23 @@ LunarNX 按按键的物理位置映射远端手柄布局，使下、右、左、
 
 Switch 的 ZL/ZR 是数字按键，因此模拟扳机压力只有 0% 或 100%。
 
+Xbox 与 PlayStation 的按键映射可以在各自的平台设置中独立调整，支持单键和组合键；LunarNX 会标记冲突映射，也可以一键恢复默认设置。
+
+Switch 截图键也可以参与映射。例如，在 Xbox 按键映射中将 **Guide** 绑定为 **Capture**，即可在串流时用截图键发送 Xbox/Nexus 键。只有映射实际使用截图键时，LunarNX 才会临时接管该按键；串流结束后会恢复系统截图行为。
+
 - 从触摸屏右侧边缘向左滑动可打开串流菜单。
 - 菜单会显示性能信息，并根据当前平台显示正确的 **Xbox 键** 或 **PS 键**。
 - 同时按下 **L + R + Plus** 可发送平台 Guide/PS 键。
 - 使用手柄停止串流时，请在三秒内连续两次同时按下 **Minus + Plus**。
 - 使用触摸菜单断开串流时同样需要再次确认。
+- PlayStation 串流期间，菜单手势区域以外的触摸和滑动会转发为 DualShock/DualSense 触摸板操作；轻点或长按可发送触摸板按下。
+- PlayStation 串流期间，支持的 Joy-Con、Pro Controller 与掌机模式体感数据会作为陀螺仪、加速度计和方向输入转发。
 
 ## PlayStation 说明
 
 - PlayStation 协议代码位于 `src/ps/`，使用 [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng)。
 - PS5 异地串流通过 PlayStation Network 信令和 Chiaki 打洞建立连接。严格 NAT、防火墙、Wi-Fi 丢包或 PSN 服务行为仍可能导致连接失败。
-- 当前视频路径使用 H.264，请求的分辨率和码率来自 LunarNX 共用画质配置。
+- PS5 会话可选择 H.264 或 HEVC，PS4 会话固定使用 H.264；编码格式、分辨率与码率由 LunarNX 画质设置决定。
 - 退出串流时会停止并等待 Chiaki session，完成 session 销毁，释放 PSN/打洞资源，并关闭媒体管线。
 - PSN 凭据和主机注册文件属于敏感数据，请勿上传到 Issue 或随日志公开。
 

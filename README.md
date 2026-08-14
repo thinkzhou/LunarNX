@@ -16,8 +16,11 @@ LunarNX brings Xbox Remote Play, Xbox Cloud Gaming, and PlayStation Remote Play 
 - Local PlayStation discovery, pairing, wake-up, and streaming
 - PlayStation Network sign-in, PS5 device discovery, and remote streaming through PSN
 - 720p, 1080p, and 1080p HQ quality profiles shared by Xbox and PlayStation
-- Hardware-accelerated H.264 video, low-latency audio, and responsive controller input
+- Hardware-accelerated H.264 and PS5 HEVC video, low-latency audio, and responsive controller input
+- Separate Xbox and PlayStation button-mapping profiles, including multi-button combinations
+- PlayStation touchpad gestures and Switch six-axis motion forwarding
 - In-stream performance monitoring, platform Home/Guide button, and safe disconnect controls
+- Stream recovery after returning from the HOME menu
 - Optional image upscaling and sharpening
 - English, Simplified Chinese, and Traditional Chinese interfaces
 
@@ -79,7 +82,7 @@ LunarNX opens with a platform selector. Choose Xbox or PlayStation.
 ### Xbox
 
 1. Start Microsoft sign-in.
-2. Open the displayed device-login URL on a phone or computer and enter the code.
+2. Scan the QR code with a phone on the same network, or open the displayed device-login URL and enter the code.
 3. Select a registered Xbox console or open the Xbox Cloud Gaming library.
 4. Choose a quality profile in Settings.
 5. Select **Play**, **Connect**, or **Wake & connect**.
@@ -95,10 +98,11 @@ For local play:
 
 For remote PS5 play through PSN:
 
-1. Open the PlayStation page and sign in to PlayStation Network.
-2. Refresh the PSN device list.
-3. Select a PS5 with Remote Play enabled.
-4. Wait while LunarNX creates the PSN session, establishes the control and data paths, and starts the Chiaki streaming session.
+1. Open the PlayStation page and choose PlayStation Network sign-in.
+2. Scan the displayed QR code with a phone on the same network, complete Sony sign-in, and send the result back to LunarNX from the phone helper page.
+3. Refresh the PSN device list.
+4. Select a PS5 with Remote Play enabled.
+5. Wait while LunarNX creates the PSN session, establishes the control and data paths, and starts the Chiaki streaming session.
 
 If the PlayStation user profile has a four-digit login PIN, LunarNX will request it during connection.
 
@@ -124,17 +128,23 @@ LunarNX maps face buttons by physical position so the bottom, right, left, and t
 
 ZL and ZR are digital Switch buttons, so analog trigger pressure is reported as either 0% or 100%.
 
+Xbox and PlayStation button mappings can be customized independently in each platform's settings. Single buttons and button combinations are supported; LunarNX marks conflicting mappings and can restore the defaults.
+
+The Switch Capture button can also be assigned. For example, assign **Capture** to **Guide** in the Xbox mapping to use it as the Xbox/Nexus button while streaming. LunarNX temporarily takes control of the Capture button only when a mapping uses it, then restores the system screenshot behavior after the stream ends.
+
 - Swipe left from the right edge of the touch screen to open the stream menu.
 - The menu shows performance information and uses the correct **Xbox button** or **PS button** label for the active platform.
 - Press **L + R + Plus** to send the platform Guide/PS button.
 - To stop streaming with buttons, press **Minus + Plus together twice within three seconds**.
 - The touch menu also requires a second confirmation before disconnecting.
+- During a PlayStation stream, touches and swipes outside the menu gesture area are forwarded to the DualShock/DualSense touchpad. A short tap or long press sends a touchpad click.
+- During a PlayStation stream, supported Joy-Con, Pro Controller, and handheld-mode motion data is forwarded as controller gyroscope, accelerometer, and orientation input.
 
 ## PlayStation Notes
 
 - PlayStation protocol code is isolated under `src/ps/` and uses [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng).
 - Remote PS5 streaming uses PlayStation Network signaling and Chiaki hole punching. Restrictive NAT, firewall rules, Wi-Fi loss, or PSN service behavior can still prevent a connection.
-- The current video path uses H.264. Requested resolution and bitrate come from the shared LunarNX quality profile.
+- PS5 sessions can use H.264 or HEVC; PS4 sessions use H.264. Requested codec, resolution, and bitrate come from the LunarNX quality settings.
 - Exiting a stream stops and joins the Chiaki session, finalizes the session, releases PSN/hole-punch resources, and shuts down the media pipeline.
 - PSN credentials and registration files are private. Never include them in an issue or log upload.
 
