@@ -405,21 +405,6 @@ brls::View* PsActivity::createContentView() {
     root->setPadding(24, 42, 36, 42);
     root->setBackgroundColor(p.background);
 
-    auto* header = new brls::Box(brls::Axis::ROW);
-    header->setHeight(76);
-    header->setAlignItems(brls::AlignItems::CENTER);
-    auto* brand = new brls::Box(brls::Axis::COLUMN);
-    brand->setGrow(1.0f);
-    auto* page_title = new brls::Label();
-    page_title->setText("PlayStation");
-    page_title->setFontSize(30);
-    page_title->setTextColor(p.text);
-    brand->addView(page_title);
-    brand->addView(makeMutedLabel(brls::getStr("lunarnx/ps/subtitle"), 13));
-    header->addView(brand);
-
-    root->addView(header);
-
     remote_actions_ = new brls::Box(brls::Axis::COLUMN);
     auto* remote_header = new brls::Box(brls::Axis::ROW);
     remote_header->setHeight(68);

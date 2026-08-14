@@ -22,19 +22,6 @@ brls::View* AboutActivity::createContentView() {
     root->setPadding(26, 48, 36, 48);
     root->setBackgroundColor(p.background);
 
-    auto* header = new brls::Box(brls::Axis::ROW);
-    header->setHeight(84);
-    header->setAlignItems(brls::AlignItems::CENTER);
-    auto* brand = new brls::Box(brls::Axis::COLUMN);
-    brand->setGrow(1.0f);
-    auto* wordmark = new brls::Label();
-    wordmark->setText("LUNARNX");
-    wordmark->setFontSize(29);
-    wordmark->setTextColor(p.accent);
-    brand->addView(wordmark);
-    brand->addView(makeMutedLabel(brls::getStr("lunarnx/about/subtitle"), 13));
-    header->addView(brand);
-
     auto* version_chip = new brls::Box(brls::Axis::ROW);
     version_chip->setHeight(52);
     version_chip->setPadding(8, 16, 8, 16);
@@ -54,9 +41,6 @@ brls::View* AboutActivity::createContentView() {
     version->setTextColor(p.text);
     version->setMarginLeft(10);
     version_chip->addView(version);
-    header->addView(version_chip);
-    root->addView(header);
-
     auto* intro = new brls::Box(brls::Axis::ROW);
     intro->setHeight(132);
     intro->setPadding(18, 22, 18, 22);
@@ -80,15 +64,11 @@ brls::View* AboutActivity::createContentView() {
     auto* intro_copy = new brls::Box(brls::Axis::COLUMN);
     intro_copy->setGrow(1.0f);
     intro_copy->setPadding(8, 12, 8, 22);
-    auto* intro_title = new brls::Label();
-    intro_title->setText(brls::getStr("lunarnx/about/title"));
-    intro_title->setFontSize(25);
-    intro_title->setTextColor(p.text);
-    intro_copy->addView(intro_title);
     auto* intro_desc = makeMutedLabel(brls::getStr("lunarnx/about/description"), 14);
     intro_desc->setIsWrapping(true);
     intro_copy->addView(intro_desc);
     intro->addView(intro_copy);
+    intro->addView(version_chip);
     root->addView(intro);
 
     auto* community = makeFlatSection(

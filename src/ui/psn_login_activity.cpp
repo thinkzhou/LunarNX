@@ -29,15 +29,8 @@ brls::View* PsnLoginActivity::createContentView() {
         });
 
     auto* root = new brls::Box(brls::Axis::COLUMN);
-    root->setPadding(26, 34, 30, 18);
+    root->setPadding(18, 34, 30, 18);
     root->setAlignItems(brls::AlignItems::CENTER);
-
-    auto* title = new brls::Label();
-    title->setText(brls::getStr("lunarnx/ps/login_title"));
-    title->setFontSize(22);
-    title->setTextColor(p.text);
-    title->setMargins(0, 0, 0, 8);
-    root->addView(title);
 
     auto* subtitle = new brls::Label();
     subtitle->setText(brls::getStr("lunarnx/ps/login_subtitle"));

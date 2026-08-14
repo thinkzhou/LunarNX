@@ -12,10 +12,11 @@ def require(condition, message):
         raise SystemExit(f"FAIL: {message}")
 
 
-require('wordmark->setText("LUNARNX")' in ABOUT and
+require('wordmark->setText("LUNARNX")' not in ABOUT and
         'version_chip = new brls::Box(brls::Axis::ROW)' in ABOUT and
+        'intro->addView(version_chip)' in ABOUT and
         'version_chip->setCornerRadius(8)' in ABOUT,
-        "About page must use the shared LunarNX brand header")
+        "About page must keep version metadata without repeating the frame title")
 require('intro = new brls::Box(brls::Axis::ROW)' in ABOUT and
         'makeFlatSection(' in ABOUT and 'addFlatRow(' in ABOUT,
         "About content must use the shared flat section hierarchy")

@@ -108,11 +108,16 @@ def main() -> None:
             "PlayStation 5" in registration_source and
             "PlayStation 4" in registration_source,
             "pairing flow must retain explicit console type selection context")
-    require("root->setPadding(14, 80, 18, 80)" in registration_source and
-            "row_box->setHeight(50)" in registration_source and
-            "action_row->setHeight(54)" in registration_source and
-            "status_->setHeight(34)" in registration_source,
-            "PS pairing keypad must reserve space for its action row and footer")
+    require("pairing_card->setWidth(920)" in registration_source and
+            "details->setWidth(500)" in registration_source and
+            "btn->setMargins(4, 4, 4, 4)" in registration_source and
+            "back_btn->setWidth(112)" in registration_source and
+            "submit_btn->setWidth(112)" in registration_source,
+            "PS pairing keypad must use an aligned two-column card layout")
+    require('page_title->setText("PlayStation")' not in ps_source and
+            'title->setText(brls::getStr("lunarnx/ps/login_title"))' not in psn_login_source and
+            'intro_title->setText(brls::getStr("lunarnx/about/title"))' not in about_source,
+            "AppletFrame pages must not repeat their page title inside content")
     require("new StreamSettingsActivity" in main_source,
             "MainActivity must navigate to the dedicated settings page")
     require("res_720_" not in main_header + main_source and
