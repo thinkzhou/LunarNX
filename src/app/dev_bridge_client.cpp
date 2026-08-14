@@ -79,10 +79,19 @@ bool parseBuild(cJSON* item, DevBuild& build) {
     build.size = cJSON_IsNumber(size) ? static_cast<long long>(size->valuedouble) : 0;
     const bool lowercase_sha = build.sha256.size() == 64 &&
         build.sha256.find_first_not_of("0123456789abcdef") == std::string::npos;
-    const std::string expected_url = std::string(DevBridgeClient::kBaseUrl) +
-        "/dev/builds/" + build.sha256 + ".nro";
-    return !build.version.empty() && lowercase_sha &&
-        build.download_url == expected_url && build.size > 0 && build.size <= kMaxNroBytes;
+    const std::string expected_path = "/dev/builds/" + build.sha256 + ".nro";
+    const bool valid_download_path = build.download_url.size() >= expected_path.size() &&
+        build.download_url.compare(build.download_url.size() - expected_path.size(),
+                                   expected_path.size(), expected_path) == 0;
+    if (!build.version.empty() && lowercase_sha && valid_download_path &&
+        build.size > 0 && build.size <= kMaxNroBytes) {
+        // Historical manifests contain the old workers.dev origin. Always route
+        // downloads through the configured custom domain after validating the
+        // content-addressed path.
+        build.download_url = std::string(DevBridgeClient::kBaseUrl) + expected_path;
+        return true;
+    }
+    return false;
 }
 
 struct DownloadState {

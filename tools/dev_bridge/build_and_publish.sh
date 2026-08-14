@@ -6,7 +6,7 @@ set +x
 SCRIPT_DIR=${0:A:h}
 SCRIPT_NAME=${0:t}
 PROJECT_DIR=${SCRIPT_DIR:h:h}
-BASE_URL=${LUNARNX_DEV_BRIDGE_URL:-https://lunarnx-dev-bridge.zy741870701.workers.dev}
+BASE_URL=${LUNARNX_DEV_BRIDGE_URL:-https://lunarnx.tooyang.qzz.io}
 BASE_VERSION=${LUNARNX_BASE_VERSION:-0.1.0}
 VERSION=''
 NOTES='Development build'
@@ -15,6 +15,15 @@ DROP_DIAG=${DROP_DIAG:-0}
 APP_DIAG=${APP_DIAG:-0}
 CURL_PROVIDER=${CURL_PROVIDER:-moonlight}
 MANIFEST_PATH="$PROJECT_DIR/build/switch/build-manifest.json"
+
+DEVICE_UPLOAD_TOKEN=${LUNARNX_DEV_BRIDGE_DEVICE_TOKEN:-}
+if [[ -z "$DEVICE_UPLOAD_TOKEN" ]]; then
+    DEVICE_UPLOAD_TOKEN=$(/usr/bin/security find-generic-password \
+        -s lunarnx-dev-bridge-device-token -w 2>/dev/null) || {
+        print -u2 -- 'Missing Keychain item: lunarnx-dev-bridge-device-token'
+        exit 4
+    }
+fi
 
 usage() {
     print -- "Usage: $SCRIPT_NAME [--version VERSION] [--notes TEXT] [--no-feishu]"
@@ -108,6 +117,7 @@ APP_DIAG="$APP_DIAG" \
 CURL_PROVIDER="$CURL_PROVIDER" \
 APP_VERSION="$VERSION" \
 GIT_COMMIT="$GIT_COMMIT" \
+DEV_BRIDGE_UPLOAD_TOKEN="$DEVICE_UPLOAD_TOKEN" \
     "$PROJECT_DIR/scripts/docker_build_full.sh"
 
 python3 tests/switch_nro_bss_test.py

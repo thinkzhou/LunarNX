@@ -31,7 +31,7 @@ release chat.
 ## Publish a version
 
 ```sh
-LUNARNX_DEV_BRIDGE_URL=https://lunarnx-dev-bridge.zy741870701.workers.dev \
+LUNARNX_DEV_BRIDGE_URL=https://lunarnx.tooyang.qzz.io \
   tools/dev_bridge/publish_build.sh \
   build/switch/LunarNX.nro \
   0.1.0-dev.20260814.2 \
@@ -50,7 +50,7 @@ After all Cloudflare KV writes succeed, the publish command sends a Feishu
 notification by default:
 
 ```sh
-LUNARNX_DEV_BRIDGE_URL=https://lunarnx-dev-bridge.zy741870701.workers.dev \
+LUNARNX_DEV_BRIDGE_URL=https://lunarnx.tooyang.qzz.io \
   tools/dev_bridge/publish_build.sh \
   build/switch/LunarNX.nro \
   0.1.0-dev.20260814.2 \
@@ -107,3 +107,6 @@ serial number. A successful upload returns the stored `log_id` to LunarNX.
 
 On the development Mac, both tokens are stored in Keychain under
 `lunarnx-dev-bridge-device-token` and `lunarnx-dev-bridge-admin-token`.
+The unified build command reads the device token automatically and fails before
+building if it is missing, so a published development NRO always has working log
+upload credentials.

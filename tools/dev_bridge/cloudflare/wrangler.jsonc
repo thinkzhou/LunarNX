@@ -4,6 +4,12 @@
   "main": "src/index.js",
   "compatibility_date": "2026-08-14",
   "compatibility_flags": ["nodejs_compat"],
+  "routes": [
+    {
+      "pattern": "lunarnx.tooyang.qzz.io",
+      "custom_domain": true
+    }
+  ],
   "kv_namespaces": [
     {
       "binding": "ARTIFACTS",

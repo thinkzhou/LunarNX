@@ -24,6 +24,7 @@ CURL_TIMEOUT_MS="${CURL_TIMEOUT_MS:-30000}"
 APP_VERSION="${APP_VERSION:-0.1.0}"
 LUNAR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GIT_COMMIT="${GIT_COMMIT:-$(git -C "$LUNAR_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+DEV_BRIDGE_UPLOAD_TOKEN="${DEV_BRIDGE_UPLOAD_TOKEN:-}"
 
 if [[ ! -d "$LUNAR_DIR/lib/borealis/.git" || ! -d "$LUNAR_DIR/lib/libpeer/.git" ]]; then
     echo "Missing local dependencies. Run ./scripts/setup_dependencies.sh first." >&2
@@ -46,6 +47,7 @@ docker run --rm --platform "$DOCKER_PLATFORM" \
     -e CURL_TIMEOUT_MS="$CURL_TIMEOUT_MS" \
     -e APP_VERSION="$APP_VERSION" \
     -e GIT_COMMIT="$GIT_COMMIT" \
+    -e DEV_BRIDGE_UPLOAD_TOKEN="$DEV_BRIDGE_UPLOAD_TOKEN" \
     -v "$LUNAR_DIR:/work" -w /work \
     "$DOCKER_IMG" bash -lc '
 set -e
@@ -146,7 +148,8 @@ make -f Makefile.switch -j$(nproc) \
     CURL_VERBOSE="$CURL_VERBOSE" \
     CURL_TIMEOUT_MS="$CURL_TIMEOUT_MS" \
     APP_VERSION="$APP_VERSION" \
-    GIT_COMMIT="$GIT_COMMIT"
+    GIT_COMMIT="$GIT_COMMIT" \
+    DEV_BRIDGE_UPLOAD_TOKEN="$DEV_BRIDGE_UPLOAD_TOKEN"
 
 echo ""
 echo "========================================="

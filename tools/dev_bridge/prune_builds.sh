@@ -5,7 +5,7 @@ set +x
 
 SCRIPT_DIR=${0:A:h}
 CLOUDFLARE_DIR="$SCRIPT_DIR/cloudflare"
-BASE_URL=${LUNARNX_DEV_BRIDGE_URL:-https://lunarnx-dev-bridge.zy741870701.workers.dev}
+BASE_URL=${LUNARNX_DEV_BRIDGE_URL:-https://lunarnx.tooyang.qzz.io}
 KEEP=10
 APPLY=0
 

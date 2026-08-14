@@ -574,23 +574,19 @@ void StreamView::stopAndReturn() {
     running_ = false;
     runtime_->setInputSuppressed(false);
     auto runtime = runtime_;
-    auto alive = alive_;
     const auto state = runtime_->getState();
     const bool report_disconnect =
         state != app::StreamState::Disconnected && state != app::StreamState::Error;
     const bool started = lunar::platform::startNetworkWorker(
-        "stop-stream", [runtime, alive, report_disconnect]() {
+        "stop-stream", [runtime, report_disconnect]() {
             runtime->stopStream(report_disconnect);
-            brls::sync([alive]() {
-                if (alive->load()) {
-                    brls::Application::popActivity(brls::TransitionAnimation::NONE);
-                }
-            });
         });
     if (!started) {
         stop_started_ = false;
         running_ = true;
+        return;
     }
+    brls::Application::popActivity(brls::TransitionAnimation::NONE);
 }
 
 void StreamView::setQuickMenuVisible(bool visible) {

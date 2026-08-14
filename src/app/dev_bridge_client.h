@@ -21,7 +21,7 @@ class DevBridgeClient {
 public:
     using ProgressCallback = std::function<void(long long, long long)>;
     static constexpr const char* kBaseUrl =
-        "https://lunarnx-dev-bridge.zy741870701.workers.dev";
+        "https://lunarnx.tooyang.qzz.io";
 
     bool fetchVersions(std::vector<DevBuild>& builds, std::string& error) const;
     bool install(const DevBuild& build, const std::string& target_path,

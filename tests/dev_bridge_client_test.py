@@ -46,7 +46,10 @@ require("src/app/dev_bridge_client.cpp" in makefile and
         "src/ui/dev_tools_activity.cpp" in makefile and
         "DEV_BRIDGE_UPLOAD_TOKEN" in makefile,
         "Switch build must include the client, UI, and injected upload token")
-require("lunarnx-dev-bridge.zy741870701.workers.dev" in client_header,
-        "client must use the deployed development bridge")
+require("lunarnx.tooyang.qzz.io" in client_header,
+        "client must use the custom-domain development bridge")
+require("Historical manifests contain the old workers.dev origin" in client and
+        "build.download_url = std::string(DevBridgeClient::kBaseUrl)" in client,
+        "historical manifests must download through the custom domain")
 
 print("Development bridge client regression checks passed")
