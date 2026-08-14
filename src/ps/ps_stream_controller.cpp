@@ -192,7 +192,9 @@ bool PsStreamController::startStream() {
     rumble_ = std::make_unique<input::RumbleController>();
     input_mapper_ = std::make_unique<PsInputMapper>();
     touchpad_reader_ = std::make_unique<PsTouchpadReader>(console_.target >= 1000000);
+    motion_reader_ = std::make_unique<PsMotionReader>();
     if (gamepad_) gamepad_->initialize();
+    if (motion_reader_) motion_reader_->initialize();
     if (rumble_) {
         rumble_->setEnabled(rumble_enabled_.load());
         rumble_->setStrengthPercent(rumble_strength_percent_.load());
@@ -458,6 +460,7 @@ void PsStreamController::stopStream(bool set_disconnected) {
     ps_button_pulse_frames_remaining_ = 0;
     ps_button_release_pending_ = false;
     if (touchpad_reader_) touchpad_reader_->reset();
+    if (motion_reader_) motion_reader_->reset();
     {
         std::lock_guard<std::mutex> lock(touchpad_feedback_mutex_);
         touchpad_feedback_ = {};
@@ -555,7 +558,10 @@ void PsStreamController::update() {
         state = {};
     }
 
-    ChiakiControllerState cs = input_mapper_->map(state, touchpad);
+    const PsMotionState motion = motion_reader_
+        ? motion_reader_->read(input_suppressed)
+        : PsMotionState{};
+    ChiakiControllerState cs = input_mapper_->map(state, touchpad, &motion);
     if (mock_session_) mock_session_->setControllerState(cs);
     else session_->setControllerState(cs);
     perf_.recordInputPacket();

@@ -42,7 +42,7 @@ def main() -> None:
     assert "const size_t count = state.count" in reader
     assert "blocked_until_release_" in reader
     assert "touchpad_reader_->read(input_suppressed)" in controller
-    assert "input_mapper_->map(state, touchpad)" in controller
+    assert "input_mapper_->map(state, touchpad, &motion)" in controller
     assert "else if (input_suppressed)" in controller
     assert "else if (input_suppressed_.load())" not in controller
 

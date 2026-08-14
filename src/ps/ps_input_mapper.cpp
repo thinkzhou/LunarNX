@@ -1,6 +1,7 @@
 #ifdef __SWITCH__
 
 #include "ps_input_mapper.h"
+#include "ps_motion_reader.h"
 #include <algorithm>
 #include <limits>
 
@@ -20,7 +21,8 @@ static inline int16_t invertYAxis(int16_t val) {
 }
 
 ChiakiControllerState PsInputMapper::map(const input::GamepadState& state,
-                                         const PsTouchpadState& touchpad) {
+                                         const PsTouchpadState& touchpad,
+                                         const PsMotionState* motion) {
     ChiakiControllerState s{};
     chiaki_controller_state_set_idle(&s);
 
@@ -76,6 +78,19 @@ ChiakiControllerState PsInputMapper::map(const input::GamepadState& state,
     // Digital triggers as analog button flags
     if (state.lt) s.buttons |= CHIAKI_CONTROLLER_ANALOG_BUTTON_L2;
     if (state.rt) s.buttons |= CHIAKI_CONTROLLER_ANALOG_BUTTON_R2;
+
+    if (motion && motion->valid) {
+        s.gyro_x = motion->gyro_x;
+        s.gyro_y = motion->gyro_y;
+        s.gyro_z = motion->gyro_z;
+        s.accel_x = motion->accel_x;
+        s.accel_y = motion->accel_y;
+        s.accel_z = motion->accel_z;
+        s.orient_x = motion->orient_x;
+        s.orient_y = motion->orient_y;
+        s.orient_z = motion->orient_z;
+        s.orient_w = motion->orient_w;
+    }
 
     prev_ = s;
     return s;

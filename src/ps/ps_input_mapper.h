@@ -19,12 +19,15 @@ struct PsTouchpadState {
     std::array<PsTouchpadPoint, CHIAKI_CONTROLLER_TOUCHES_MAX> touches{};
 };
 
+struct PsMotionState;
+
 class PsInputMapper {
 public:
     PsInputMapper() = default;
 
     ChiakiControllerState map(const input::GamepadState& state,
-                              const PsTouchpadState& touchpad = {});
+                              const PsTouchpadState& touchpad = {},
+                              const PsMotionState* motion = nullptr);
     void reset();
 
 private:

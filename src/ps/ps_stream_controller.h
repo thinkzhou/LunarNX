@@ -13,6 +13,7 @@
 #include "../input/rumble_controller.h"
 #include "ps_input_mapper.h"
 #include "ps_touchpad_reader.h"
+#include "ps_motion_reader.h"
 #include "ps_mock_replay_session.h"
 #include "ps_stream_session.h"
 #include <chiaki/log.h>
@@ -94,6 +95,7 @@ private:
     std::unique_ptr<input::RumbleController> rumble_;
     std::unique_ptr<PsInputMapper> input_mapper_;
     std::unique_ptr<PsTouchpadReader> touchpad_reader_;
+    std::unique_ptr<PsMotionReader> motion_reader_;
     ChiakiLog remote_log_{};
     std::unique_ptr<PsRemoteConnector> remote_connector_;
     PsRemoteResult remote_result_;
