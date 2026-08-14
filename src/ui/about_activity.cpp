@@ -43,7 +43,7 @@ brls::Box* makeMetadataRow(const std::string& label, const std::string& value,
                            bool add_margin) {
     const auto& p = uiPalette();
     auto* row = new brls::Box(brls::Axis::ROW);
-    row->setGrow(1.0f);
+    row->setWidth(586);
     row->setHeight(58);
     row->setPadding(0, 16, 0, 16);
     row->setAlignItems(brls::AlignItems::CENTER);
@@ -59,7 +59,7 @@ brls::Box* makeMetadataRow(const std::string& label, const std::string& value,
     auto* text = new brls::Label();
     text->setGrow(1.0f);
     text->setText(value);
-    text->setFontSize(13);
+    text->setFontSize(12);
     text->setTextColor(p.text);
     text->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
     row->addView(text);

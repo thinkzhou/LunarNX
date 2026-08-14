@@ -33,6 +33,8 @@ require('AGPL-3.0-only-OpenSSL' in ABOUT and
         'github.com/thinkzhou/LunarNX' in ABOUT and
         'lunarnx/about/acknowledgements' in ABOUT,
         "About page must retain license and component attribution")
+require('row->setWidth(586)' in ABOUT and 'row->setGrow(1.0f)' not in ABOUT,
+        "Project metadata must use matching fixed-width columns")
 require('lunarnx/common/about' in MAIN,
         "main page About button must be localized")
 
@@ -43,5 +45,7 @@ for locale in ("en-US", "zh-Hans", "zh-Hant"):
                 "build_label"):
         require(f'"{key}"' in text,
                 f"missing About localization {key} for {locale}")
+    require('xStreaming' in text and 'Moonlight-Switch' in text,
+            f"missing streaming project acknowledgements for {locale}")
 
 print("About page tests passed")
