@@ -1,0 +1,4 @@
+LunarNX 测试版更新
+
+本次修改：
+{{CHANGE_SUMMARY}}

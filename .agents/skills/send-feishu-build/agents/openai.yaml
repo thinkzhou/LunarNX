@@ -1,0 +1,4 @@
+interface:
+  display_name: "LunarNX Feishu Messaging"
+  short_description: "Send builds and receive LunarNX files through Feishu"
+  default_prompt: "Use $send-feishu-build to send or receive LunarNX messages and files through Feishu."
