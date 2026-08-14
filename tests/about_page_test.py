@@ -17,9 +17,12 @@ require('product->setText("LunarNX")' in ABOUT and
         'makeAppFrame(brls::getStr("lunarnx/common/about"), root)' in ABOUT,
         "About page must have one frame title and compact product identity")
 require('ScrollingFrame' not in ABOUT and
+        'root->registerAction("Back"' not in ABOUT and
+        'root->setFocusable(true)' in ABOUT and
+        'root->setHideHighlight(true)' in ABOUT and
         'capabilities = new brls::Box(brls::Axis::ROW)' in ABOUT and
         ABOUT.count('makeInfoCell(') >= 4,
-        "About content must fit a single screen with equal capability cells")
+        "About content must fit a single screen without a root focus ring")
 require('"736743823"' in ABOUT and
         'lunarnx/about/qq_group' in ABOUT,
         "About page must show the LunarNX QQ group")

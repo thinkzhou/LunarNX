@@ -29,10 +29,12 @@ brls::Box* makeInfoCell(const std::string& label, const std::string& value,
     title->setText(value);
     title->setFontSize(16);
     title->setTextColor(p.text);
+    title->setMarginTop(5);
     cell->addView(title);
 
     auto* copy = makeMutedLabel(detail, 11);
     copy->setIsWrapping(false);
+    copy->setMarginTop(3);
     cell->addView(copy);
     return cell;
 }
@@ -72,12 +74,8 @@ brls::View* AboutActivity::createContentView() {
     auto* root = new brls::Box(brls::Axis::COLUMN);
     root->setPadding(18, 48, 18, 48);
     root->setBackgroundColor(p.background);
-    root->registerAction("Back", brls::ControllerButton::BUTTON_B,
-        [](brls::View*) -> bool {
-            brls::Application::popActivity(brls::TransitionAnimation::NONE);
-            return true;
-        });
-
+    root->setFocusable(true);
+    root->setHideHighlight(true);
     auto* identity = new brls::Box(brls::Axis::ROW);
     identity->setHeight(92);
     identity->setAlignItems(brls::AlignItems::CENTER);
