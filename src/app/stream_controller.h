@@ -81,6 +81,7 @@ public:
     void setStateCallback(StateCallback cb);
     void setInputSuppressed(bool suppressed) override { input_suppressed_ = suppressed; }
     void requestPlatformHomeButton() override;
+    bool resumeAfterForeground() override;
     void requestGuideButton();
     bool consumeGuideButtonRequest();
     void setBaseUrl(const std::string& url) { base_url_ = url; }
@@ -167,6 +168,9 @@ private:
     int stream_height_ = 720;
     std::string base_url_;
     std::string preferred_game_language_ = "en-US";
+    StreamProfile active_profile_;
+    stream::MediaPipelineOptions active_media_options_;
+    bool has_active_profile_ = false;
 };
 
 } // namespace lunar::app

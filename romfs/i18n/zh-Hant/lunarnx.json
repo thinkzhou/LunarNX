@@ -31,6 +31,25 @@
   "streaming": "串流中",
   "disconnected": "已中斷連線"
  },
+ "dev": {
+  "title": "開發工具",
+  "subtitle": "安裝測試版本或上傳目前診斷日誌",
+  "entry_desc": "瀏覽附說明的測試版本、回退舊版並上傳日誌，無需連接電腦。",
+  "refresh": "重新整理版本",
+  "upload_log": "上傳日誌",
+  "loading": "正在載入可用版本...",
+  "available": "可用版本",
+  "load_failed": "無法載入版本",
+  "worker_failed": "無法啟動網路工作",
+  "install": "安裝",
+  "install_confirm": "安裝此版本並重新啟動 LunarNX？",
+  "installing": "正在下載並驗證",
+  "install_failed": "安裝失敗",
+  "restarting": "安裝完成，正在重新啟動 LunarNX...",
+  "uploading_log": "正在上傳 lunarnx.log...",
+  "upload_done": "日誌上傳成功",
+  "upload_failed": "日誌上傳失敗"
+ },
  "auth": {
   "back_action": "返回",
   "tagline": "你的 Xbox。\n隨時隨地。",
@@ -296,6 +315,8 @@
   "menu_stream_settings": "串流設定",
   "menu_button_mapping": "按鍵映射",
   "menu_resume": "繼續串流",
+  "resumed": "串流已恢復",
+  "resume_failed": "串流已中斷，重新連線失敗。",
   "menu_disconnect": "中斷串流",
   "menu_disconnect_confirm": "再次點擊確認中斷"
  },

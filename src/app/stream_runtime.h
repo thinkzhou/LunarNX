@@ -65,6 +65,9 @@ public:
 
     virtual void setInputSuppressed(bool suppressed) = 0;
     virtual void requestPlatformHomeButton() = 0;
+    // Called from a network worker after Switch returns to the foreground.
+    // Implementations keep a healthy session alive and rebuild a dead one.
+    virtual bool resumeAfterForeground() = 0;
     virtual TouchpadFeedback getTouchpadFeedback() const { return {}; }
     virtual void update() = 0;
     virtual void presentVideoFrame() = 0;

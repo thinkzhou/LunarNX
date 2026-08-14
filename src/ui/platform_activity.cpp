@@ -5,6 +5,7 @@
 #include "ps_activity.h"
 #include "about_activity.h"
 #include "stream_settings_activity.h"
+#include "dev_tools_activity.h"
 #include "ui_style.h"
 #include "../common.h"
 #include "../diagnostics.h"
@@ -15,13 +16,6 @@
 
 namespace lunar::ui {
 namespace {
-
-std::string formatResult(Result rc) {
-    char buffer[64]{};
-    std::snprintf(buffer, sizeof(buffer), "%u / 0x%X",
-                  static_cast<unsigned int>(rc), static_cast<unsigned int>(rc));
-    return buffer;
-}
 
 brls::Button* makePlatformTile(const std::string& title,
                                const std::string& detail,
@@ -74,6 +68,40 @@ brls::Button* makePlatformTile(const std::string& title,
     return tile;
 }
 
+brls::Button* makeUtilityTile(const std::string& title,
+                              const std::string& detail,
+                              const std::function<void()>& open) {
+    const auto& p = uiPalette();
+    auto* tile = new brls::Button();
+    tile->setStyle(&brls::BUTTONSTYLE_BORDERLESS);
+    tile->setWidth(1024);
+    tile->setHeight(72);
+    tile->setPadding(10, 22, 10, 22);
+    tile->setBackgroundColor(p.surface_alt);
+    tile->setBorderThickness(1);
+    tile->setBorderColor(p.border);
+    tile->setCornerRadius(8);
+    tile->setHighlightCornerRadius(10);
+    tile->setAxis(brls::Axis::ROW);
+    tile->setAlignItems(brls::AlignItems::CENTER);
+
+    auto* label = new brls::Label();
+    label->setText(title);
+    label->setFontSize(18);
+    label->setTextColor(p.text);
+    label->setWidth(240);
+    tile->addView(label);
+    auto* description = makeMutedLabel(detail, 13);
+    description->setGrow(1.0f);
+    description->setSingleLine(true);
+    tile->addView(description);
+    tile->registerClickAction([open](brls::View*) -> bool {
+        open();
+        return true;
+    });
+    return tile;
+}
+
 bool savedFileExists(const char* path) {
     FILE* file = std::fopen(path, "rb");
     if (!file) return false;
@@ -100,11 +128,6 @@ brls::View* PlatformActivity::createContentView() {
             brls::TransitionAnimation::NONE);
         return true;
     });
-    workspace->registerAction("Browser Test: Baidu",
-        brls::ControllerButton::BUTTON_START, [this](brls::View*) -> bool {
-        openBrowserDiagnostic();
-        return true;
-    }, true);
     workspace->registerAction(brls::getStr("lunarnx/common/about"),
         brls::ControllerButton::BUTTON_Y, [](brls::View*) -> bool {
         brls::Application::pushActivity(
@@ -149,6 +172,10 @@ brls::View* PlatformActivity::createContentView() {
     ps_card->setMarginLeft(24);
     platforms->addView(ps_card);
     content->addView(platforms);
+    content->addView(makeUtilityTile(
+        brls::getStr("lunarnx/dev/title"),
+        brls::getStr("lunarnx/dev/entry_desc"),
+        [this]() { openDevTools(); }));
     workspace->addView(content);
 
     workspace->registerAction("Exit", brls::ControllerButton::BUTTON_B,
@@ -196,52 +223,10 @@ void PlatformActivity::openPlayStation() {
     diagnosticLog("ui-platform", "PlayStation navigation complete");
 }
 
-void PlatformActivity::openBrowserDiagnostic() {
-    constexpr const char* kDiagnosticUrl = "https://www.baidu.com";
-    const AppletType applet_type = appletGetAppletType();
-    diagnosticLog("ui-platform-browser", "begin applet_type=%d url=%s",
-                  static_cast<int>(applet_type), kDiagnosticUrl);
-
-    if (applet_type != AppletType_Application &&
-        applet_type != AppletType_SystemApplication) {
-        const std::string message = "Browser test requires Application Mode (applet type " +
-            std::to_string(static_cast<int>(applet_type)) + ")";
-        diagnosticLog("ui-platform-browser", "%s", message.c_str());
-        brls::Application::notify(message);
-        return;
-    }
-
-    WebCommonConfig config{};
-    Result rc = webPageCreate(&config, kDiagnosticUrl);
-    if (R_FAILED(rc)) {
-        const std::string message = "Baidu browser create failed: " + formatResult(rc);
-        diagnosticLog("ui-platform-browser", "webPageCreate failed rc=%u hex=0x%x",
-                      static_cast<unsigned int>(rc), static_cast<unsigned int>(rc));
-        brls::Application::notify(message);
-        return;
-    }
-
-    WebCommonReply reply{};
-    rc = webConfigShow(&config, &reply);
-    if (R_FAILED(rc)) {
-        const std::string message = "Baidu browser show failed: " + formatResult(rc);
-        diagnosticLog("ui-platform-browser", "webConfigShow failed rc=%u hex=0x%x",
-                      static_cast<unsigned int>(rc), static_cast<unsigned int>(rc));
-        brls::Application::notify(message);
-        return;
-    }
-
-    WebExitReason reason = WebExitReason_UnknownE;
-    const Result reason_rc = webReplyGetExitReason(&reply, &reason);
-    diagnosticLog("ui-platform-browser", "complete reason_rc=%u reason=%d",
-                  static_cast<unsigned int>(reason_rc), static_cast<int>(reason));
-    if (R_FAILED(reason_rc)) {
-        brls::Application::notify("Baidu browser closed; exit reason unavailable (" +
-                                  formatResult(reason_rc) + ")");
-        return;
-    }
-    brls::Application::notify("Baidu browser closed; exit reason " +
-                              std::to_string(static_cast<int>(reason)));
+void PlatformActivity::openDevTools() {
+    diagnosticLog("ui-platform", "Dev tools navigation begin");
+    brls::Application::pushActivity(
+        new DevToolsActivity(), brls::TransitionAnimation::NONE);
 }
 
 } // namespace lunar::ui

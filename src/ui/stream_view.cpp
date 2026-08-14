@@ -233,11 +233,19 @@ private:
 }
 
 StreamView::StreamView(std::shared_ptr<app::IStreamRuntime> runtime)
-    : runtime_(std::move(runtime)) {}
+    : runtime_(std::move(runtime)) {
+    brls::Application::getPlatform()->disableScreenDimming(true);
+    focus_subscription_ =
+        brls::Application::getWindowFocusChangedEvent()->subscribe(
+            [this](bool focused) { handleWindowFocusChanged(focused); });
+}
 
 StreamView::~StreamView() {
     alive_->store(false);
     running_ = false;
+    brls::Application::getWindowFocusChangedEvent()->unsubscribe(
+        focus_subscription_);
+    brls::Application::getPlatform()->disableScreenDimming(false);
     runtime_->setInputSuppressed(false);
     if (update_thread_.joinable()) update_thread_.join();
     if (!stop_started_.load()) {
@@ -245,6 +253,46 @@ StreamView::~StreamView() {
         lunar::platform::startNetworkWorker("stop-stream-fallback", [runtime]() {
             runtime->stopStream(false);
         });
+    }
+}
+
+void StreamView::handleWindowFocusChanged(bool focused) {
+    lunar::diagnosticLog("stream-view", "window focus changed focused=%s",
+                         focused ? "true" : "false");
+    if (!focused) {
+        backgrounded_ = true;
+        runtime_->setInputSuppressed(true);
+        return;
+    }
+
+    if (!backgrounded_.load()) return;
+    if (foreground_recovery_running_.exchange(true)) return;
+    backgrounded_ = false;
+
+    auto runtime = runtime_;
+    auto alive = alive_;
+    const bool started = lunar::platform::startNetworkWorker(
+        "resume-stream", [this, runtime, alive]() {
+            const bool recovered = runtime->resumeAfterForeground();
+            brls::sync([this, runtime, alive, recovered]() {
+                if (!alive->load()) return;
+                foreground_recovery_running_ = false;
+                if (recovered) {
+                    updateInputSuppression();
+                    brls::Application::notify(
+                        brls::getStr("lunarnx/stream/resumed"));
+                    return;
+                }
+                lunar::diagnosticLog("stream-view",
+                                     "foreground stream recovery failed");
+                brls::Application::notify(
+                    brls::getStr("lunarnx/stream/resume_failed"));
+                stopAndReturn();
+            });
+        });
+    if (!started) {
+        foreground_recovery_running_ = false;
+        stopAndReturn();
     }
 }
 
@@ -680,7 +728,10 @@ void StreamView::runLoop() {
 
         // Detect disconnect/error
         auto state = runtime_->getState();
-        if (state == app::StreamState::Disconnected || state == app::StreamState::Error) {
+        if (!backgrounded_.load() &&
+            !foreground_recovery_running_.load() &&
+            (state == app::StreamState::Disconnected ||
+             state == app::StreamState::Error)) {
             running_ = false;
             auto alive = alive_;
             brls::sync([alive, this]() {

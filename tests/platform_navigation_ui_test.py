@@ -21,9 +21,8 @@ def main():
             "workspace->setPadding(28, 48, 24, 48)" in platform and
             "makeSidebarButton" not in platform,
             "platform selection must use the centered sidebar-free Stitch layout")
-    require("BUTTON_X" in platform and "BUTTON_Y" in platform and
-            "BUTTON_START" in platform,
-            "platform utilities must remain reachable through controller actions")
+    require("BUTTON_X" in platform and "BUTTON_Y" in platform,
+            "settings and About must remain reachable through controller actions")
     require("new StreamSettingsActivity(nullptr, loadStreamSettings(), {}," in platform and
             "StreamSettingsScope::Global" in platform,
             "platform selection must expose global settings without constructing a controller")
@@ -45,16 +44,10 @@ def main():
             "now < exit_navigation_ready_at_" in platform,
             "platform exit must ignore a held Back input after a child activity closes")
 
-    diagnostic = platform.split("void PlatformActivity::openBrowserDiagnostic()", 1)
-    require(len(diagnostic) == 2,
-            "platform selection must expose the temporary browser diagnostic")
-    diagnostic = diagnostic[1]
-    require("https://www.baidu.com" in diagnostic and
-            "webPageCreate" in diagnostic and
-            "webConfigShow" in diagnostic,
-            "browser diagnostic must open Baidu through the Switch WebApplet")
-    require("webConfigSetCallbackUrl" not in diagnostic,
-            "browser diagnostic must not configure a callback URL")
+    require("openBrowserDiagnostic" not in platform and
+            "https://www.baidu.com" not in platform and
+            "new DevToolsActivity" in platform,
+            "temporary browser diagnostics must be consolidated into development tools")
 
     print("Platform navigation UI tests passed")
 

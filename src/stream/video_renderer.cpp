@@ -1460,7 +1460,6 @@ bool VideoRenderer::render(const VideoFrame&frame){
     if(shouldLogRender())lunar::diagnosticLog("render","render reject format=%d expected=%d",f->format,AV_PIX_FMT_NVTEGRA);
     return false;
   }
-  std::lock_guard<std::recursive_mutex> gpu_lock(s->vctx->getGpuMutex());
   std::lock_guard<std::mutex> lock(s->render_mutex);
   AVFrame* keep=av_frame_alloc();
   if(!keep||av_frame_ref(keep,f)<0){

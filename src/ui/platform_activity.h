@@ -17,7 +17,7 @@ private:
     std::chrono::steady_clock::time_point exit_navigation_ready_at_{};
     void openXbox();
     void openPlayStation();
-    void openBrowserDiagnostic();
+    void openDevTools();
 };
 
 } // namespace lunar::ui

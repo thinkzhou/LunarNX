@@ -3,6 +3,7 @@
 #include <borealis.hpp>
 #include <cstdlib>
 #include "diagnostics.h"
+#include "app/runtime_context.h"
 #include "ui/platform_activity.h"
 #include "ui/i18n.h"
 #include "ui/ui_style.h"
@@ -48,6 +49,7 @@ void preferSwitchCore(int ordinal) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    if (argc > 0) lunar::app::setRunningNroPath(argv[0]);
     lunar::diagnosticLog("main", "begin argc=%d version=%s", argc, LUNARNX_VERSION);
 
     // Keep the Switch startup path aligned with Moonlight-Switch.
@@ -56,9 +58,6 @@ int main(int argc, char* argv[]) {
     preferSwitchCore(0);
     svcSetThreadPriority(CUR_THREAD_HANDLE, 0x20);
     lunar::diagnosticLog("main", "switch thread/app settings done");
-
-    (void)argc;
-    (void)argv;
 
     brls::Logger::setLogLevel(brls::LogLevel::LOG_DEBUG);
 

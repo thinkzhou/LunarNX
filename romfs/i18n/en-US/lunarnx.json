@@ -31,6 +31,25 @@
   "streaming": "Streaming",
   "disconnected": "Disconnected"
  },
+ "dev": {
+  "title": "Development tools",
+  "subtitle": "Install test builds or send the current diagnostic log",
+  "entry_desc": "Browse versioned test builds, roll back, and upload logs without a computer.",
+  "refresh": "Refresh versions",
+  "upload_log": "Upload log",
+  "loading": "Loading available versions...",
+  "available": "Available versions",
+  "load_failed": "Could not load versions",
+  "worker_failed": "Could not start the network task",
+  "install": "Install",
+  "install_confirm": "Install this build and restart LunarNX?",
+  "installing": "Downloading and verifying",
+  "install_failed": "Installation failed",
+  "restarting": "Installed. Restarting LunarNX...",
+  "uploading_log": "Uploading lunarnx.log...",
+  "upload_done": "Log uploaded successfully",
+  "upload_failed": "Log upload failed"
+ },
  "auth": {
   "back_action": "Back",
   "tagline": "Your Xbox.\nAnywhere.",
@@ -296,6 +315,8 @@
   "menu_stream_settings": "Streaming settings",
   "menu_button_mapping": "Button mapping",
   "menu_resume": "Resume streaming",
+  "resumed": "Stream resumed",
+  "resume_failed": "Stream disconnected. Reconnect failed.",
   "menu_disconnect": "Disconnect stream",
   "menu_disconnect_confirm": "Tap again to disconnect"
  },
