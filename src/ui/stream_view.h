@@ -32,6 +32,9 @@ private:
     std::thread update_thread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_started_{false};
+    std::atomic<bool> backgrounded_{false};
+    std::atomic<bool> foreground_recovery_running_{false};
+    brls::Event<bool>::Subscription focus_subscription_;
 
     std::chrono::steady_clock::time_point exit_press_time_;
     std::atomic<bool> exit_pending_{false};
@@ -48,6 +51,7 @@ private:
     void updatePerformanceVisibility();
     void handleQuickDisconnect();
     void stopAndReturn();
+    void handleWindowFocusChanged(bool focused);
 };
 
 } // namespace lunar::ui

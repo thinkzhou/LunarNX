@@ -52,6 +52,7 @@ public:
     }
     void setInputSuppressed(bool suppressed) override;
     void requestPlatformHomeButton() override { ps_button_requested_ = true; }
+    bool resumeAfterForeground() override;
     app::TouchpadFeedback getTouchpadFeedback() const override;
     void update() override;
     void presentVideoFrame() override;

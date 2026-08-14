@@ -467,6 +467,27 @@ void PsStreamController::stopStream(bool set_disconnected) {
     diagnosticLog("ps-controller", "stop stream complete");
 }
 
+bool PsStreamController::resumeAfterForeground() {
+    {
+        std::shared_lock<std::shared_mutex> operation_lock(stream_operation_mutex_);
+        if (state_.load() == app::StreamState::Streaming &&
+            stream_transport_connected_.load()) {
+            const bool requested = requestRecoveryIDR();
+            diagnosticLog("ps-controller",
+                          "foreground resume kept healthy session idr=%d",
+                          requested ? 1 : 0);
+            return true;
+        }
+    }
+
+    diagnosticLog("ps-controller", "foreground resume rebuilding PS session");
+    stopStream(false);
+    shutdown_ = false;
+    cancel_requested_ = false;
+    setState(app::StreamState::Idle, "Resuming stream...");
+    return startStream();
+}
+
 void PsStreamController::update() {
     std::shared_lock<std::shared_mutex> operation_lock(stream_operation_mutex_);
     if ((!session_ && !mock_session_) ||

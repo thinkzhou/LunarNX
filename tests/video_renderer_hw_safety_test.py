@@ -9,6 +9,15 @@ def require(condition, message):
 
 def main():
     renderer = Path("src/stream/video_renderer.cpp").read_text()
+    render_start = renderer.index("bool VideoRenderer::render(const VideoFrame&frame)")
+    render_end = renderer.index("void VideoRenderer::present()", render_start)
+    render = renderer[render_start:render_end]
+
+    require("getGpuMutex()" not in render,
+            "the decoder hot path must not contend with the Borealis GPU frame lock")
+    require("std::lock_guard<std::mutex> lock(s->render_mutex)" in render,
+            "decoded-frame handoff must remain protected by the renderer mutex")
+
     present_start = renderer.index("void VideoRenderer::present()")
     present_end = renderer.index("bool VideoRenderer::prepareDecoderReset()", present_start)
     present = renderer[present_start:present_end]

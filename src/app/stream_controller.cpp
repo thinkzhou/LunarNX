@@ -926,6 +926,12 @@ bool StreamController::startStreamWithProfile(
     const StreamProfile& input_profile,
     const stream::MediaPipelineOptions& options) {
     StreamProfile profile = input_profile;
+    {
+        std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
+        active_profile_ = input_profile;
+        active_media_options_ = options;
+        has_active_profile_ = true;
+    }
     lunar::diagnosticLog(
         "stream-controller",
         "Start stream begin type=%s target=%s width=%d height=%d backend=%s",
@@ -1131,6 +1137,37 @@ void StreamController::stopStream(bool set_disconnected) {
     requestStreamStop();
     std::lock_guard<std::mutex> operation_lock(stream_operation_mutex_);
     cleanupStreamResources(set_disconnected);
+}
+
+bool StreamController::resumeAfterForeground() {
+    {
+        std::lock_guard<std::mutex> operation_lock(stream_operation_mutex_);
+        if (state_.load() == StreamState::Streaming && transport_ &&
+            transport_->isConnected()) {
+            if (media_) {
+                media_->requestVideoRecovery("foreground resume", true);
+            }
+            lunar::diagnosticLog("stream-controller",
+                                 "foreground resume kept healthy session");
+            return true;
+        }
+    }
+
+    StreamProfile profile;
+    stream::MediaPipelineOptions options;
+    {
+        std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
+        if (!has_active_profile_) {
+            lunar::diagnosticLog("stream-controller",
+                                 "foreground resume has no saved profile");
+            return false;
+        }
+        profile = active_profile_;
+        options = active_media_options_;
+    }
+    lunar::diagnosticLog("stream-controller",
+                         "foreground resume rebuilding Xbox session");
+    return startStreamWithProfile(profile, options);
 }
 
 void StreamController::update() {
