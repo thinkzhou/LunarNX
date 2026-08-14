@@ -21,6 +21,10 @@ private:
     void renderVersions(const std::vector<app::DevBuild>& builds);
     void confirmInstall(app::DevBuild build);
     void installBuild(app::DevBuild build);
+    void showDownloadProgress(const std::string& version);
+    void updateDownloadProgress(long long downloaded, long long expected,
+                                int percent, const std::string& version);
+    void closeDownloadProgress();
     void uploadLog();
     void setBusy(bool busy);
 
@@ -31,6 +35,9 @@ private:
     brls::Box* versions_ = nullptr;
     brls::Button* refresh_ = nullptr;
     brls::Button* upload_ = nullptr;
+    brls::Dialog* progress_dialog_ = nullptr;
+    brls::Label* progress_label_ = nullptr;
+    brls::Box* progress_fill_ = nullptr;
 };
 
 } // namespace lunar::ui
