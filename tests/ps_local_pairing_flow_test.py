@@ -42,6 +42,9 @@ def main() -> None:
         "for (const auto& credential : credentials_)", 1)[1].split(
         "for (const auto& psn : psn_consoles_)", 1)[0]
     assert "it->target = credential.target" in credential_merge
+    assert credential_merge.count("credential.last_known_addr.empty()") >= 2
+    assert credential_merge.count("PsLocalEndpoint{") >= 2
+    assert credential_merge.count("credential.last_known_addr") >= 4
     assert "CHIAKI_TARGET_PS4_10" in activity
     assert "CHIAKI_TARGET_PS4_9" in activity
     assert '"lunarnx/ps/select_ps4_version"' in activity

@@ -51,6 +51,7 @@ PsStreamSession::PsStreamSession(const std::string& host_addr,
 
 PsStreamSession::~PsStreamSession() {
     stop();
+    bridge_.setEventForwarder({});
 }
 
 void PsStreamSession::configureConnectInfo() {
@@ -67,7 +68,10 @@ void PsStreamSession::configureConnectInfo() {
     connect_info_.video_profile_auto_downgrade = true;
     connect_info_.packet_loss_max = 0.02;
     connect_info_.enable_dualsense = true;
-    connect_info_.enable_keyboard = true;
+    // LunarNX does not expose Chiaki's remote keyboard protocol. Keep this
+    // disabled like chiaki-ng instead of advertising an unsupported optional
+    // feature and sending extra CTRL messages after the session ID arrives.
+    connect_info_.enable_keyboard = false;
     std::memcpy(connect_info_.regist_key, regist_key_, sizeof(regist_key_));
     std::memcpy(connect_info_.morning, morning_, sizeof(morning_));
 
@@ -134,7 +138,14 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
     }
     initialized_ = true;
 
-    chiaki_session_set_event_cb(&session_, sessionEventCb, this);
+    // Route every Chiaki event through the media bridge. It forwards normal
+    // lifecycle events back to this session and handles rumble before doing
+    // so; registering sessionEventCb directly would silently bypass rumble.
+    bridge_.setEventForwarder([this](ChiakiEvent* event) {
+        handleEvent(event);
+    });
+    chiaki_session_set_event_cb(
+        &session_, bridge_.eventCallback(), &bridge_);
     chiaki_session_set_video_sample_cb(&session_, videoSampleCb, this);
 
     ChiakiAudioSink sink = bridge_.audioSink();
@@ -266,12 +277,6 @@ bool PsStreamSession::videoSampleCb(uint8_t* buf, size_t buf_size,
     if (!self) return false;
     self->maybeRefreshTransportStats();
     return self->bridge_.onVideoSample(buf, buf_size, frames_lost, frame_recovered);
-}
-
-void PsStreamSession::sessionEventCb(ChiakiEvent* event, void* user) {
-    auto* self = static_cast<PsStreamSession*>(user);
-    if (!self || !event) return;
-    self->handleEvent(event);
 }
 
 void PsStreamSession::handleEvent(ChiakiEvent* event) {

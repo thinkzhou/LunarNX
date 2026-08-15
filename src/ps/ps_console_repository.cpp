@@ -270,12 +270,25 @@ std::vector<PsConsole> PsConsoleRepository::getUnifiedList() const {
             console.nickname = credential.nickname;
             console.target = credential.target;
             console.credentials = credential;
+            // A manually entered address is not returned by LAN discovery.
+            // Restore it as a direct connection candidate so a successful
+            // pairing remains usable after returning to this page or after an
+            // app restart. A failed/stale address will still fail normally in
+            // the session connection instead of hiding the Connect action.
+            if (!credential.last_known_addr.empty()) {
+                console.local = PsLocalEndpoint{
+                    credential.last_known_addr, 0, PsConsoleState::Ready};
+            }
             unified.push_back(std::move(console));
         } else {
             it->credentials = credential;
             it->target = credential.target;
             if (it->nickname.empty()) it->nickname = credential.nickname;
             if (it->psn_duid.empty()) it->psn_duid = credential.psn_duid;
+            if (!it->local.has_value() && !credential.last_known_addr.empty()) {
+                it->local = PsLocalEndpoint{
+                    credential.last_known_addr, 0, PsConsoleState::Ready};
+            }
         }
     }
 

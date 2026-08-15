@@ -75,7 +75,6 @@ private:
     bool doStart(PsSessionCallbacks callbacks);
     bool startupCancelled(const char* stage);
     void releaseRemoteHolepunch();
-    static void sessionEventCb(ChiakiEvent* event, void* user);
     static bool videoSampleCb(uint8_t* buf, size_t buf_size, int32_t frames_lost,
                               bool frame_recovered, void* user);
     void maybeRefreshTransportStats();

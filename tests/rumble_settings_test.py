@@ -13,9 +13,13 @@ def require(condition: bool, message: str) -> None:
 def main() -> None:
     settings_header = (ROOT / "src/ui/stream_settings_activity.h").read_text()
     settings_source = (ROOT / "src/ui/stream_settings_activity.cpp").read_text()
+    ps_settings_header = (ROOT / "src/ui/ps_settings_activity.h").read_text()
+    ps_settings_source = (ROOT / "src/ui/ps_settings_activity.cpp").read_text()
     controller_header = (ROOT / "src/app/stream_controller.h").read_text()
     ps_controller_header = (ROOT / "src/ps/ps_stream_controller.h").read_text()
     ps_controller_source = (ROOT / "src/ps/ps_stream_controller.cpp").read_text()
+    ps_session_source = (ROOT / "src/ps/ps_stream_session.cpp").read_text()
+    ps_bridge_source = (ROOT / "src/ps/ps_media_bridge.cpp").read_text()
     ps_activity = (ROOT / "src/ui/ps_activity.cpp").read_text()
     auth_source = (ROOT / "src/ui/auth_activity.cpp").read_text()
     config = (ROOT / "config/default_config.json").read_text()
@@ -44,10 +48,22 @@ def main() -> None:
             "rumble_->update()" in ps_controller_source and
             "rumble_->stop()" in ps_controller_source,
             "PS streams must forward Chiaki rumble through Switch HD rumble")
-    require("loadStreamSettings()" in ps_activity and
+    require("bridge_.setEventForwarder" in ps_session_source and
+            "bridge_.eventCallback()" in ps_session_source and
+            "&bridge_" in ps_session_source and
+            "event->type == CHIAKI_EVENT_RUMBLE" in ps_bridge_source,
+            "the registered Chiaki event callback must pass through the rumble bridge")
+    require("connect_info_.enable_keyboard = false" in ps_session_source,
+            "PS sessions must not advertise the unimplemented remote keyboard")
+    require("vibration_enabled" in ps_settings_header and
+            "rumble_strength_percent" in ps_settings_header and
+            '"ps_vibration_enabled"' in ps_settings_source and
+            '"ps_rumble_strength_percent"' in ps_settings_source,
+            "PlayStation rumble preferences must persist separately from Xbox")
+    require("loadPsSettings()" in ps_activity and
             "controller->setRumbleEnabled" in ps_activity and
             "controller->setRumbleStrengthPercent" in ps_activity,
-            "PS streams must apply the persisted global rumble settings")
+            "PS streams must apply the persisted PlayStation rumble settings")
     require('cJSON_GetObjectItem(root, "vibration")' in auth_source and
             'cJSON_GetObjectItem(root, "rumble_strength_percent")' in auth_source,
             "startup must restore persisted rumble preferences")
