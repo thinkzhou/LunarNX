@@ -135,11 +135,12 @@ brls::View* PsRegistrationActivity::createContentView() {
     details->addView(status_);
     pairing_card->addView(details);
 
-    auto* keypad = new brls::Box(brls::Axis::COLUMN);
-    keypad->setGrow(1.0f);
-    keypad->setHeight(420);
-    keypad->setAlignItems(brls::AlignItems::CENTER);
-    keypad->setJustifyContent(brls::JustifyContent::CENTER);
+    pairing_account_id_ = manager_->getPairingAccountId();
+    keypad_ = new brls::Box(brls::Axis::COLUMN);
+    keypad_->setGrow(1.0f);
+    keypad_->setHeight(420);
+    keypad_->setAlignItems(brls::AlignItems::CENTER);
+    keypad_->setJustifyContent(brls::JustifyContent::CENTER);
 
     // Number pad (used when an Account ID is already available).
     static const char* kRows[] = {"123", "456", "789", " 0 "};
@@ -170,7 +171,7 @@ brls::View* PsRegistrationActivity::createContentView() {
             });
             row_box->addView(btn);
         }
-        keypad->addView(row_box);
+        keypad_->addView(row_box);
     }
 
     // Action row
@@ -202,47 +203,52 @@ brls::View* PsRegistrationActivity::createContentView() {
         return true;
     });
     action_row->addView(submit_btn);
-    keypad->addView(action_row);
-    const bool needs_phone_account = manager_->getPairingAccountId().empty();
-    if (needs_phone_account) {
-        keypad->setVisibility(brls::Visibility::GONE);
-        pairing_card->addView(keypad);
-        auto* phone = new brls::Box(brls::Axis::COLUMN);
-        phone->setGrow(1.0f);
-        phone->setHeight(420);
-        phone->setAlignItems(brls::AlignItems::CENTER);
-        phone->setJustifyContent(brls::JustifyContent::CENTER);
-        auto* title = new brls::Label();
-        title->setText(brls::getStr("lunarnx/ps/reg_phone_title"));
-        title->setFontSize(16);
-        title->setTextColor(p.text);
-        title->setMarginBottom(10);
-        phone->addView(title);
-        phone_qr_view_ = new QrCodeView(250.0f);
-        phone->addView(phone_qr_view_);
-        auto* note = new brls::Label();
-        note->setText(brls::getStr("lunarnx/ps/reg_phone_note"));
-        note->setFontSize(11);
-        note->setTextColor(p.text_muted);
-        note->setIsWrapping(true);
-        note->setHorizontalAlign(brls::HorizontalAlign::CENTER);
-        note->setWidth(300);
-        note->setMarginTop(8);
-        phone->addView(note);
-        auto* retry = new brls::Button();
-        retry->setText(brls::getStr("lunarnx/ps/reg_pair"));
-        retry->setWidth(180);
-        retry->setMarginTop(10);
-        stylePrimaryButton(retry);
-        retry->registerClickAction([this](brls::View*) -> bool {
-            onSubmitPin();
-            return true;
-        });
-        phone->addView(retry);
-        pairing_card->addView(phone);
-    } else {
-        pairing_card->addView(keypad);
-    }
+    keypad_->addView(action_row);
+    auto* change_account = new brls::Button();
+    change_account->setText(brls::getStr("lunarnx/ps/reg_change_account"));
+    change_account->setWidth(240);
+    change_account->setHeight(46);
+    change_account->setMarginTop(8);
+    styleSecondaryButton(change_account);
+    change_account->registerClickAction([this](brls::View*) -> bool {
+        if (registering_->load()) return true;
+        keypad_->setVisibility(brls::Visibility::GONE);
+        phone_panel_->setVisibility(brls::Visibility::VISIBLE);
+        startPhonePairing();
+        return true;
+    });
+    keypad_->addView(change_account);
+
+    phone_panel_ = new brls::Box(brls::Axis::COLUMN);
+    phone_panel_->setGrow(1.0f);
+    phone_panel_->setHeight(420);
+    phone_panel_->setAlignItems(brls::AlignItems::CENTER);
+    phone_panel_->setJustifyContent(brls::JustifyContent::CENTER);
+    auto* title = new brls::Label();
+    title->setText(brls::getStr("lunarnx/ps/reg_phone_title"));
+    title->setFontSize(16);
+    title->setTextColor(p.text);
+    title->setMarginBottom(10);
+    phone_panel_->addView(title);
+    phone_qr_view_ = new QrCodeView(250.0f);
+    phone_panel_->addView(phone_qr_view_);
+    auto* note = new brls::Label();
+    note->setText(brls::getStr("lunarnx/ps/reg_phone_note"));
+    note->setFontSize(11);
+    note->setTextColor(p.text_muted);
+    note->setIsWrapping(true);
+    note->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    note->setWidth(300);
+    note->setMarginTop(8);
+    phone_panel_->addView(note);
+
+    const bool needs_phone_account = pairing_account_id_.empty();
+    keypad_->setVisibility(needs_phone_account
+        ? brls::Visibility::GONE : brls::Visibility::VISIBLE);
+    phone_panel_->setVisibility(needs_phone_account
+        ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+    pairing_card->addView(keypad_);
+    pairing_card->addView(phone_panel_);
     root->addView(pairing_card);
 
     scroll->setContentView(root);
@@ -257,13 +263,8 @@ void PsRegistrationActivity::startPhonePairing() {
             if (!alive->load()) return;
             brls::sync([this, alive, input = std::move(input)]() mutable {
                 if (!alive->load()) return;
-                if (!manager_->saveManualPairingAccountId(input.account_id)) {
-                    if (status_) {
-                        status_->setText(brls::getStr("lunarnx/ps/reg_phone_save_failed"));
-                        status_->setTextColor(uiPalette().error);
-                    }
-                    return;
-                }
+                pairing_account_id_ = std::move(input.account_id);
+                account_id_changed_ = true;
                 pin_buffer_ = std::to_string(input.pin);
                 if (pin_buffer_.size() < 8) {
                     pin_buffer_.insert(0, 8 - pin_buffer_.size(), '0');
@@ -339,7 +340,6 @@ void PsRegistrationActivity::onSubmitPin() {
     }
 
     auto pin = static_cast<uint32_t>(std::stoul(pin_buffer_));
-    if (pin == 0) return;
 
     registering_->store(true);
     if (status_) status_->setText(brls::getStr("lunarnx/ps/reg_pairing"));
@@ -347,11 +347,15 @@ void PsRegistrationActivity::onSubmitPin() {
     auto alive = alive_;
     auto* status_ptr = status_;
 
-    manager_->registerHost(host_addr_, pin, target_,
+    manager_->registerHost(host_addr_, pin, target_, pairing_account_id_,
         [this, alive, status_ptr](ps::RegistrationResult result, const std::string& err) {
             if (!alive->load()) return;
 
             if (result == ps::RegistrationResult::Success) {
+                if (account_id_changed_ &&
+                    !manager_->saveManualPairingAccountId(pairing_account_id_)) {
+                    diagnosticLog("ui-ps-pair", "paired but could not save local Account ID");
+                }
                 if (status_ptr) {
                     status_ptr->setText(brls::getStr("lunarnx/ps/reg_success"));
                     status_ptr->setTextColor(uiPalette().success);

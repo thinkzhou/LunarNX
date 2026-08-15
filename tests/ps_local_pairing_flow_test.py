@@ -31,6 +31,8 @@ def main() -> None:
     assert "const bool started = ps_manager_->startDiscovery" in activity
     assert "CHIAKI_TARGET_PS4_10" in repository
     assert "CHIAKI_TARGET_PS4_10" in activity
+    assert "CHIAKI_TARGET_PS4_9" in activity
+    assert '"lunarnx/ps/select_ps4_version"' in activity
     assert "CHIAKI_TARGET_PS5_1" in activity
     assert ": 900" not in repository
     assert ", 900);" not in activity

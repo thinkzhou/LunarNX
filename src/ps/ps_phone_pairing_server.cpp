@@ -39,6 +39,10 @@ struct PairingText {
     const char* third_party;
     const char* sent;
     const char* invalid;
+    const char* invalid_username;
+    const char* invalid_decimal;
+    const char* invalid_base64;
+    const char* invalid_pin;
 };
 
 const PairingText& pairingText(const std::string& locale) {
@@ -52,7 +56,11 @@ const PairingText& pairingText(const std::string& locale) {
         "Send to Switch", "Account ID and PIN are sent only to LunarNX on your local network.",
         "Username lookup sends only the entered username to the third-party FlipScreen service. No password or PSN token is sent.",
         "Sent. Check your Switch for the pairing result.",
-        "Invalid Account ID or PIN. Enter a decimal Account ID or an 8-byte Base64 value, plus exactly 8 PIN digits."
+        "Invalid Account ID or PIN.",
+        "PSN username could not be resolved. Check the Online ID or try an Account ID instead.",
+        "Invalid decimal Account ID. Enter digits only, within the unsigned 64-bit range.",
+        "Invalid Base64 Account ID. It must decode to exactly 8 bytes.",
+        "PIN must contain exactly 8 digits."
     };
     static const PairingText simplified{
         "zh-CN", "LunarNX 本地配对",
@@ -64,7 +72,11 @@ const PairingText& pairingText(const std::string& locale) {
         "发送到 Switch", "Account ID 和 PIN 只会通过当前局域网发送给 LunarNX。",
         "用户名查询只会把输入的用户名发送给第三方 FlipScreen 服务，不会发送密码或 PSN token。",
         "已发送，请查看 Switch 上的配对结果。",
-        "Account ID 或 PIN 无效。请输入十进制 Account ID 或解码后为 8 字节的 Base64，以及正好 8 位 PIN。"
+        "Account ID 或 PIN 无效。",
+        "无法查询该 PSN 用户名。请检查在线 ID，或改用 Account ID。",
+        "十进制 Account ID 无效。只能输入无符号 64 位范围内的数字。",
+        "Base64 Account ID 无效。解码后必须正好为 8 字节。",
+        "PIN 必须正好包含 8 位数字。"
     };
     static const PairingText traditional{
         "zh-TW", "LunarNX 本機配對",
@@ -76,7 +88,11 @@ const PairingText& pairingText(const std::string& locale) {
         "傳送至 Switch", "Account ID 和 PIN 只會透過目前區域網路傳送給 LunarNX。",
         "使用者名稱查詢只會將輸入的名稱傳送給第三方 FlipScreen 服務，不會傳送密碼或 PSN token。",
         "已傳送，請查看 Switch 上的配對結果。",
-        "Account ID 或 PIN 無效。請輸入十進位 Account ID 或解碼後為 8 位元組的 Base64，以及正好 8 位 PIN。"
+        "Account ID 或 PIN 無效。",
+        "無法查詢該 PSN 使用者名稱。請檢查線上 ID，或改用 Account ID。",
+        "十進位 Account ID 無效。只能輸入無符號 64 位範圍內的數字。",
+        "Base64 Account ID 無效。解碼後必須正好為 8 位元組。",
+        "PIN 必須正好包含 8 位數字。"
     };
     if (locale == "zh-Hans") return simplified;
     if (locale == "zh-Hant") return traditional;
@@ -148,8 +164,9 @@ std::string pairingPage(const std::string& submit_path, const PairingText& text)
         "</p><p class=note>" + text.third_party + "</p></main></body></html>";
 }
 
-std::string resultPage(bool ok, const PairingText& text) {
-    const char* message = ok ? text.sent : text.invalid;
+std::string resultPage(bool ok, const PairingText& text,
+                       const char* error = nullptr) {
+    const char* message = ok ? text.sent : (error ? error : text.invalid);
     return "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">"
         "<body style=\"font-family:sans-serif;padding:32px\"><h2>" + std::string(ok ? text.submit : text.title) +
         "</h2><p>" + message + "</p></body>";
@@ -317,26 +334,32 @@ void PsPhonePairingServer::run(std::string session_path, std::string locale,
             std::string account_id;
             std::string pin_text;
             std::string lookup_error;
-            bool valid = formValue(body, "account_type", account_type) &&
+            const bool has_fields = formValue(body, "account_type", account_type) &&
                 formValue(body, "account_input", account_input) &&
-                formValue(body, "pin", pin_text) && pin_text.size() == 8 &&
+                formValue(body, "pin", pin_text);
+            const bool pin_valid = has_fields && pin_text.size() == 8 &&
                 std::all_of(pin_text.begin(), pin_text.end(), [](unsigned char c) {
                     return std::isdigit(c) != 0;
                 });
+            bool valid = has_fields && pin_valid;
+            const char* validation_error = pin_valid ? text.invalid : text.invalid_pin;
             if (valid) {
                 if (account_type == "username") {
                     valid = lookupPsnAccountId(account_input, account_id, lookup_error);
+                    if (!valid) validation_error = text.invalid_username;
                 } else if (account_type == "decimal_id") {
                     valid = decimalPsnAccountIdToBase64(account_input, account_id);
+                    if (!valid) validation_error = text.invalid_decimal;
                 } else if (account_type == "base64_id") {
                     valid = normalizeBase64PsnAccountId(account_input, account_id);
+                    if (!valid) validation_error = text.invalid_base64;
                 } else {
                     valid = false;
                 }
             }
             uint32_t pin = valid ? static_cast<uint32_t>(std::strtoul(pin_text.c_str(), nullptr, 10)) : 0;
-            valid = valid && pin != 0;
-            sendResponse(client, valid ? 200 : 400, resultPage(valid, text));
+            sendResponse(client, valid ? 200 : 400,
+                         resultPage(valid, text, validation_error));
             if (valid) {
                 consumed = true;
                 if (callback) callback(PsPhonePairingInput{std::move(account_id), pin});

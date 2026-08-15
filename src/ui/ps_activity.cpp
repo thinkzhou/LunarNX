@@ -857,8 +857,21 @@ bool PsActivity::completePendingWake(const std::vector<ps::PsConsole>& hosts) {
 }
 
 void PsActivity::pairConsole(const ps::PsConsole& host) {
-    const int target = host.target >= CHIAKI_TARGET_PS5_UNKNOWN
-        ? CHIAKI_TARGET_PS5_1 : CHIAKI_TARGET_PS4_10;
+    if (host.target >= CHIAKI_TARGET_PS5_UNKNOWN) {
+        pairConsoleWithTarget(host, CHIAKI_TARGET_PS5_1);
+        return;
+    }
+    auto* dialog = new brls::Dialog(
+        brls::getStr("lunarnx/ps/select_ps4_version"));
+    dialog->addButton(brls::getStr("lunarnx/ps/ps4_version_10"),
+        [this, host]() { pairConsoleWithTarget(host, CHIAKI_TARGET_PS4_10); });
+    dialog->addButton(brls::getStr("lunarnx/ps/ps4_version_9"),
+        [this, host]() { pairConsoleWithTarget(host, CHIAKI_TARGET_PS4_9); });
+    dialog->addButton(brls::getStr("lunarnx/common/cancel"), []() {});
+    dialog->open();
+}
+
+void PsActivity::pairConsoleWithTarget(const ps::PsConsole& host, int target) {
     std::string addr = host.local.has_value() ? host.local->ip : "";
     brls::Application::pushActivity(
         new PsRegistrationActivity(ps_manager_, addr, target,

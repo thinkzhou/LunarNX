@@ -60,7 +60,7 @@ public:
 
     // Registration
     void registerHost(const std::string& host_addr, uint32_t pin, int target,
-                      RegistrationCallback cb);
+                      const std::string& account_id, RegistrationCallback cb);
     void cancelRegistration();
 
     // Wakeup

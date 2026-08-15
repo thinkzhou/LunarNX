@@ -119,13 +119,12 @@ bool PsManager::saveManualPairingAccountId(const std::string& account_id) {
 }
 
 void PsManager::registerHost(const std::string& host_addr, uint32_t pin, int target,
-                              RegistrationCallback cb) {
+                             const std::string& account_id, RegistrationCallback cb) {
     if (registration_) {
         registration_->stop();
         registration_.reset();
     }
 
-    const std::string account_id = getPairingAccountId();
     std::string account_id_bytes;
     if (target >= CHIAKI_TARGET_PS4_9 &&
         (!base64Decode(account_id, account_id_bytes) || account_id_bytes.size() != 8)) {

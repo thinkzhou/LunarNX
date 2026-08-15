@@ -35,7 +35,11 @@ private:
     brls::Label* status_ = nullptr;
     brls::Label* pin_display_ = nullptr;
     QrCodeView* phone_qr_view_ = nullptr;
+    brls::Box* keypad_ = nullptr;
+    brls::Box* phone_panel_ = nullptr;
     std::string pin_buffer_;
+    std::string pairing_account_id_;
+    bool account_id_changed_ = false;
 
     void onDigit(char digit);
     void onBackspace();

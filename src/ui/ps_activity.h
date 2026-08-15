@@ -66,6 +66,7 @@ private:
     void rebuildConsoleList(const std::vector<ps::PsConsole>& hosts);
     bool completePendingWake(const std::vector<ps::PsConsole>& hosts);
     void pairConsole(const ps::PsConsole& host);
+    void pairConsoleWithTarget(const ps::PsConsole& host, int target);
     void wakeupConsole(const ps::PsConsole& host);
     void connectToConsole(const ps::PsConsole& host);
     void showRemotePlayHelp();

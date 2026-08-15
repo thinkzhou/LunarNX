@@ -14,6 +14,11 @@ def main():
     assert "decimalPsnAccountIdToBase64(account_input, account_id)" in source
     assert "normalizeBase64PsnAccountId(account_input, account_id)" in source
     assert "pin_text.size() == 8" in source
+    assert "valid = valid && pin != 0" not in source
+    assert "PSN username could not be resolved" in source
+    assert "Invalid decimal Account ID" in source
+    assert "Invalid Base64 Account ID" in source
+    assert "PIN must contain exactly 8 digits" in source
     assert 'name=\\"account_input\\"' in source
     assert 'name=\\"account_type\\"' in source
     assert 'value=\\"username\\"' in source
@@ -28,11 +33,16 @@ def main():
     assert 'type=\\"password\\"' in source
     assert "sessionToken" in source
     assert "PsPhonePairingServer" in activity_h
-    assert "manager_->getPairingAccountId().empty()" in activity
+    assert "pairing_account_id_ = manager_->getPairingAccountId()" in activity
     assert "makeQrCode(phone_pairing_server_.getHelperUrl())" in activity
-    assert "saveManualPairingAccountId(input.account_id)" in activity
+    assert "saveManualPairingAccountId(pairing_account_id_)" in activity
+    success = activity.index("RegistrationResult::Success")
+    save = activity.index("saveManualPairingAccountId")
+    assert success < save
+    assert '"lunarnx/ps/reg_change_account"' in activity
     assert "pin_buffer_ = std::to_string(input.pin)" in activity
     assert "onSubmitPin();" in activity
+    assert "if (pin == 0) return;" not in activity
     print("PS phone pairing tests passed")
 
 
