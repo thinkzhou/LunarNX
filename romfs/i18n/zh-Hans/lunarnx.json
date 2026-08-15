@@ -444,7 +444,7 @@
   "reg_instructions": "在你的 PlayStation 上,前往 设置 > 远程串流 >\n添加设备 并输入屏幕显示的 PIN。",
   "reg_phone_title": "扫码输入 Account ID 和 PIN",
   "reg_phone_note": "请使用同一 Wi-Fi 下的手机。Account ID 会保存供以后本地配对使用。",
-  "reg_phone_waiting": "请扫描二维码，输入 Base64 Account ID 和主机 PIN。",
+  "reg_phone_waiting": "请扫描二维码，输入 PSN 用户名或 Account ID，以及主机 PIN。",
   "reg_phone_received_need_ip": "已收到 Account ID 和 PIN。请输入主机 IP，然后选择配对。",
   "reg_phone_save_failed": "无法保存 Account ID，请检查 SD 卡访问后重试。",
   "reg_phone_start_failed": "无法启动手机配对：{0}",

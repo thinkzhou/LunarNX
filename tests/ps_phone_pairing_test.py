@@ -11,9 +11,15 @@ def main():
     assert "struct PsPhonePairingInput" in header
     assert "std::string account_id" in header
     assert "uint32_t pin" in header
-    assert "isValidPsnAccountId" in source
+    assert "normalizePsnAccountId(account_input, account_id)" in source
     assert "pin_text.size() == 8" in source
-    assert 'name=\\"account_id\\"' in source
+    assert 'name=\\"account_input\\"' in source
+    assert 'name=\\"account_type\\"' in source
+    assert 'value=\\"username\\"' in source
+    assert 'value=\\"account_id\\"' in source
+    assert 'account_type == "username"' in source
+    assert "lookupPsnAccountId(account_input, account_id, lookup_error)" in source
+    assert "third-party FlipScreen" in source
     assert 'name=\\"pin\\"' in source
     assert 'type=\\"password\\"' in source
     assert "sessionToken" in source
