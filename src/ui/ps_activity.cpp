@@ -350,10 +350,23 @@ brls::View* PsActivity::createContentView() {
     auto* pair_button = makeSidebarButton(brls::getStr("lunarnx/ps/pair_by_ip"),
         false, UiIcon::Link);
     pair_button->registerClickAction([this](brls::View*) -> bool {
-        ps::PsConsole console;
-        console.target = 1000100;
-        console.nickname = "PS5";
-        pairConsole(console);
+        const ps::PsConsole console;
+        auto* dialog = new brls::Dialog(
+            brls::getStr("lunarnx/ps/select_console_type"));
+        dialog->addButton(brls::getStr("lunarnx/ps/ps4_version_9"),
+            [this, console]() {
+                pairConsoleWithTarget(console, CHIAKI_TARGET_PS4_9);
+            });
+        dialog->addButton(brls::getStr("lunarnx/ps/ps4_version_10"),
+            [this, console]() {
+                pairConsoleWithTarget(console, CHIAKI_TARGET_PS4_10);
+            });
+        dialog->addButton(brls::getStr("lunarnx/ps/pair_ps5"),
+            [this, console]() {
+                pairConsoleWithTarget(console, CHIAKI_TARGET_PS5_1);
+            });
+        dialog->addButton(brls::getStr("lunarnx/common/cancel"), []() {});
+        dialog->open();
         return true;
     });
     sidebar->addView(pair_button);

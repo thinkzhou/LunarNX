@@ -34,6 +34,20 @@ def main() -> None:
     assert "CHIAKI_TARGET_PS4_9" in activity
     assert '"lunarnx/ps/select_ps4_version"' in activity
     assert "CHIAKI_TARGET_PS5_1" in activity
+    sidebar_pairing = activity.split(
+        'auto* pair_button = makeSidebarButton', 1)[1].split(
+        'sidebar->addView(pair_button);', 1)[0]
+    assert "pairConsole(console)" not in sidebar_pairing
+    assert '"lunarnx/ps/select_console_type"' in sidebar_pairing
+    assert "pairConsoleWithTarget(console, CHIAKI_TARGET_PS4_9)" in sidebar_pairing
+    assert "pairConsoleWithTarget(console, CHIAKI_TARGET_PS4_10)" in sidebar_pairing
+    assert "pairConsoleWithTarget(console, CHIAKI_TARGET_PS5_1)" in sidebar_pairing
+
+    for locale in ("en-US", "zh-Hans", "zh-Hant"):
+        strings = (ROOT / "romfs/i18n" / locale / "lunarnx.json").read_text()
+        assert '"select_console_type"' in strings
+        assert '"ps4_version_9"' in strings
+        assert '"ps4_version_10"' in strings
     assert ": 900" not in repository
     assert ", 900);" not in activity
 
