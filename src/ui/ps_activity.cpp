@@ -491,8 +491,8 @@ brls::View* PsActivity::createContentView() {
         });
         manual_card->addView(button);
     };
-    add_pair_button(brls::getStr("lunarnx/ps/pair_ps4"), 900);
-    add_pair_button(brls::getStr("lunarnx/ps/pair_ps5"), 1000100);
+    add_pair_button(brls::getStr("lunarnx/ps/pair_ps4"), CHIAKI_TARGET_PS4_10);
+    add_pair_button(brls::getStr("lunarnx/ps/pair_ps5"), CHIAKI_TARGET_PS5_1);
     local_actions_->addView(manual_card);
     root->addView(local_actions_);
 
@@ -858,7 +858,8 @@ bool PsActivity::completePendingWake(const std::vector<ps::PsConsole>& hosts) {
 }
 
 void PsActivity::pairConsole(const ps::PsConsole& host) {
-    int target = host.target >= 1000000 ? 1000100 : 900;
+    const int target = host.target >= CHIAKI_TARGET_PS5_UNKNOWN
+        ? CHIAKI_TARGET_PS5_1 : CHIAKI_TARGET_PS4_10;
     std::string addr = host.local.has_value() ? host.local->ip : "";
     brls::Application::pushActivity(
         new PsRegistrationActivity(ps_manager_, addr, target,

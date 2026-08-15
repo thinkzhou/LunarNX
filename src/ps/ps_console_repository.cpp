@@ -158,7 +158,8 @@ bool PsConsoleRepository::startDiscovery(HostListCallback cb) {
                 c.stable_id = "lan:" + raw.host_id;
             }
             c.nickname = raw.host_name.empty() ? raw.host_addr : raw.host_name;
-            c.target = raw.console_type == PsConsoleType::PS5 ? 1000100 : 900;
+            c.target = raw.console_type == PsConsoleType::PS5
+                ? CHIAKI_TARGET_PS5_1 : CHIAKI_TARGET_PS4_10;
             c.local = PsLocalEndpoint{raw.host_addr, raw.host_request_port, raw.state};
             consoles.push_back(std::move(c));
         }

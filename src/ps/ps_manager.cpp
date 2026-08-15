@@ -3,6 +3,7 @@
 #include "ps_manager.h"
 #include "ps_discovery.h"
 #include "ps_registration.h"
+#include "psn_auth_utils.h"
 #include "chiaki_log_adapter.h"
 #include "../common.h"
 #include "../diagnostics.h"
@@ -112,13 +113,26 @@ void PsManager::registerHost(const std::string& host_addr, uint32_t pin, int tar
         registration_.reset();
     }
 
+    const std::string account_id = psn_auth_.getAccountId();
+    std::string account_id_bytes;
+    if (target >= CHIAKI_TARGET_PS4_9 &&
+        (!base64Decode(account_id, account_id_bytes) || account_id_bytes.size() != 8)) {
+        auto callback = std::make_shared<RegistrationCallback>(std::move(cb));
+        brls::sync([callback]() {
+            if (*callback) {
+                (*callback)(RegistrationResult::Failed,
+                    "PSN Account ID is required for local pairing; sign in to PSN first");
+            }
+        });
+        return;
+    }
+
     registration_ = std::make_unique<PsRegistration>(&chiaki_log_);
     auto* result = new ChiakiRegisteredHost{};
     auto alive = std::make_shared<std::atomic<bool>>(true);
 
     auto callback = std::make_shared<RegistrationCallback>(std::move(cb));
-    const bool started = registration_->start(host_addr, pin, target,
-        psn_auth_.getAccountId(), result,
+    const bool started = registration_->start(host_addr, pin, target, account_id, result,
         [this, callback, result, alive, host_addr, pin, target](
             RegistrationResult res, const std::string& err) {
             if (!alive->load()) { delete result; return; }
