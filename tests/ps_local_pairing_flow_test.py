@@ -21,15 +21,21 @@ def main() -> None:
     assert "int target" in (ROOT / "src/ps/ps_console.h").read_text()
     assert "bool startDiscovery(HostListCallback cb)" in discovery or True
     assert "initialized_" in registration_h
-    assert "if (!initialized_.exchange(false)) return;" in registration
-    assert "const bool started = registration_->start" in manager
+    assert "if (initialized_.exchange(false))" in registration
+    assert "const ChiakiErrorCode start_error = registration_->start" in manager
+    assert "chiaki_error_string(start_error)" in manager
     assert '"Local Account ID is required; use phone pairing' in manager
-    assert "base64Decode(account_id, account_id_bytes)" in manager
-    assert "account_id_bytes.size() != 8" in manager
-    assert "registration_->start(host_addr, pin, target, account_id" in manager
-    assert "psn_account_id" in registration
+    assert "target >= CHIAKI_TARGET_PS4_9 && account_id.empty()" in manager
+    assert "registration_->start(" in manager and \
+        "host_addr, pin, target, account_id, result" in manager
+    assert "chiaki_base64_decode" in registration
+    assert "account_id_size != CHIAKI_PSN_ACCOUNT_ID_SIZE" in registration
     assert "info.broadcast = false" in registration
     assert "target >= CHIAKI_TARGET_PS4_9" in registration
+    assert "chiaki_log_sniffer_init" in registration
+    assert "registrationFailureDetail" in registration
+    assert "ChiakiLogSniffer" in registration_h
+    assert "phone_pairing_server_.stop();" in (ROOT / "src/ui/ps_registration_activity.cpp").read_text()
     assert "const bool started = ps_manager_->startDiscovery" in activity
     assert "raw.target" in repository
     credential_merge = repository.split(
@@ -48,6 +54,10 @@ def main() -> None:
     assert "pairConsoleWithTarget(console, CHIAKI_TARGET_PS4_9)" in sidebar_pairing
     assert "pairConsoleWithTarget(console, CHIAKI_TARGET_PS4_10)" in sidebar_pairing
     assert "pairConsoleWithTarget(console, CHIAKI_TARGET_PS5_1)" in sidebar_pairing
+    pair_with_target = activity.split(
+        "void PsActivity::pairConsoleWithTarget", 1)[1].split(
+        "void PsActivity::wakeupConsole", 1)[0]
+    assert "stopDiscovery();" in pair_with_target
 
     for locale in ("en-US", "zh-Hans", "zh-Hant"):
         strings = (ROOT / "romfs/i18n" / locale / "lunarnx.json").read_text()

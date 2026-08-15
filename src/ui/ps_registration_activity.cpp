@@ -389,6 +389,11 @@ void PsRegistrationActivity::onSubmitPin() {
     registering_->store(true);
     if (status_) status_->setText(brls::getStr("lunarnx/ps/reg_pairing"));
 
+    // The phone helper is no longer needed after it has delivered the Account
+    // ID and PIN. Join it before Chiaki creates its registration worker so the
+    // Switch thread limit cannot make chiaki_regist_start() fail spuriously.
+    phone_pairing_server_.stop();
+
     auto alive = alive_;
     auto* status_ptr = status_;
 

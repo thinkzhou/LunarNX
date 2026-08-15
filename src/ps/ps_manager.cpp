@@ -125,9 +125,7 @@ void PsManager::registerHost(const std::string& host_addr, uint32_t pin, int tar
         registration_.reset();
     }
 
-    std::string account_id_bytes;
-    if (target >= CHIAKI_TARGET_PS4_9 &&
-        (!base64Decode(account_id, account_id_bytes) || account_id_bytes.size() != 8)) {
+    if (target >= CHIAKI_TARGET_PS4_9 && account_id.empty()) {
         auto callback = std::make_shared<RegistrationCallback>(std::move(cb));
         brls::sync([callback]() {
             if (*callback) {
@@ -143,7 +141,8 @@ void PsManager::registerHost(const std::string& host_addr, uint32_t pin, int tar
     auto alive = std::make_shared<std::atomic<bool>>(true);
 
     auto callback = std::make_shared<RegistrationCallback>(std::move(cb));
-    const bool started = registration_->start(host_addr, pin, target, account_id, result,
+    const ChiakiErrorCode start_error = registration_->start(
+        host_addr, pin, target, account_id, result,
         [this, callback, result, alive, host_addr, pin, target](
             RegistrationResult res, const std::string& err) {
             if (!alive->load()) { delete result; return; }
@@ -171,12 +170,13 @@ void PsManager::registerHost(const std::string& host_addr, uint32_t pin, int tar
                 if (*callback) (*callback)(res, err);
             });
         });
-    if (!started) {
+    if (start_error != CHIAKI_ERR_SUCCESS) {
         delete result;
         registration_.reset();
-        brls::sync([callback]() {
-            if (*callback) (*callback)(RegistrationResult::Failed,
-                                       "Could not start local pairing");
+        const std::string error = "Could not start local pairing: " +
+            std::string(chiaki_error_string(start_error));
+        brls::sync([callback, error]() {
+            if (*callback) (*callback)(RegistrationResult::Failed, error);
         });
     }
 }

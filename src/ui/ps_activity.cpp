@@ -906,6 +906,10 @@ void PsActivity::pairConsole(const ps::PsConsole& host) {
 }
 
 void PsActivity::pairConsoleWithTarget(const ps::PsConsole& host, int target) {
+    // Chiaki registration owns its own UDP search and worker thread. Stop the
+    // background discovery service before opening the registration flow to
+    // avoid competing searches and preserve a Switch thread slot.
+    stopDiscovery();
     std::string addr = host.local.has_value() ? host.local->ip : "";
     brls::Application::pushActivity(
         new PsRegistrationActivity(ps_manager_, addr, target,
