@@ -18,6 +18,8 @@ DiscoveredConsole convertHost(ChiakiDiscoveryHost& host) {
     console.host_request_port = host.host_request_port;
     console.console_type = chiaki_discovery_host_is_ps5(&host)
         ? PsConsoleType::PS5 : PsConsoleType::PS4;
+    console.target = static_cast<int>(
+        chiaki_discovery_host_system_version_target(&host));
     switch (host.state) {
         case CHIAKI_DISCOVERY_HOST_STATE_READY:
             console.state = PsConsoleState::Ready;

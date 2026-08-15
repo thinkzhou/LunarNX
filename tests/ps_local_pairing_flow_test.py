@@ -17,6 +17,8 @@ def main() -> None:
     assert "current_ip | ~subnet_mask" in discovery
     assert "options.broadcast_addrs = &directed_broadcast" in discovery
     assert "options.broadcast_num = 1" in discovery
+    assert "chiaki_discovery_host_system_version_target(&host)" in discovery
+    assert "int target" in (ROOT / "src/ps/ps_console.h").read_text()
     assert "bool startDiscovery(HostListCallback cb)" in discovery or True
     assert "initialized_" in registration_h
     assert "if (!initialized_.exchange(false)) return;" in registration
@@ -29,7 +31,11 @@ def main() -> None:
     assert "info.broadcast = false" in registration
     assert "target >= CHIAKI_TARGET_PS4_9" in registration
     assert "const bool started = ps_manager_->startDiscovery" in activity
-    assert "CHIAKI_TARGET_PS4_10" in repository
+    assert "raw.target" in repository
+    credential_merge = repository.split(
+        "for (const auto& credential : credentials_)", 1)[1].split(
+        "for (const auto& psn : psn_consoles_)", 1)[0]
+    assert "it->target = credential.target" in credential_merge
     assert "CHIAKI_TARGET_PS4_10" in activity
     assert "CHIAKI_TARGET_PS4_9" in activity
     assert '"lunarnx/ps/select_ps4_version"' in activity
@@ -48,6 +54,9 @@ def main() -> None:
         assert '"select_console_type"' in strings
         assert '"ps4_version_9"' in strings
         assert '"ps4_version_10"' in strings
+        assert "7.0" in strings and "7.99" in strings
+        assert "8.0" in strings
+        assert "9.x" not in strings
     assert ": 900" not in repository
     assert ", 900);" not in activity
 

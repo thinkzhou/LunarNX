@@ -99,6 +99,7 @@ struct DiscoveredConsole {
     std::string host_name;
     std::string host_id;
     PsConsoleType console_type = PsConsoleType::Unknown;
+    int target = 0;
     PsConsoleState state = PsConsoleState::Unknown;
     uint16_t host_request_port = 0;
     std::string system_version;
