@@ -417,7 +417,7 @@
   "help_remote_play": "在 PS5 上:设置 > 系统 > 远程串流 > 启用远程串流。",
   "signed_in": "已登录 PlayStation Network",
   "session_refresh_needed": "已保存的 PSN 会话需要刷新",
-  "not_signed_in": "未登录 - 本地配对和远程串流仍可用",
+  "not_signed_in": "未登录 - 本地配对仍可用；PSN 远程串流需要登录",
   "switch_account": "切换账户",
   "sign_in": "登录",
   "login_title": "登录 PlayStation Network",

@@ -20,8 +20,10 @@ def main():
     assert "getSensitive" in source
     assert '"encoded_id"' in source
     assert "getPairingAccountId" in manager
-    assert "psn_auth_.getAccountId()" in manager
     assert "loadManualPsnAccountId()" in manager
+    pairing_method = manager.split("std::string PsManager::getPairingAccountId() const", 1)[1]
+    pairing_method = pairing_method.split("}", 1)[0]
+    assert "psn_auth_.getAccountId()" not in pairing_method
     print("PS pairing account tests passed")
 
 

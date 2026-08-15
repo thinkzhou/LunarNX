@@ -417,7 +417,7 @@
   "help_remote_play": "在 PS5 上:設定 > 系統 > 遠端遊玩 > 啟用遠端遊玩。",
   "signed_in": "已登入 PlayStation Network",
   "session_refresh_needed": "已儲存的 PSN 工作階段需要重新整理",
-  "not_signed_in": "未登入 - 本機配對和遠端遊玩仍可使用",
+  "not_signed_in": "未登入 - 本機配對仍可使用；PSN 遠端遊玩需要登入",
   "switch_account": "切換帳戶",
   "sign_in": "登入",
   "login_title": "登入 PlayStation Network",

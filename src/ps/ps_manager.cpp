@@ -108,8 +108,9 @@ std::optional<RegisteredCredential> PsManager::getCredential(
 }
 
 std::string PsManager::getPairingAccountId() const {
-    const std::string psn_account_id = psn_auth_.getAccountId();
-    if (isValidPsnAccountId(psn_account_id)) return psn_account_id;
+    // Local registration has its own identity. Do not silently reuse the PSN
+    // account selected for remote play: it may not be the user currently
+    // active on the console, which makes an otherwise correct PIN fail.
     return loadManualPsnAccountId();
 }
 
@@ -132,7 +133,7 @@ void PsManager::registerHost(const std::string& host_addr, uint32_t pin, int tar
         brls::sync([callback]() {
             if (*callback) {
                 (*callback)(RegistrationResult::Failed,
-                    "PSN Account ID is required; sign in to PSN or use phone pairing");
+                    "Local Account ID is required; use phone pairing");
             }
         });
         return;

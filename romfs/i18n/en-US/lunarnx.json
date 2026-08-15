@@ -417,7 +417,7 @@
   "help_remote_play": "On PS5: Settings > System > Remote Play > Enable Remote Play.",
   "signed_in": "Signed in to PlayStation Network",
   "session_refresh_needed": "Saved PSN session needs refresh",
-  "not_signed_in": "Not signed in - local Pair and Remote Play remain available",
+  "not_signed_in": "Not signed in - local pairing is available; PSN Remote Play requires sign-in",
   "switch_account": "Switch Account",
   "sign_in": "Sign In",
   "login_title": "Sign in to PlayStation Network",
