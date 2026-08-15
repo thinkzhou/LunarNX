@@ -7,6 +7,8 @@
 namespace lunar::ps {
 
 bool isValidPsnAccountId(const std::string& account_id);
+bool normalizeBase64PsnAccountId(const std::string& input, std::string& account_id);
+bool decimalPsnAccountIdToBase64(const std::string& input, std::string& account_id);
 bool normalizePsnAccountId(const std::string& input, std::string& account_id);
 bool lookupPsnAccountId(const std::string& username, std::string& account_id,
                         std::string& error);

@@ -16,6 +16,16 @@ namespace {
 
 constexpr const char* kConfigKey = "ps_local_account_id";
 
+std::string trim(const std::string& input) {
+    const auto first = std::find_if_not(input.begin(), input.end(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    });
+    const auto last = std::find_if_not(input.rbegin(), input.rend(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    }).base();
+    return first < last ? std::string(first, last) : std::string();
+}
+
 std::string urlEncode(const std::string& value) {
     static constexpr char hex[] = "0123456789ABCDEF";
     std::string encoded;
@@ -63,19 +73,16 @@ bool isValidPsnAccountId(const std::string& account_id) {
     return base64Decode(account_id, decoded) && decoded.size() == 8;
 }
 
-bool normalizePsnAccountId(const std::string& input, std::string& account_id) {
-    const auto first = std::find_if_not(input.begin(), input.end(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-    });
-    const auto last = std::find_if_not(input.rbegin(), input.rend(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-    }).base();
-    if (first >= last) return false;
-    const std::string value(first, last);
-    if (isValidPsnAccountId(value)) {
-        account_id = value;
-        return true;
-    }
+bool normalizeBase64PsnAccountId(const std::string& input, std::string& account_id) {
+    const std::string value = trim(input);
+    if (!isValidPsnAccountId(value)) return false;
+    account_id = value;
+    return true;
+}
+
+bool decimalPsnAccountIdToBase64(const std::string& input, std::string& account_id) {
+    const std::string value = trim(input);
+    if (value.empty()) return false;
     if (!std::all_of(value.begin(), value.end(), [](unsigned char c) {
             return std::isdigit(c) != 0;
         })) {
@@ -96,20 +103,19 @@ bool normalizePsnAccountId(const std::string& input, std::string& account_id) {
     }
 }
 
+bool normalizePsnAccountId(const std::string& input, std::string& account_id) {
+    return normalizeBase64PsnAccountId(input, account_id) ||
+        decimalPsnAccountIdToBase64(input, account_id);
+}
+
 bool lookupPsnAccountId(const std::string& username, std::string& account_id,
                         std::string& error) {
     error.clear();
-    const auto first = std::find_if_not(username.begin(), username.end(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-    });
-    const auto last = std::find_if_not(username.rbegin(), username.rend(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-    }).base();
-    if (first >= last || static_cast<size_t>(last - first) > 64) {
+    const std::string value = trim(username);
+    if (value.empty() || value.size() > 64) {
         error = "Invalid PSN username";
         return false;
     }
-    const std::string value(first, last);
     lunar::api::HttpClient client;
     const std::string base_url = "https://psn.flipscreen.games/search.php?username=";
     const auto response = client.getSensitive(

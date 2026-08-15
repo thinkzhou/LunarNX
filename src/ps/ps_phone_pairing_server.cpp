@@ -28,9 +28,11 @@ struct PairingText {
     const char* detail;
     const char* account_type;
     const char* username_option;
-    const char* id_option;
+    const char* decimal_option;
+    const char* base64_option;
     const char* account;
     const char* account_hint;
+    const char* format_hint;
     const char* pin;
     const char* submit;
     const char* privacy;
@@ -44,8 +46,9 @@ const PairingText& pairingText(const std::string& locale) {
         "en", "LunarNX local pairing",
         "Enter the console user's PSN identity, then the 8-digit PIN shown by the console.",
         "Identity format", "PSN username (public lookup)",
-        "Decimal or Base64 Account ID (local conversion)",
-        "PSN username or Account ID", "Username, decimal number, or Base64 value", "8-digit PIN",
+        "Decimal Account ID (local conversion)", "Base64 Account ID (use as entered)",
+        "PSN username or Account ID", "Enter the format selected above",
+        "Examples: username OnlineID · decimal 12345678901234567 · Base64 AbCdEf12345=", "8-digit PIN",
         "Send to Switch", "Account ID and PIN are sent only to LunarNX on your local network.",
         "Username lookup sends only the entered username to the third-party FlipScreen service. No password or PSN token is sent.",
         "Sent. Check your Switch for the pairing result.",
@@ -55,8 +58,9 @@ const PairingText& pairingText(const std::string& locale) {
         "zh-CN", "LunarNX 本地配对",
         "请输入主机用户的 PSN 身份信息，然后输入主机画面显示的 8 位 PIN 码。",
         "身份信息格式", "PSN 用户名（公共查询）",
-        "十进制或 Base64 Account ID（本地转换）",
-        "PSN 用户名或 Account ID", "用户名、十进制数字或 Base64 内容", "8 位 PIN 码",
+        "十进制 Account ID（本地转换）", "Base64 Account ID（按原值使用）",
+        "PSN 用户名或 Account ID", "请输入上方所选格式",
+        "示例：用户名 OnlineID · 十进制 12345678901234567 · Base64 AbCdEf12345=", "8 位 PIN 码",
         "发送到 Switch", "Account ID 和 PIN 只会通过当前局域网发送给 LunarNX。",
         "用户名查询只会把输入的用户名发送给第三方 FlipScreen 服务，不会发送密码或 PSN token。",
         "已发送，请查看 Switch 上的配对结果。",
@@ -66,8 +70,9 @@ const PairingText& pairingText(const std::string& locale) {
         "zh-TW", "LunarNX 本機配對",
         "請輸入主機使用者的 PSN 身分資訊，然後輸入主機畫面顯示的 8 位 PIN 碼。",
         "身分資訊格式", "PSN 使用者名稱（公開查詢）",
-        "十進位或 Base64 Account ID（本機轉換）",
-        "PSN 使用者名稱或 Account ID", "使用者名稱、十進位數字或 Base64 內容", "8 位 PIN 碼",
+        "十進位 Account ID（本機轉換）", "Base64 Account ID（依原值使用）",
+        "PSN 使用者名稱或 Account ID", "請輸入上方所選格式",
+        "範例：使用者名稱 OnlineID · 十進位 12345678901234567 · Base64 AbCdEf12345=", "8 位 PIN 碼",
         "傳送至 Switch", "Account ID 和 PIN 只會透過目前區域網路傳送給 LunarNX。",
         "使用者名稱查詢只會將輸入的名稱傳送給第三方 FlipScreen 服務，不會傳送密碼或 PSN token。",
         "已傳送，請查看 Switch 上的配對結果。",
@@ -134,9 +139,10 @@ std::string pairingPage(const std::string& submit_path, const PairingText& text)
         "</h1><p>" + text.detail + "</p><form method=post action=\"" + submit_path +
         "\"><label>" + text.account_type + "</label><select name=\"account_type\">"
         "<option value=\"username\">" + text.username_option + "</option>"
-        "<option value=\"account_id\">" + text.id_option + "</option></select>"
+        "<option value=\"decimal_id\">" + text.decimal_option + "</option>"
+        "<option value=\"base64_id\">" + text.base64_option + "</option></select>"
         "<label>" + text.account + "</label><input name=\"account_input\" required autocomplete=off autocapitalize=off spellcheck=false placeholder=\"" +
-        text.account_hint + "\"><label>" + text.pin +
+        text.account_hint + "\"><p class=note>" + text.format_hint + "</p><label>" + text.pin +
         "</label><input name=\"pin\" type=\"password\" required inputmode=\"numeric\" pattern=\"[0-9]{8}\" maxlength=\"8\">"
         "<button type=submit>" + text.submit + "</button></form><p class=note>" + text.privacy +
         "</p><p class=note>" + text.third_party + "</p></main></body></html>";
@@ -318,10 +324,15 @@ void PsPhonePairingServer::run(std::string session_path, std::string locale,
                     return std::isdigit(c) != 0;
                 });
             if (valid) {
-                valid = account_type == "username"
-                    ? lookupPsnAccountId(account_input, account_id, lookup_error)
-                    : account_type == "account_id" &&
-                        normalizePsnAccountId(account_input, account_id);
+                if (account_type == "username") {
+                    valid = lookupPsnAccountId(account_input, account_id, lookup_error);
+                } else if (account_type == "decimal_id") {
+                    valid = decimalPsnAccountIdToBase64(account_input, account_id);
+                } else if (account_type == "base64_id") {
+                    valid = normalizeBase64PsnAccountId(account_input, account_id);
+                } else {
+                    valid = false;
+                }
             }
             uint32_t pin = valid ? static_cast<uint32_t>(std::strtoul(pin_text.c_str(), nullptr, 10)) : 0;
             valid = valid && pin != 0;
