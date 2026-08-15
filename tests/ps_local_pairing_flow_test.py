@@ -21,7 +21,7 @@ def main() -> None:
     assert "initialized_" in registration_h
     assert "if (!initialized_.exchange(false)) return;" in registration
     assert "const bool started = registration_->start" in manager
-    assert '"PSN Account ID is required for local pairing' in manager
+    assert '"PSN Account ID is required; sign in to PSN or use phone pairing' in manager
     assert "base64Decode(account_id, account_id_bytes)" in manager
     assert "account_id_bytes.size() != 8" in manager
     assert "registration_->start(host_addr, pin, target, account_id" in manager

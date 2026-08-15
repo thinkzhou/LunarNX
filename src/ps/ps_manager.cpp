@@ -3,6 +3,7 @@
 #include "ps_manager.h"
 #include "ps_discovery.h"
 #include "ps_registration.h"
+#include "ps_pairing_account.h"
 #include "psn_auth_utils.h"
 #include "chiaki_log_adapter.h"
 #include "../common.h"
@@ -106,6 +107,16 @@ std::optional<RegisteredCredential> PsManager::getCredential(
     return credentials_.findByMac(host_id);
 }
 
+std::string PsManager::getPairingAccountId() const {
+    const std::string psn_account_id = psn_auth_.getAccountId();
+    if (isValidPsnAccountId(psn_account_id)) return psn_account_id;
+    return loadManualPsnAccountId();
+}
+
+bool PsManager::saveManualPairingAccountId(const std::string& account_id) {
+    return saveManualPsnAccountId(account_id);
+}
+
 void PsManager::registerHost(const std::string& host_addr, uint32_t pin, int target,
                               RegistrationCallback cb) {
     if (registration_) {
@@ -113,7 +124,7 @@ void PsManager::registerHost(const std::string& host_addr, uint32_t pin, int tar
         registration_.reset();
     }
 
-    const std::string account_id = psn_auth_.getAccountId();
+    const std::string account_id = getPairingAccountId();
     std::string account_id_bytes;
     if (target >= CHIAKI_TARGET_PS4_9 &&
         (!base64Decode(account_id, account_id_bytes) || account_id_bytes.size() != 8)) {
@@ -121,7 +132,7 @@ void PsManager::registerHost(const std::string& host_addr, uint32_t pin, int tar
         brls::sync([callback]() {
             if (*callback) {
                 (*callback)(RegistrationResult::Failed,
-                    "PSN Account ID is required for local pairing; sign in to PSN first");
+                    "PSN Account ID is required; sign in to PSN or use phone pairing");
             }
         });
         return;

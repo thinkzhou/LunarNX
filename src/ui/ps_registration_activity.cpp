@@ -1,5 +1,8 @@
 #ifdef __SWITCH__
 #include "ps_registration_activity.h"
+#include "i18n.h"
+#include "qr_code.h"
+#include "qr_code_view.h"
 #include "ui_style.h"
 #include "../diagnostics.h"
 #include <algorithm>
@@ -17,6 +20,7 @@ PsRegistrationActivity::PsRegistrationActivity(
 
 PsRegistrationActivity::~PsRegistrationActivity() {
     alive_->store(false);
+    phone_pairing_server_.stop();
 }
 
 brls::View* PsRegistrationActivity::createContentView() {
@@ -137,7 +141,7 @@ brls::View* PsRegistrationActivity::createContentView() {
     keypad->setAlignItems(brls::AlignItems::CENTER);
     keypad->setJustifyContent(brls::JustifyContent::CENTER);
 
-    // Number pad
+    // Number pad (used when an Account ID is already available).
     static const char* kRows[] = {"123", "456", "789", " 0 "};
     for (const auto* row : kRows) {
         auto* row_box = new brls::Box(brls::Axis::ROW);
@@ -199,11 +203,104 @@ brls::View* PsRegistrationActivity::createContentView() {
     });
     action_row->addView(submit_btn);
     keypad->addView(action_row);
-    pairing_card->addView(keypad);
+    const bool needs_phone_account = manager_->getPairingAccountId().empty();
+    if (needs_phone_account) {
+        keypad->setVisibility(brls::Visibility::GONE);
+        pairing_card->addView(keypad);
+        auto* phone = new brls::Box(brls::Axis::COLUMN);
+        phone->setGrow(1.0f);
+        phone->setHeight(420);
+        phone->setAlignItems(brls::AlignItems::CENTER);
+        phone->setJustifyContent(brls::JustifyContent::CENTER);
+        auto* title = new brls::Label();
+        title->setText(brls::getStr("lunarnx/ps/reg_phone_title"));
+        title->setFontSize(16);
+        title->setTextColor(p.text);
+        title->setMarginBottom(10);
+        phone->addView(title);
+        phone_qr_view_ = new QrCodeView(250.0f);
+        phone->addView(phone_qr_view_);
+        auto* note = new brls::Label();
+        note->setText(brls::getStr("lunarnx/ps/reg_phone_note"));
+        note->setFontSize(11);
+        note->setTextColor(p.text_muted);
+        note->setIsWrapping(true);
+        note->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+        note->setWidth(300);
+        note->setMarginTop(8);
+        phone->addView(note);
+        auto* retry = new brls::Button();
+        retry->setText(brls::getStr("lunarnx/ps/reg_pair"));
+        retry->setWidth(180);
+        retry->setMarginTop(10);
+        stylePrimaryButton(retry);
+        retry->registerClickAction([this](brls::View*) -> bool {
+            onSubmitPin();
+            return true;
+        });
+        phone->addView(retry);
+        pairing_card->addView(phone);
+    } else {
+        pairing_card->addView(keypad);
+    }
     root->addView(pairing_card);
 
     scroll->setContentView(root);
+    if (needs_phone_account) startPhonePairing();
     return makeAppFrame(brls::getStr("lunarnx/ps/reg_title"), scroll);
+}
+
+void PsRegistrationActivity::startPhonePairing() {
+    auto alive = alive_;
+    const bool started = phone_pairing_server_.start(getResolvedAppLocale(),
+        [this, alive](ps::PsPhonePairingInput input) {
+            if (!alive->load()) return;
+            brls::sync([this, alive, input = std::move(input)]() mutable {
+                if (!alive->load()) return;
+                if (!manager_->saveManualPairingAccountId(input.account_id)) {
+                    if (status_) {
+                        status_->setText(brls::getStr("lunarnx/ps/reg_phone_save_failed"));
+                        status_->setTextColor(uiPalette().error);
+                    }
+                    return;
+                }
+                pin_buffer_ = std::to_string(input.pin);
+                if (pin_buffer_.size() < 8) {
+                    pin_buffer_.insert(0, 8 - pin_buffer_.size(), '0');
+                }
+                if (pin_display_) pin_display_->setText("********");
+                if (host_addr_.empty()) {
+                    if (status_) {
+                        status_->setText(brls::getStr("lunarnx/ps/reg_phone_received_need_ip"));
+                        status_->setTextColor(uiPalette().text_muted);
+                    }
+                    return;
+                }
+                onSubmitPin();
+            });
+        });
+    if (!started) {
+        if (phone_qr_view_) phone_qr_view_->clearQrCode();
+        if (status_) {
+            status_->setText(brls::getStr("lunarnx/ps/reg_phone_start_failed",
+                phone_pairing_server_.getError()));
+            status_->setTextColor(uiPalette().error);
+        }
+        return;
+    }
+    QrCode qr = makeQrCode(phone_pairing_server_.getHelperUrl());
+    if (qr.empty()) {
+        phone_pairing_server_.stop();
+        if (status_) {
+            status_->setText(brls::getStr("lunarnx/ps/reg_phone_qr_failed"));
+            status_->setTextColor(uiPalette().error);
+        }
+        return;
+    }
+    if (phone_qr_view_) phone_qr_view_->setQrCode(std::move(qr));
+    if (status_) {
+        status_->setText(brls::getStr("lunarnx/ps/reg_phone_waiting"));
+    }
 }
 
 void PsRegistrationActivity::onDigit(char digit) {
