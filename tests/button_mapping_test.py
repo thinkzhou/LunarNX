@@ -32,6 +32,12 @@ require('"xbox_button_mapping"' in mapping and '"ps_button_mapping"' in mapping 
 require('"button_mapping"' in mapping and
         "profile == ButtonMappingProfile::Xbox" in mapping,
         "the former shared mapping may only migrate to Xbox")
+ps_defaults = mapping[mapping.index("ButtonMapping defaultButtonMapping"):mapping.index("const char* remoteButtonConfigKey")]
+ps_profile_defaults = ps_defaults[ps_defaults.index(
+    "if (profile == ButtonMappingProfile::PlayStation"):]
+require("RemoteButton::A)] = HidNpadButton_B" in ps_profile_defaults and
+        "RemoteButton::B)] = HidNpadButton_A" in ps_profile_defaults,
+        "PlayStation defaults must map Switch B to Cross and Switch A to Circle")
 require("reloadButtonMapping();" in reader and
         reader.index("reloadButtonMapping();") < reader.index("padInitializeDefault"),
         "each stream input reader must load the saved mapping")

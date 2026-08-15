@@ -14,6 +14,11 @@ def main():
     assert '"ps_bitrate_kbps"' in settings
     assert "ButtonMappingProfile::PlayStation" in settings
     assert '"ps_video_codec"' in settings
+    assert '"ps_vibration_enabled"' in settings
+    assert '"ps_rumble_strength_percent"' in settings
+    assert "settings.vibration_enabled" in activity
+    assert "settings.rumble_strength_percent" in activity
+    assert "loadStreamSettings()" not in activity
     assert "HEVC (H.265)" in settings
     assert "force_region_ip" not in settings
     assert "xCloud" not in settings

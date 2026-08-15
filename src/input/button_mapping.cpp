@@ -75,8 +75,14 @@ const char* mappingConfigKey(ButtonMappingProfile profile) {
 
 ButtonMapping defaultButtonMapping(ButtonMappingProfile profile) {
     ButtonMapping mapping{};
-    mapping[static_cast<size_t>(RemoteButton::A)] = HidNpadButton_B;
-    mapping[static_cast<size_t>(RemoteButton::B)] = HidNpadButton_A;
+    if (profile == ButtonMappingProfile::PlayStation) {
+        // Remote A/B represent Cross/Circle for the PlayStation profile.
+        mapping[static_cast<size_t>(RemoteButton::A)] = HidNpadButton_B;
+        mapping[static_cast<size_t>(RemoteButton::B)] = HidNpadButton_A;
+    } else {
+        mapping[static_cast<size_t>(RemoteButton::A)] = HidNpadButton_B;
+        mapping[static_cast<size_t>(RemoteButton::B)] = HidNpadButton_A;
+    }
     mapping[static_cast<size_t>(RemoteButton::X)] = HidNpadButton_Y;
     mapping[static_cast<size_t>(RemoteButton::Y)] = HidNpadButton_X;
     mapping[static_cast<size_t>(RemoteButton::DpadUp)] = HidNpadButton_Up;

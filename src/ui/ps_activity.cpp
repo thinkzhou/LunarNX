@@ -4,7 +4,6 @@
 #include "psn_login_activity.h"
 #include "about_activity.h"
 #include "ps_settings_activity.h"
-#include "stream_settings_activity.h"
 #include "stream_view.h"
 #include "ui_style.h"
 #include "../common.h"
@@ -953,9 +952,8 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
         selected, ps_manager_->getPsnAccessToken(), ps_manager_->getPsnAccountId(),
         settings.width, settings.height, 60, settings.bitrate_kbps,
         settings.video_codec);
-    const auto stream_settings = loadStreamSettings();
-    controller->setRumbleEnabled(stream_settings.vibration_enabled);
-    controller->setRumbleStrengthPercent(stream_settings.rumble_strength_percent);
+    controller->setRumbleEnabled(settings.vibration_enabled);
+    controller->setRumbleStrengthPercent(settings.rumble_strength_percent);
     diagnosticLog("ui-ps", "pushing PsConnectActivity");
     brls::Application::pushActivity(
         new PsConnectActivity(controller, ps_manager_, requested_remote,

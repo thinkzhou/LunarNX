@@ -313,6 +313,9 @@ brls::View* StreamSettingsActivity::createContentView() {
     root->setBackgroundColor(p.background);
     scroll->setContentView(root);
 
+    const bool addGlobalSettings = scope_ == StreamSettingsScope::Global;
+    const bool addXboxSettings = scope_ == StreamSettingsScope::Xbox;
+    if (scope_ == StreamSettingsScope::Global) {
     root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/app_section"),
         brls::getStr("lunarnx/settings/app_section_detail")));
@@ -339,6 +342,7 @@ brls::View* StreamSettingsActivity::createContentView() {
         });
     app_card->addView(language);
     root->addView(app_card);
+    }
 
     root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/video_section"),
@@ -346,6 +350,7 @@ brls::View* StreamSettingsActivity::createContentView() {
     auto* video_card = makeUiCard();
     video_card->setPadding(4, 8, 4, 8);
 
+    if (addXboxSettings) {
     auto* resolution = new brls::SelectorCell();
     resolution->init(brls::getStr("lunarnx/settings/resolution"),
         {brls::getStr("lunarnx/settings/resolution_720p"),
@@ -370,7 +375,9 @@ brls::View* StreamSettingsActivity::createContentView() {
             }
         });
     video_card->addView(resolution);
+    }
 
+    if (addGlobalSettings) {
     int backend_index = 0;
     if (settings_.video_backend == stream::VideoBackend::HardwareCopyOut) {
         backend_index = 1;
@@ -394,8 +401,10 @@ brls::View* StreamSettingsActivity::createContentView() {
             if (ctrl_) ctrl_->setDefaultVideoBackend(settings_.video_backend);
         });
     video_card->addView(decoder);
+    }
     root->addView(video_card);
 
+    if (addGlobalSettings) {
     root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/image_section"),
         brls::getStr("lunarnx/settings/image_section_detail")));
@@ -433,7 +442,9 @@ brls::View* StreamSettingsActivity::createContentView() {
         });
     image_card->addView(dithering);
     root->addView(image_card);
+    }
 
+    if (scope_ == StreamSettingsScope::Xbox) {
     root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/controller_section"),
         brls::getStr("lunarnx/settings/controller_section_detail")));
@@ -519,6 +530,7 @@ brls::View* StreamSettingsActivity::createContentView() {
         });
     cloud_card->addView(region);
     root->addView(cloud_card);
+    }
 
     auto* close = new brls::Button();
     close->setText(brls::getStr("lunarnx/common/done"));

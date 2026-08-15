@@ -12,6 +12,15 @@
 
 namespace lunar::ui {
 namespace {
+constexpr int kRumbleStrengths[] = {25, 50, 75, 100};
+
+int rumbleStrengthIndex(int strength) {
+    if (strength >= 100) return 3;
+    if (strength >= 75) return 2;
+    if (strength >= 50) return 1;
+    return 0;
+}
+
 cJSON* readConfig() {
     cJSON* root = nullptr;
     FILE* f = std::fopen(lunar::get_config_path(), "rb");
@@ -50,6 +59,12 @@ PsSettingsSnapshot loadPsSettings() {
         std::strcmp(codec->valuestring, "hevc") == 0) {
         out.video_codec = stream::VideoCodec::HEVC;
     }
+    const cJSON* vibration = cJSON_GetObjectItem(root, "ps_vibration_enabled");
+    if (cJSON_IsBool(vibration)) out.vibration_enabled = cJSON_IsTrue(vibration);
+    const cJSON* rumble = cJSON_GetObjectItem(root, "ps_rumble_strength_percent");
+    if (cJSON_IsNumber(rumble)) {
+        out.rumble_strength_percent = std::clamp(rumble->valueint, 0, 100);
+    }
     cJSON_Delete(root);
     return out;
 }
@@ -63,6 +78,11 @@ bool savePsSettings(const PsSettingsSnapshot& settings) {
     cJSON_DeleteItemFromObject(root, "ps_video_codec");
     cJSON_AddStringToObject(root, "ps_video_codec",
                             stream::videoCodecName(settings.video_codec));
+    cJSON_DeleteItemFromObject(root, "ps_vibration_enabled");
+    cJSON_AddBoolToObject(root, "ps_vibration_enabled", settings.vibration_enabled);
+    cJSON_DeleteItemFromObject(root, "ps_rumble_strength_percent");
+    cJSON_AddNumberToObject(root, "ps_rumble_strength_percent",
+                            settings.rumble_strength_percent);
     bool ok = writeConfig(root);
     cJSON_Delete(root);
     return ok;
@@ -103,6 +123,20 @@ brls::View* PsSettingsActivity::createContentView() {
         brls::getStr("lunarnx/ps/settings_controller_section"),
         brls::getStr("lunarnx/ps/settings_controller_detail")));
     auto* controller_card = makeUiCard(); controller_card->setPadding(4, 8, 4, 8);
+    auto* vibration = new brls::BooleanCell();
+    vibration->init(brls::getStr("lunarnx/settings/vibration"),
+        settings_.vibration_enabled,
+        [this](bool enabled) { settings_.vibration_enabled = enabled; });
+    controller_card->addView(vibration);
+    auto* rumble_strength = new brls::SelectorCell();
+    rumble_strength->init(brls::getStr("lunarnx/settings/rumble_strength"),
+        {"25%", "50%", "75%", "100%"},
+        rumbleStrengthIndex(settings_.rumble_strength_percent),
+        [this](int selected) {
+            selected = std::clamp(selected, 0, 3);
+            settings_.rumble_strength_percent = kRumbleStrengths[selected];
+        });
+    controller_card->addView(rumble_strength);
     auto* button_mapping = new brls::DetailCell();
     button_mapping->setText(brls::getStr("lunarnx/settings/button_mapping"));
     button_mapping->setDetailText(brls::getStr("lunarnx/settings/button_mapping_detail"));
