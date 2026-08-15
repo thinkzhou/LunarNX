@@ -22,6 +22,7 @@ public:
     ~PsActivity() override;
 
     brls::View* createContentView() override;
+    void onPause() override;
     void onResume() override;
 
 private:
@@ -52,6 +53,8 @@ private:
     bool resumed_once_ = false;
     bool had_psn_session_ = false;
     bool psn_cache_loaded_ = false;
+    bool console_list_refresh_suspended_ = false;
+    bool console_list_refresh_pending_ = false;
     std::chrono::steady_clock::time_point back_navigation_ready_at_{};
     PsConsoleSource source_ = PsConsoleSource::Local;
     std::vector<ps::PsConsole> hosts_;

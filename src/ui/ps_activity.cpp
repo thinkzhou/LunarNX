@@ -528,6 +528,14 @@ brls::View* PsActivity::createContentView() {
     return makeAppFrame("PlayStation", workspace);
 }
 
+void PsActivity::onPause() {
+    // A child activity/dialog saves the current list button as a raw focus
+    // pointer. Do not rebuild and delete that button until Borealis restores
+    // focus while popping the child.
+    console_list_refresh_suspended_ = true;
+    console_list_refresh_pending_ = true;
+}
+
 void PsActivity::onResume() {
     // A Back press used to close StreamView can remain held for another UI
     // frame. Consume the repeat instead of immediately popping PsActivity and
@@ -539,9 +547,18 @@ void PsActivity::onResume() {
     ps_manager_->psnAuth().loadToken(lunar::get_psn_token_path());
     const bool has_session = ps_manager_->hasStoredPsnSession();
     updateAccountUi();
-    auto hosts = ps_manager_->getDiscoveredHosts();
-    appendMockReplayConsole(hosts);
-    rebuildConsoleList(hosts);
+    console_list_refresh_suspended_ = false;
+    if (console_list_refresh_pending_) {
+        console_list_refresh_pending_ = false;
+        auto alive = alive_;
+        brls::sync([this, alive]() {
+            if (!alive->load()) return;
+            // This runs after popActivity has finished restoring its saved
+            // focus. Move to a persistent control before deleting list rows.
+            if (lan_button_) brls::Application::giveFocus(lan_button_);
+            rebuildConsoleList(ps_manager_->getDiscoveredHosts());
+        });
+    }
 
     // Existing sessions may not have an online_id stored yet; fetch it once so
     // the account name shows without requiring a re-login.
@@ -677,10 +694,14 @@ void PsActivity::updateSourceUi() {
 void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
     hosts_ = hosts;
     appendMockReplayConsole(hosts_);
+    if (console_list_refresh_suspended_) {
+        console_list_refresh_pending_ = true;
+        return;
+    }
     if (!console_list_) return;
     console_list_->clearViews();
 
-    if (hosts.empty()) {
+    if (hosts_.empty()) {
         auto* empty = makeUiCard(brls::Axis::COLUMN);
         empty->setHeight(148);
         empty->setMarginBottom(18);
@@ -705,7 +726,7 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
 
     const auto& p = uiPalette();
     size_t visible_count = 0;
-    for (const auto& host : hosts) {
+    for (const auto& host : hosts_) {
         const bool visible = source_ == PsConsoleSource::Local
             ? host.local.has_value()
             : host.remote.has_value();

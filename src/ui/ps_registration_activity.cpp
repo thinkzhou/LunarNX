@@ -143,6 +143,7 @@ brls::View* PsRegistrationActivity::createContentView() {
     keypad_->setJustifyContent(brls::JustifyContent::CENTER);
 
     // Number pad (used when an Account ID is already available).
+    brls::Button* digit_buttons[10]{};
     static const char* kRows[] = {"123", "456", "789", " 0 "};
     for (const auto* row : kRows) {
         auto* row_box = new brls::Box(brls::Axis::ROW);
@@ -169,6 +170,7 @@ brls::View* PsRegistrationActivity::createContentView() {
                 onDigit(digit);
                 return true;
             });
+            digit_buttons[digit - '0'] = btn;
             row_box->addView(btn);
         }
         keypad_->addView(row_box);
@@ -218,6 +220,49 @@ brls::View* PsRegistrationActivity::createContentView() {
         return true;
     });
     keypad_->addView(change_account);
+
+    // Borealis normally navigates nested boxes by tree order, which does not
+    // preserve the keypad column and can escape a row at its edges. Pin every
+    // direction to the visual keypad instead.
+    auto route = [](brls::View* from, brls::FocusDirection direction,
+                    brls::View* to) {
+        from->setCustomNavigationRoute(direction, to);
+    };
+    const int grid[3][3] = {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}};
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+            auto* button = digit_buttons[grid[row][column]];
+            route(button, brls::FocusDirection::LEFT,
+                  digit_buttons[grid[row][column > 0 ? column - 1 : column]]);
+            route(button, brls::FocusDirection::RIGHT,
+                  digit_buttons[grid[row][column < 2 ? column + 1 : column]]);
+            route(button, brls::FocusDirection::UP,
+                  digit_buttons[grid[row > 0 ? row - 1 : row][column]]);
+            if (row < 2) {
+                route(button, brls::FocusDirection::DOWN,
+                      digit_buttons[grid[row + 1][column]]);
+            }
+        }
+    }
+    route(digit_buttons[7], brls::FocusDirection::DOWN, back_btn);
+    route(digit_buttons[8], brls::FocusDirection::DOWN, digit_buttons[0]);
+    route(digit_buttons[9], brls::FocusDirection::DOWN, submit_btn);
+    route(digit_buttons[0], brls::FocusDirection::UP, digit_buttons[8]);
+    route(digit_buttons[0], brls::FocusDirection::LEFT, back_btn);
+    route(digit_buttons[0], brls::FocusDirection::RIGHT, submit_btn);
+    route(digit_buttons[0], brls::FocusDirection::DOWN, change_account);
+    route(back_btn, brls::FocusDirection::UP, digit_buttons[7]);
+    route(back_btn, brls::FocusDirection::LEFT, back_btn);
+    route(back_btn, brls::FocusDirection::RIGHT, digit_buttons[0]);
+    route(back_btn, brls::FocusDirection::DOWN, change_account);
+    route(submit_btn, brls::FocusDirection::UP, digit_buttons[9]);
+    route(submit_btn, brls::FocusDirection::LEFT, digit_buttons[0]);
+    route(submit_btn, brls::FocusDirection::RIGHT, submit_btn);
+    route(submit_btn, brls::FocusDirection::DOWN, change_account);
+    route(change_account, brls::FocusDirection::UP, digit_buttons[0]);
+    route(change_account, brls::FocusDirection::LEFT, change_account);
+    route(change_account, brls::FocusDirection::RIGHT, change_account);
+    route(change_account, brls::FocusDirection::DOWN, change_account);
 
     phone_panel_ = new brls::Box(brls::Axis::COLUMN);
     phone_panel_->setGrow(1.0f);
