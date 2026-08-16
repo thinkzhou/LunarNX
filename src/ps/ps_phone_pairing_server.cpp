@@ -29,6 +29,7 @@ struct PairingText {
     const char* account_type;
     const char* username_option;
     const char* decimal_option;
+    const char* hex_option;
     const char* base64_option;
     const char* account;
     const char* account_hint;
@@ -41,6 +42,7 @@ struct PairingText {
     const char* invalid;
     const char* invalid_username;
     const char* invalid_decimal;
+    const char* invalid_hex;
     const char* invalid_base64;
     const char* invalid_pin;
 };
@@ -50,15 +52,17 @@ const PairingText& pairingText(const std::string& locale) {
         "en", "LunarNX local pairing",
         "Enter the console user's PSN identity, then the 8-digit PIN shown by the console.",
         "Identity format", "PSN username (public lookup)",
-        "Decimal Account ID (local conversion)", "Base64 Account ID (use as entered)",
+        "Decimal Account ID (local conversion)", "Apollo hexadecimal Account ID",
+        "Base64 Account ID (use as entered)",
         "PSN username or Account ID", "Enter the format selected above",
-        "Examples: username OnlineID · decimal 12345678901234567 · Base64 AbCdEf12345=", "8-digit PIN",
+        "Examples: username OnlineID · decimal 12345678901234567 · Apollo 0123456789ABCDEF · Base64 AbCdEf12345=", "8-digit PIN",
         "Send to Switch", "Account ID and PIN are sent only to LunarNX on your local network.",
         "Username lookup sends only the entered username to the third-party FlipScreen service. No password or PSN token is sent.",
         "Sent. Check your Switch for the pairing result.",
         "Invalid Account ID or PIN.",
         "PSN username could not be resolved. Check the Online ID or try an Account ID instead.",
         "Invalid decimal Account ID. Enter digits only, within the unsigned 64-bit range.",
+        "Invalid hexadecimal Account ID. Enter the 16 digits shown by Apollo (0x prefix is optional).",
         "Invalid Base64 Account ID. It must decode to exactly 8 bytes.",
         "PIN must contain exactly 8 digits."
     };
@@ -66,15 +70,17 @@ const PairingText& pairingText(const std::string& locale) {
         "zh-CN", "LunarNX 本地配对",
         "请输入主机用户的 PSN 身份信息，然后输入主机画面显示的 8 位 PIN 码。",
         "身份信息格式", "PSN 用户名（公共查询）",
-        "十进制 Account ID（本地转换）", "Base64 Account ID（按原值使用）",
+        "十进制 Account ID（本地转换）", "Apollo 十六进制 Account ID",
+        "Base64 Account ID（按原值使用）",
         "PSN 用户名或 Account ID", "请输入上方所选格式",
-        "示例：用户名 OnlineID · 十进制 12345678901234567 · Base64 AbCdEf12345=", "8 位 PIN 码",
+        "示例：用户名 OnlineID · 十进制 12345678901234567 · Apollo 0123456789ABCDEF · Base64 AbCdEf12345=", "8 位 PIN 码",
         "发送到 Switch", "Account ID 和 PIN 只会通过当前局域网发送给 LunarNX。",
         "用户名查询只会把输入的用户名发送给第三方 FlipScreen 服务，不会发送密码或 PSN token。",
         "已发送，请查看 Switch 上的配对结果。",
         "Account ID 或 PIN 无效。",
         "无法查询该 PSN 用户名。请检查在线 ID，或改用 Account ID。",
         "十进制 Account ID 无效。只能输入无符号 64 位范围内的数字。",
+        "十六进制 Account ID 无效。请输入 Apollo 显示的 16 位字符（可带 0x 前缀）。",
         "Base64 Account ID 无效。解码后必须正好为 8 字节。",
         "PIN 必须正好包含 8 位数字。"
     };
@@ -82,15 +88,17 @@ const PairingText& pairingText(const std::string& locale) {
         "zh-TW", "LunarNX 本機配對",
         "請輸入主機使用者的 PSN 身分資訊，然後輸入主機畫面顯示的 8 位 PIN 碼。",
         "身分資訊格式", "PSN 使用者名稱（公開查詢）",
-        "十進位 Account ID（本機轉換）", "Base64 Account ID（依原值使用）",
+        "十進位 Account ID（本機轉換）", "Apollo 十六進位 Account ID",
+        "Base64 Account ID（依原值使用）",
         "PSN 使用者名稱或 Account ID", "請輸入上方所選格式",
-        "範例：使用者名稱 OnlineID · 十進位 12345678901234567 · Base64 AbCdEf12345=", "8 位 PIN 碼",
+        "範例：使用者名稱 OnlineID · 十進位 12345678901234567 · Apollo 0123456789ABCDEF · Base64 AbCdEf12345=", "8 位 PIN 碼",
         "傳送至 Switch", "Account ID 和 PIN 只會透過目前區域網路傳送給 LunarNX。",
         "使用者名稱查詢只會將輸入的名稱傳送給第三方 FlipScreen 服務，不會傳送密碼或 PSN token。",
         "已傳送，請查看 Switch 上的配對結果。",
         "Account ID 或 PIN 無效。",
         "無法查詢該 PSN 使用者名稱。請檢查線上 ID，或改用 Account ID。",
         "十進位 Account ID 無效。只能輸入無符號 64 位範圍內的數字。",
+        "十六進位 Account ID 無效。請輸入 Apollo 顯示的 16 位字元（可帶 0x 前綴）。",
         "Base64 Account ID 無效。解碼後必須正好為 8 位元組。",
         "PIN 必須正好包含 8 位數字。"
     };
@@ -156,6 +164,7 @@ std::string pairingPage(const std::string& submit_path, const PairingText& text)
         "\"><label>" + text.account_type + "</label><select name=\"account_type\">"
         "<option value=\"username\">" + text.username_option + "</option>"
         "<option value=\"decimal_id\">" + text.decimal_option + "</option>"
+        "<option value=\"hex_id\">" + text.hex_option + "</option>"
         "<option value=\"base64_id\">" + text.base64_option + "</option></select>"
         "<label>" + text.account + "</label><input name=\"account_input\" required autocomplete=off autocapitalize=off spellcheck=false placeholder=\"" +
         text.account_hint + "\"><p class=note>" + text.format_hint + "</p><label>" + text.pin +
@@ -350,6 +359,9 @@ void PsPhonePairingServer::run(std::string session_path, std::string locale,
                 } else if (account_type == "decimal_id") {
                     valid = decimalPsnAccountIdToBase64(account_input, account_id);
                     if (!valid) validation_error = text.invalid_decimal;
+                } else if (account_type == "hex_id") {
+                    valid = hexPsnAccountIdToBase64(account_input, account_id);
+                    if (!valid) validation_error = text.invalid_hex;
                 } else if (account_type == "base64_id") {
                     valid = normalizeBase64PsnAccountId(account_input, account_id);
                     if (!valid) validation_error = text.invalid_base64;

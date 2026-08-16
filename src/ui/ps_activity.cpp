@@ -923,9 +923,12 @@ void PsActivity::pairConsoleWithTarget(const ps::PsConsole& host, int target) {
     // avoid competing searches and preserve a Switch thread slot.
     stopDiscovery();
     std::string addr = host.local.has_value() ? host.local->ip : "";
+    const std::string console_key = !host.server_mac.empty()
+        ? host.server_mac : addr;
     brls::Application::pushActivity(
         new PsRegistrationActivity(ps_manager_, addr, target,
-            host.nickname.empty() ? brls::getStr("lunarnx/ps/console_default") : host.nickname),
+            host.nickname.empty() ? brls::getStr("lunarnx/ps/console_default") : host.nickname,
+            console_key),
         brls::TransitionAnimation::NONE);
 }
 

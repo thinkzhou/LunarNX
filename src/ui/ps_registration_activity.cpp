@@ -12,11 +12,12 @@ namespace lunar::ui {
 PsRegistrationActivity::PsRegistrationActivity(
     std::shared_ptr<ps::PsManager> manager,
     const std::string& host_addr, int target,
-    std::string host_name)
+    std::string host_name, std::string console_key)
     : manager_(std::move(manager))
     , host_addr_(host_addr)
     , target_(target)
-    , host_name_(std::move(host_name)) {}
+    , host_name_(std::move(host_name))
+    , console_key_(std::move(console_key)) {}
 
 PsRegistrationActivity::~PsRegistrationActivity() {
     alive_->store(false);
@@ -135,7 +136,7 @@ brls::View* PsRegistrationActivity::createContentView() {
     details->addView(status_);
     pairing_card->addView(details);
 
-    pairing_account_id_ = manager_->getPairingAccountId();
+    pairing_account_id_ = manager_->getPairingAccountId(console_key_);
     keypad_ = new brls::Box(brls::Axis::COLUMN);
     keypad_->setGrow(1.0f);
     keypad_->setHeight(420);
@@ -403,7 +404,8 @@ void PsRegistrationActivity::onSubmitPin() {
 
             if (result == ps::RegistrationResult::Success) {
                 if (account_id_changed_ &&
-                    !manager_->saveManualPairingAccountId(pairing_account_id_)) {
+                    !manager_->saveManualPairingAccountId(
+                        pairing_account_id_, console_key_)) {
                     diagnosticLog("ui-ps-pair", "paired but could not save local Account ID");
                 }
                 if (status_ptr) {

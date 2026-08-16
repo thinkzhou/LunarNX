@@ -9,6 +9,8 @@ def main() -> None:
     makefile = (ROOT / "Makefile.switch").read_text()
     adapter = (ROOT / "src/ps/chiaki_log_adapter.cpp").read_text()
     chiaki_build = (ROOT / "tools/chiaki_switch/build_in_docker.sh").read_text()
+    registration = (ROOT / "src/ps/ps_registration.cpp").read_text()
+    manager = (ROOT / "src/ps/ps_manager.cpp").read_text()
 
     assert "APP_DIAG ?= 0" in makefile
     assert "DROP_DIAG ?= 0" in makefile
@@ -16,6 +18,13 @@ def main() -> None:
     assert "#if LUNARNX_DIAGNOSTIC_LOG || LUNARNX_DROP_DIAGNOSTIC_LOG" in adapter
     assert "ChiakiLog log{};" in adapter
     assert "CHIAKI_TRANSPORT_DIAG=${CHIAKI_TRANSPORT_DIAG:-0}" in chiaki_build
+    assert 'persistentEventLog("ps-registration"' in registration
+    assert 'stage=missing-account-id' in manager
+    assert 'stage=credential-save' in manager
+    assert "pin" not in "\n".join(
+        line for line in registration.splitlines()
+        if "persistentEventLog" in line or "failed stage=" in line
+    ).lower()
 
     print("PS release logging test passed")
 

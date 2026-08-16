@@ -331,6 +331,30 @@ inline void diagnosticLog(const char* component, const char* format, ...) noexce
 #endif
 }
 
+// Rare, user-visible failures must remain diagnosable in release builds where
+// APP_DIAG=0. Callers must use sanitized metadata only: never PINs, tokens,
+// account IDs, payloads, or per-packet events.
+inline void persistentEventLog(const char* component, const char* format, ...) noexcept {
+    try {
+        ensureDiagnosticLogDirectory();
+        std::lock_guard<std::mutex> lock(diagnosticLogMutex());
+        FILE* log = std::fopen(get_diagnostic_log_path(), "a");
+        if (!log) return;
+        char timestamp[80]{};
+        diagnosticTimestamp(timestamp, sizeof(timestamp));
+        std::fprintf(log, "[%s] [%s] ", timestamp,
+                     component ? component : "event");
+        va_list args;
+        va_start(args, format);
+        std::vfprintf(log, format, args);
+        va_end(args);
+        std::fprintf(log, "\n");
+        std::fclose(log);
+    } catch (...) {
+        // Logging must never turn a recoverable failure into a crash.
+    }
+}
+
 // Sparse, always-available diagnostics for events that already caused a
 // visible stream defect. Unlike diagnosticLog(), this stays enabled when the
 // release build uses APP_DIAG=0; callers must never invoke it per frame.

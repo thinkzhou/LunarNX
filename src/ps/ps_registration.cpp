@@ -1,6 +1,7 @@
 #ifdef __SWITCH__
 
 #include "ps_registration.h"
+#include "../diagnostics.h"
 #include <chiaki/base64.h>
 #include <cstring>
 
@@ -52,6 +53,40 @@ std::string registrationFailureDetail(const char* log) {
     return "Registration failed; check the active user's Account ID, PIN, and console type";
 }
 
+const char* registrationFailureStage(const char* log) {
+    if (!log) return "unknown";
+    const std::string messages(log);
+    if (messages.find("failed to generate random ambassador") != std::string::npos)
+        return "crypto";
+    if (messages.find("failed to format payload") != std::string::npos ||
+        messages.find("failed to format request") != std::string::npos)
+        return "request-format";
+    if (messages.find("failed to getaddrinfo") != std::string::npos)
+        return "invalid-address";
+    if (messages.find("failed to create socket for search") != std::string::npos)
+        return "search-socket";
+    if (messages.find("failed to connect for search") != std::string::npos ||
+        messages.find("connect failed: tried all addresses") != std::string::npos)
+        return "search-connect";
+    if (messages.find("timed out waiting for search response") != std::string::npos ||
+        messages.find("Regist search failed") != std::string::npos)
+        return "search-timeout";
+    if (messages.find("failed to connect for request") != std::string::npos)
+        return "request-connect";
+    if (messages.find("failed to send request header") != std::string::npos ||
+        messages.find("failed to send payload") != std::string::npos)
+        return "request-send";
+    if (messages.find("received HTTP code") != std::string::npos ||
+        messages.find("Reported Application Reason") != std::string::npos)
+        return "console-rejected";
+    if (messages.find("failed to receive response HTTP header") != std::string::npos)
+        return "response-timeout";
+    if (messages.find("response does not contain") != std::string::npos ||
+        messages.find("failed to pare response") != std::string::npos)
+        return "invalid-response";
+    return "unknown";
+}
+
 } // namespace
 
 PsRegistration::PsRegistration(ChiakiLog* log) : log_(log) {}
@@ -86,6 +121,8 @@ ChiakiErrorCode PsRegistration::start(const std::string& host, uint32_t pin, int
             info.psn_account_id, &account_id_size);
         if (decode_error != CHIAKI_ERR_SUCCESS ||
             account_id_size != CHIAKI_PSN_ACCOUNT_ID_SIZE) {
+            persistentEventLog("ps-registration",
+                "failed stage=invalid-account-id target=%d", target);
             return CHIAKI_ERR_INVALID_DATA;
         }
     }
@@ -97,6 +134,9 @@ ChiakiErrorCode PsRegistration::start(const std::string& host, uint32_t pin, int
         &regist_, chiaki_log_sniffer_get_log(&log_sniffer_),
         &info, onRegistEvent, this);
     if (err != CHIAKI_ERR_SUCCESS) {
+        persistentEventLog("ps-registration",
+            "failed stage=worker-start target=%d error=%d", target,
+            static_cast<int>(err));
         chiaki_log_sniffer_fini(&log_sniffer_);
         log_sniffer_initialized_.store(false);
         callback_ = {};
@@ -137,6 +177,11 @@ void PsRegistration::onRegistEvent(ChiakiRegistEvent* event, void* user) {
 
         case CHIAKI_REGIST_EVENT_TYPE_FINISHED_FAILED:
             self->running_.store(false);
+            persistentEventLog("ps-registration",
+                "failed stage=%s target=%d",
+                registrationFailureStage(
+                    chiaki_log_sniffer_get_buffer(&self->log_sniffer_)),
+                static_cast<int>(self->regist_.info.target));
             if (auto callback = std::move(self->callback_)) {
                 callback(RegistrationResult::Failed,
                     registrationFailureDetail(

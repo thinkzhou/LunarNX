@@ -1,6 +1,7 @@
 #ifdef __SWITCH__
 
 #include "ps_pairing_account.h"
+#include "ps_pairing_account_store.h"
 #include "psn_auth_utils.h"
 #include "../common.h"
 #include "../api/http_client.h"
@@ -13,8 +14,6 @@
 
 namespace lunar::ps {
 namespace {
-
-constexpr const char* kConfigKey = "ps_local_account_id";
 
 std::string trim(const std::string& input) {
     const auto first = std::find_if_not(input.begin(), input.end(), [](unsigned char c) {
@@ -42,71 +41,7 @@ std::string urlEncode(const std::string& value) {
     return encoded;
 }
 
-cJSON* readConfig() {
-    FILE* file = std::fopen(lunar::get_config_path(), "rb");
-    if (!file) return cJSON_CreateObject();
-    std::fseek(file, 0, SEEK_END);
-    const long length = std::ftell(file);
-    std::rewind(file);
-    std::string content(length > 0 ? static_cast<size_t>(length) : 0, '\0');
-    if (!content.empty()) std::fread(content.data(), 1, content.size(), file);
-    std::fclose(file);
-    cJSON* root = cJSON_Parse(content.c_str());
-    return root ? root : cJSON_CreateObject();
-}
-
-bool writeConfig(cJSON* root) {
-    char* content = cJSON_Print(root);
-    if (!content) return false;
-    FILE* file = std::fopen(lunar::get_config_path(), "wb");
-    const size_t length = std::strlen(content);
-    const bool ok = file && std::fwrite(content, 1, length, file) == length;
-    if (file) std::fclose(file);
-    cJSON_free(content);
-    return ok;
-}
-
 } // namespace
-
-bool isValidPsnAccountId(const std::string& account_id) {
-    std::string decoded;
-    return base64Decode(account_id, decoded) && decoded.size() == 8;
-}
-
-bool normalizeBase64PsnAccountId(const std::string& input, std::string& account_id) {
-    const std::string value = trim(input);
-    if (!isValidPsnAccountId(value)) return false;
-    account_id = value;
-    return true;
-}
-
-bool decimalPsnAccountIdToBase64(const std::string& input, std::string& account_id) {
-    const std::string value = trim(input);
-    if (value.empty()) return false;
-    if (!std::all_of(value.begin(), value.end(), [](unsigned char c) {
-            return std::isdigit(c) != 0;
-        })) {
-        return false;
-    }
-    try {
-        size_t consumed = 0;
-        const unsigned long long uid = std::stoull(value, &consumed, 10);
-        if (consumed != value.size()) return false;
-        uint8_t bytes[8]{};
-        for (size_t i = 0; i < sizeof(bytes); ++i) {
-            bytes[i] = static_cast<uint8_t>((uid >> (i * 8)) & 0xff);
-        }
-        account_id = base64Encode(bytes, sizeof(bytes));
-        return isValidPsnAccountId(account_id);
-    } catch (...) {
-        return false;
-    }
-}
-
-bool normalizePsnAccountId(const std::string& input, std::string& account_id) {
-    return normalizeBase64PsnAccountId(input, account_id) ||
-        decimalPsnAccountIdToBase64(input, account_id);
-}
 
 bool lookupPsnAccountId(const std::string& username, std::string& account_id,
                         std::string& error) {
@@ -146,24 +81,18 @@ bool lookupPsnAccountId(const std::string& username, std::string& account_id,
     return false;
 }
 
-std::string loadManualPsnAccountId() {
-    cJSON* root = readConfig();
-    const cJSON* value = cJSON_GetObjectItemCaseSensitive(root, kConfigKey);
-    std::string result = cJSON_IsString(value) && value->valuestring
-        ? value->valuestring : "";
-    cJSON_Delete(root);
+std::string loadManualPsnAccountId(const std::string& console_key) {
+    const std::string result = loadPairingAccountId(
+        lunar::get_config_path(), console_key);
     return isValidPsnAccountId(result) ? result : "";
 }
 
-bool saveManualPsnAccountId(const std::string& account_id) {
+bool saveManualPsnAccountId(const std::string& account_id,
+                            const std::string& console_key) {
     std::string normalized;
     if (!normalizePsnAccountId(account_id, normalized)) return false;
-    cJSON* root = readConfig();
-    cJSON_DeleteItemFromObject(root, kConfigKey);
-    cJSON_AddStringToObject(root, kConfigKey, normalized.c_str());
-    const bool ok = writeConfig(root);
-    cJSON_Delete(root);
-    return ok;
+    return savePairingAccountId(
+        lunar::get_config_path(), console_key, normalized);
 }
 
 } // namespace lunar::ps
