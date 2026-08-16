@@ -20,6 +20,13 @@ std::string registrationFailureDetail(const char* log) {
     if (messages.find("failed to getaddrinfo") != std::string::npos) {
         return "Invalid console address";
     }
+    if (messages.find("failed to create socket for search") != std::string::npos) {
+        return "Local pairing socket unavailable; restart LunarNX and try again";
+    }
+    if (messages.find("failed to connect for search") != std::string::npos ||
+        messages.find("connect failed: tried all addresses") != std::string::npos) {
+        return "Could not reach the console pairing port; check its IP address and network";
+    }
     if (messages.find("timed out waiting for search response") != std::string::npos ||
         messages.find("Regist search failed") != std::string::npos) {
         return "Console did not answer the pairing search; check pairing mode and console type";

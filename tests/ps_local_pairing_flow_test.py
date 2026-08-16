@@ -34,6 +34,9 @@ def main() -> None:
     assert "target >= CHIAKI_TARGET_PS4_9" in registration
     assert "chiaki_log_sniffer_init" in registration
     assert "registrationFailureDetail" in registration
+    assert 'messages.find("failed to create socket for search")' in registration
+    assert 'messages.find("failed to connect for search")' in registration
+    assert "Local pairing socket unavailable" in registration
     assert "ChiakiLogSniffer" in registration_h
     assert "phone_pairing_server_.stop();" in (ROOT / "src/ui/ps_registration_activity.cpp").read_text()
     assert "const bool started = ps_manager_->startDiscovery" in activity

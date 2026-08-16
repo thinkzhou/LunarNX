@@ -105,8 +105,9 @@ void userAppInit()
         cfg.num_bsd_sessions = 12;
         cfg.sb_efficiency    = 8;
         Result rc = socketInitialize(&cfg);
-        switchEarlyLog("socketInitialize application enhanced rc=0x%08x udp_rx=%u",
-                       rc, cfg.udp_rx_buf_size);
+        switchEarlyLog(
+            "socketInitialize application enhanced rc=0x%08x udp_rx=%u sessions=%u efficiency=%u",
+            rc, cfg.udp_rx_buf_size, cfg.num_bsd_sessions, cfg.sb_efficiency);
         if (R_FAILED(rc))
         {
             rc = socketInitialize(&default_cfg);
@@ -116,11 +117,18 @@ void userAppInit()
     }
     else
     {
-        cfg.num_bsd_sessions = 2;
+        // Chiaki creates sockets from nested discovery/registration workers:
+        // one UDP socket backs each stop pipe and another talks to the console.
+        // Two BSD IPC sessions make the second worker fail immediately in
+        // LibraryApplet mode even though socketInitialize itself succeeds.
+        // Keep the low-efficiency buffer budget for Applet Mode, but provide
+        // the same request concurrency as the known-good Application path.
+        cfg.num_bsd_sessions = 12;
         cfg.sb_efficiency    = 1;
         Result rc = socketInitialize(&cfg);
-        switchEarlyLog("socketInitialize applet enhanced rc=0x%08x udp_rx=%u",
-                       rc, cfg.udp_rx_buf_size);
+        switchEarlyLog(
+            "socketInitialize applet enhanced rc=0x%08x udp_rx=%u sessions=%u efficiency=%u",
+            rc, cfg.udp_rx_buf_size, cfg.num_bsd_sessions, cfg.sb_efficiency);
         if (R_FAILED(rc))
         {
             rc = socketInitialize(&default_cfg);
