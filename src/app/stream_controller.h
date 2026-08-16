@@ -79,7 +79,7 @@ public:
     int getStreamWidth() const override { return stream_width_; }
     int getStreamHeight() const override { return stream_height_; }
     void setStateCallback(StateCallback cb);
-    void setInputSuppressed(bool suppressed) override { input_suppressed_ = suppressed; }
+    input::StreamInputRouter& inputRouter() override { return input_router_; }
     void requestPlatformHomeButton() override;
     bool resumeAfterForeground() override;
     void requestGuideButton();
@@ -156,7 +156,7 @@ private:
     std::atomic<bool> streaming_{false};
     std::atomic<bool> cancel_requested_{false};
     std::atomic<uint32_t> stream_generation_{0};
-    std::atomic<bool> input_suppressed_{false};
+    input::StreamInputRouter input_router_;
     std::atomic<bool> guide_button_requested_{false};
     std::atomic<bool> signing_out_{false};
     std::atomic<bool> mock_mode_{false};

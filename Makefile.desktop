@@ -119,6 +119,8 @@ VIDEO_CODEC_TEST_OBJS = $(BUILD)/tests/video_codec_test.o
 XINPUT_TEST_OBJS = $(BUILD)/tests/xinput_encoder_test.o \
 	                 $(BUILD)/src/input/xinput_encoder.o
 
+STREAM_INPUT_ROUTER_TEST_OBJS = $(BUILD)/tests/stream_input_router_test.o
+
 FEEDBACK_TEST_OBJS = $(BUILD)/tests/xbox_input_feedback_test.o \
 	                   $(BUILD)/src/webrtc/xbox_input_feedback.o
 
@@ -187,7 +189,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 RHO_SRCS = src/rho/rho_main.cpp
 RHO_OBJS = $(RHO_SRCS:%.cpp=$(BUILD)/%.o)
 
-.PHONY: xcloud_session_support_test all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
+.PHONY: xcloud_session_support_test all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests stream_input_router_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
 
 all:  $(TARGET)
 	@echo "=== Desktop Build Complete ==="
@@ -245,6 +247,11 @@ input_tests: $(XINPUT_TEST_OBJS)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/xinput_encoder_test $(XINPUT_TEST_OBJS)
 	./$(BUILD)/xinput_encoder_test
+
+stream_input_router_tests: $(STREAM_INPUT_ROUTER_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/stream_input_router_test $(STREAM_INPUT_ROUTER_TEST_OBJS)
+	./$(BUILD)/stream_input_router_test
 
 feedback_tests: $(FEEDBACK_TEST_OBJS)
 	@mkdir -p $(BUILD)

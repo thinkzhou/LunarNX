@@ -246,7 +246,7 @@ StreamView::~StreamView() {
     brls::Application::getWindowFocusChangedEvent()->unsubscribe(
         focus_subscription_);
     brls::Application::getPlatform()->disableScreenDimming(false);
-    runtime_->setInputSuppressed(false);
+    runtime_->inputRouter().setOwner(input::StreamInputOwner::Game);
     if (update_thread_.joinable()) update_thread_.join();
     if (!stop_started_.load()) {
         auto runtime = runtime_;
@@ -261,7 +261,7 @@ void StreamView::handleWindowFocusChanged(bool focused) {
                          focused ? "true" : "false");
     if (!focused) {
         backgrounded_ = true;
-        runtime_->setInputSuppressed(true);
+        updateInputOwnership();
         return;
     }
 
@@ -278,7 +278,7 @@ void StreamView::handleWindowFocusChanged(bool focused) {
                 if (!alive->load()) return;
                 foreground_recovery_running_ = false;
                 if (recovered) {
-                    updateInputSuppression();
+                    updateInputOwnership();
                     brls::Application::notify(
                         brls::getStr("lunarnx/stream/resumed"));
                     return;
@@ -328,15 +328,17 @@ brls::View* StreamView::createContentView() {
     // Minus + Plus: stop with double-press confirmation. Keep single Minus as Xbox View.
     auto stop_handler = [this](brls::View*) -> bool {
         if (!isExitComboPressed()) return false;
-        runtime_->setInputSuppressed(true);
         auto now = std::chrono::steady_clock::now();
-        if (exit_pending_.load() && std::chrono::duration_cast<std::chrono::seconds>(
-                now - exit_press_time_).count() < 3) {
+        const bool confirmed = exit_pending_.load() &&
+            std::chrono::duration_cast<std::chrono::seconds>(
+                now - exit_press_time_).count() < 3;
+        exit_pending_ = true;
+        updateInputOwnership();
+        if (confirmed) {
             running_ = false;
             stopAndReturn();
             return true;
         }
-        exit_pending_ = true;
         exit_press_time_ = now;
         if (confirm_box_) confirm_box_->setVisibility(brls::Visibility::VISIBLE);
         return true;
@@ -572,7 +574,7 @@ brls::View* StreamView::createContentView() {
 void StreamView::stopAndReturn() {
     if (stop_started_.exchange(true)) return;
     running_ = false;
-    runtime_->setInputSuppressed(false);
+    runtime_->inputRouter().setOwner(input::StreamInputOwner::Game);
     auto runtime = runtime_;
     const auto state = runtime_->getState();
     const bool report_disconnect =
@@ -594,7 +596,7 @@ void StreamView::setQuickMenuVisible(bool visible) {
     quick_menu_visible_ = visible;
     quick_menu_->setVisibility(
         visible ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
-    updateInputSuppression();
+    updateInputOwnership();
 
     disconnect_armed_ = false;
     if (disconnect_button_) {
@@ -607,18 +609,22 @@ void StreamView::setQuickMenuVisible(bool visible) {
     }
 }
 
-void StreamView::updateInputSuppression() {
-    runtime_->setInputSuppressed(
-        quick_menu_visible_ || child_activity_visible_ || exit_pending_.load());
+void StreamView::updateInputOwnership() {
+    const bool ui_owns_input = quick_menu_visible_ || child_activity_visible_ ||
+        exit_pending_.load() || backgrounded_.load() ||
+        foreground_recovery_running_.load();
+    runtime_->inputRouter().setOwner(ui_owns_input
+        ? input::StreamInputOwner::Ui
+        : input::StreamInputOwner::Game);
 }
 
 void StreamView::onPause() {
-    if (child_activity_visible_) updateInputSuppression();
+    if (child_activity_visible_) updateInputOwnership();
 }
 
 void StreamView::onResume() {
     child_activity_visible_ = false;
-    updateInputSuppression();
+    updateInputOwnership();
     if (content_root_) brls::Application::giveFocus(content_root_);
 }
 
@@ -699,7 +705,7 @@ void StreamView::runLoop() {
                     std::chrono::duration_cast<std::chrono::seconds>(
                         now - exit_press_time_).count() >= 3) {
                     exit_pending_ = false;
-                    updateInputSuppression();
+                    updateInputOwnership();
                     if (confirm_box_) confirm_box_->setVisibility(brls::Visibility::GONE);
                 }
             });

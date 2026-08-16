@@ -84,6 +84,7 @@ XboxStreamSession::XboxStreamSession(XboxSessionClient& session_client,
                                      input::GamepadReader& gamepad,
                                      input::XInputEncoder& xinput,
                                      input::RumbleController& rumble,
+                                     input::StreamInputRouter& input_router,
                                      stream::PerfStats& perf)
     : session_client_(session_client),
       transport_(transport),
@@ -92,6 +93,7 @@ XboxStreamSession::XboxStreamSession(XboxSessionClient& session_client,
       gamepad_(gamepad),
       xinput_(xinput),
       rumble_(rumble),
+      input_router_(input_router),
       perf_(perf) {}
 
 XboxStreamSession::~XboxStreamSession() {
@@ -575,9 +577,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             } else if (guide_release_pending) {
                 gamepad_state = {};
                 guide_release_pending = false;
-            } else if (callbacks.input_suppressed && callbacks.input_suppressed()) {
-                gamepad_state = {};
             }
+            gamepad_state = input_router_.route(gamepad_state);
             const auto input_packet = xinput_.encode(gamepad_state);
             if (control_started && !first_input_logged) {
                 lunar::diagnosticLog(

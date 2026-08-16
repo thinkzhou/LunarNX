@@ -69,11 +69,6 @@ bool PsStreamController::setPsnCredentials(std::string access_token,
     return true;
 }
 
-void PsStreamController::setInputSuppressed(bool suppressed) {
-    input_suppressed_ = suppressed;
-    if (suppressed && rumble_) rumble_->stop();
-}
-
 app::TouchpadFeedback PsStreamController::getTouchpadFeedback() const {
     std::lock_guard<std::mutex> lock(touchpad_feedback_mutex_);
     return touchpad_feedback_;
@@ -221,7 +216,7 @@ bool PsStreamController::startStream() {
     });
     bridge_ = std::make_unique<PsMediaBridge>(*media_, mock_replay ? 30 : fps_);
     bridge_->setRumbleForwarder([this](uint8_t left, uint8_t right) {
-        if (!rumble_ || input_suppressed_.load() ||
+        if (!rumble_ || !input_router_.gameHasInput() ||
             state_.load() != app::StreamState::Streaming) return;
         rumble_->setRumble(0,
             static_cast<float>(left) / 255.0f,
@@ -508,7 +503,7 @@ void PsStreamController::update() {
     }
 
     auto state = gamepad_->read();
-    const bool input_suppressed = input_suppressed_.load();
+    const bool input_suppressed = !input_router_.gameHasInput();
     PsTouchpadState touchpad = touchpad_reader_
         ? touchpad_reader_->read(input_suppressed)
         : PsTouchpadState{};
@@ -554,9 +549,8 @@ void PsStreamController::update() {
     } else if (ps_button_release_pending_) {
         state = {};
         ps_button_release_pending_ = false;
-    } else if (input_suppressed) {
-        state = {};
     }
+    state = input_router_.route(state);
 
     const PsMotionState motion = motion_reader_
         ? motion_reader_->read(input_suppressed)

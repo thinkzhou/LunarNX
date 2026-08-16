@@ -43,7 +43,7 @@ def main() -> None:
     require("setRumbleEnabled" in ps_controller_header and
             "setRumbleStrengthPercent" in ps_controller_header and
             "setRumbleForwarder" in ps_controller_source and
-            "input_suppressed_.load()" in ps_controller_source and
+            "!input_router_.gameHasInput()" in ps_controller_source and
             "state_.load() != app::StreamState::Streaming" in ps_controller_source and
             "rumble_->update()" in ps_controller_source and
             "rumble_->stop()" in ps_controller_source,
