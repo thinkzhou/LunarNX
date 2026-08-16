@@ -45,6 +45,27 @@ async function serveObject(namespace, key, cacheControl, contentType, headers = 
   });
 }
 
+async function buildDownloadHeaders(namespace, name) {
+  const sha256 = name.slice(0, 64);
+  let version = null;
+  try {
+    const indexText = await namespace.get("builds/index.json");
+    const index = indexText ? JSON.parse(indexText) : null;
+    const release = Array.isArray(index?.versions)
+      ? index.versions.find((item) => item?.sha256 === sha256)
+      : null;
+    if (/^[A-Za-z0-9._-]{1,64}$/.test(release?.version || "")) {
+      version = release.version;
+    }
+  } catch {
+    // The immutable build remains downloadable if its optional index is bad.
+  }
+  const label = version || `build-${sha256.slice(0, 12)}`;
+  return {
+    "content-disposition": `attachment; filename="LunarNX-${label}.nro"`,
+  };
+}
+
 async function uploadLog(request, env) {
   if (!(await authorized(request, env.DEVICE_UPLOAD_TOKEN))) {
     return json({ error: "unauthorized" }, 401);
@@ -139,12 +160,15 @@ export default {
         return json({ error: "invalid_build_name" }, 400);
       }
       const compressed = name.endsWith(".gz");
+      const downloadHeaders = await buildDownloadHeaders(env.ARTIFACTS, name);
       return serveObject(
         env.ARTIFACTS,
         `builds/${name}`,
         "public, max-age=31536000, immutable",
         "application/octet-stream",
-        compressed ? { "content-encoding": "gzip", "vary": "Accept-Encoding" } : {},
+        compressed
+          ? { ...downloadHeaders, "content-encoding": "gzip", "vary": "Accept-Encoding" }
+          : downloadHeaders,
       );
     }
     if (request.method === "POST" && url.pathname === "/dev/logs") {

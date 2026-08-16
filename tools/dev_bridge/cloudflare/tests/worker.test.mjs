@@ -113,6 +113,29 @@ test("compressed build downloads are served with gzip content encoding", async (
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), compressed);
 });
 
+test("build downloads suggest a meaningful versioned filename", async () => {
+  const testEnv = env();
+  const sha = "b".repeat(64);
+  const release = {
+    version: "0.2.0-d260817.1",
+    sha256: sha,
+  };
+  await testEnv.ARTIFACTS.put(`builds/${sha}.nro`, "nro payload");
+  await testEnv.ARTIFACTS.put(
+    "builds/index.json",
+    JSON.stringify({ schema: 1, versions: [release] }),
+  );
+
+  const response = await worker.fetch(
+    new Request(`https://bridge.test/dev/builds/${sha}.nro`), testEnv);
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    response.headers.get("content-disposition"),
+    'attachment; filename="LunarNX-0.2.0-d260817.1.nro"',
+  );
+});
+
 test("version index and individual manifests are downloadable", async () => {
   const testEnv = env();
   const release = {
