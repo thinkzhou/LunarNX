@@ -43,6 +43,7 @@ public:
     // Get current unified console list
     std::vector<PsConsole> getUnifiedList() const;
     void setRegisteredCredentials(std::vector<RegisteredCredential> credentials);
+    void notePairedLocalHost(const RegisteredCredential& credential);
 
     // Expose discovery for wakeup
     PsDiscovery* discovery() { return discovery_.get(); }

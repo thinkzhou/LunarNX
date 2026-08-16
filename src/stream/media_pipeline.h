@@ -161,6 +161,9 @@ private:
     void handleAudioFrame(const AudioFrame& frame, uint32_t generation);
     bool submitDecodedAudio(const AudioFrame& frame, uint32_t generation);
     void shutdownUnlocked();
+    PerfStats* perfStats() const {
+        return perf_.load(std::memory_order_relaxed);
+    }
 
     StreamBackendProvider& provider_;
     std::unique_ptr<VideoDecoder> video_decoder_;
@@ -169,7 +172,7 @@ private:
     std::unique_ptr<AudioPlayer> audio_player_;
     std::unique_ptr<AVSync> av_sync_;
 
-    PerfStats* perf_ = nullptr;
+    std::atomic<PerfStats*> perf_{nullptr};
     VideoCodec video_codec_ = VideoCodec::H264;
     std::atomic<bool> running_{false};
     std::atomic<uint32_t> generation_{0};

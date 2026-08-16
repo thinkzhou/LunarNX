@@ -42,7 +42,8 @@ PsDiscovery::~PsDiscovery() {
     stop();
 }
 
-bool PsDiscovery::start(HostFoundCallback cb) {
+bool PsDiscovery::start(const std::vector<std::string>& manual_hosts,
+                        HostFoundCallback cb) {
     if (running_.load()) return false;
     callback_ = std::move(cb);
 
@@ -90,6 +91,30 @@ bool PsDiscovery::start(HostFoundCallback cb) {
         return false;
     }
     running_.store(true);
+
+    // Chiaki's service periodically broadcasts, but some access points filter
+    // both limited and directed broadcasts. Probe saved numeric addresses on
+    // the same discovery socket so a reply can verify the historical route
+    // without allocating another service/thread per console.
+    for (const auto& host : manual_hosts) {
+        sockaddr_in direct{};
+        direct.sin_family = AF_INET;
+        if (inet_pton(AF_INET, host.c_str(), &direct.sin_addr) != 1) continue;
+
+        ChiakiDiscoveryPacket packet{};
+        packet.cmd = CHIAKI_DISCOVERY_CMD_SRCH;
+        packet.protocol_version = const_cast<char*>(
+            CHIAKI_DISCOVERY_PROTOCOL_VERSION_PS4);
+        direct.sin_port = htons(CHIAKI_DISCOVERY_PORT_PS4);
+        chiaki_discovery_send(&service_.discovery, &packet,
+            reinterpret_cast<sockaddr*>(&direct), sizeof(direct));
+
+        packet.protocol_version = const_cast<char*>(
+            CHIAKI_DISCOVERY_PROTOCOL_VERSION_PS5);
+        direct.sin_port = htons(CHIAKI_DISCOVERY_PORT_PS5);
+        chiaki_discovery_send(&service_.discovery, &packet,
+            reinterpret_cast<sockaddr*>(&direct), sizeof(direct));
+    }
     return true;
 }
 

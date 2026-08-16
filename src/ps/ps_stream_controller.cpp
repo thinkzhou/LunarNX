@@ -280,9 +280,11 @@ bool PsStreamController::startStream() {
     }
 
     if (!ok) {
-        if (cancel_requested_.load()) return false;
         last_error_ = mock_replay ? mock_session_->lastError()
                                   : session_->lastError();
+        if (mock_session_) mock_session_->stop();
+        else if (session_) session_->stop();
+        if (cancel_requested_.load()) return false;
         setState(app::StreamState::Error, last_error_);
         return false;
     }
@@ -300,6 +302,8 @@ bool PsStreamController::startStream() {
     media_opts.video_backend = video_backend_;
     if (!media_->initialize(width_, height_, &perf_, media_opts)) {
         last_error_ = "Failed to initialize media pipeline";
+        if (mock_session_) mock_session_->stop();
+        else if (session_) session_->stop();
         setState(app::StreamState::Error, last_error_);
         return false;
     }

@@ -397,6 +397,7 @@
   "detail_paired": "已配对",
   "detail_rest": "局域网休眠模式",
   "detail_ready": "局域网就绪",
+  "detail_last_known": "上次地址 — 请搜索局域网确认在线",
   "detail_remote": "通过 PSN 远程",
   "detail_remote_disabled": "远程串流已禁用",
   "btn_pair": "配对",

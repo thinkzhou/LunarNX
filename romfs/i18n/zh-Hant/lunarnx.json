@@ -397,6 +397,7 @@
   "detail_paired": "已配對",
   "detail_rest": "區域網路休眠模式",
   "detail_ready": "區域網路就緒",
+  "detail_last_known": "上次位址 — 請搜尋區域網路確認在線",
   "detail_remote": "透過 PSN 遠端",
   "detail_remote_disabled": "遠端遊玩已停用",
   "btn_pair": "配對",

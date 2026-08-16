@@ -30,7 +30,7 @@ void appendMockReplayConsole(std::vector<ps::PsConsole>& hosts) {
     mock.nickname = "LunarNX Mock PS5";
     mock.target = 1000100;
     mock.local = ps::PsLocalEndpoint{
-        "mock-replay", 0, ps::PsConsoleState::Ready};
+        "mock-replay", 0, ps::PsConsoleState::Ready, true};
     mock.credentials = ps::RegisteredCredential{};
     mock.credentials->server_mac = mock.server_mac;
     mock.credentials->nickname = mock.nickname;
@@ -752,7 +752,8 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         card->setAlignItems(brls::AlignItems::CENTER);
 
         auto* glyph = new ConsoleGlyphView(host.target >= 1000000 ? "PS5" : "PS4",
-            host.local.has_value() || (host.remote.has_value() && host.remote->remoteplay_enabled));
+            (host.local.has_value() && host.local->verified) ||
+            (host.remote.has_value() && host.remote->remoteplay_enabled));
         glyph->setWidth(82);
         glyph->setHeight(72);
         card->addView(glyph);
@@ -772,9 +773,13 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         if (host.credentials.has_value())
             detail += " · " + brls::getStr("lunarnx/ps/detail_paired");
         if (host.local.has_value()) {
-            detail += host.local->state == ps::PsConsoleState::Standby
-                ? " · " + brls::getStr("lunarnx/ps/detail_rest")
-                : " · " + brls::getStr("lunarnx/ps/detail_ready");
+            if (!host.local->verified) {
+                detail += " · " + brls::getStr("lunarnx/ps/detail_last_known");
+            } else {
+                detail += host.local->state == ps::PsConsoleState::Standby
+                    ? " · " + brls::getStr("lunarnx/ps/detail_rest")
+                    : " · " + brls::getStr("lunarnx/ps/detail_ready");
+            }
         }
         if (host.remote.has_value()) {
             detail += host.remote->remoteplay_enabled
@@ -789,8 +794,10 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
 
         const bool paired = host.credentials.has_value();
         const bool local_ready = host.local.has_value() &&
+            host.local->verified &&
             host.local->state == ps::PsConsoleState::Ready;
         const bool local_standby = host.local.has_value() &&
+            host.local->verified &&
             host.local->state == ps::PsConsoleState::Standby;
         const bool remote_enabled = host.remote.has_value() &&
             host.remote->remoteplay_enabled;
@@ -873,6 +880,7 @@ bool PsActivity::completePendingWake(const std::vector<ps::PsConsole>& hosts) {
     const auto ready = std::find_if(hosts.begin(), hosts.end(),
         [this](const ps::PsConsole& host) {
             return host.server_mac == pending_wake_mac_ && host.local.has_value() &&
+                   host.local->verified &&
                    host.local->state == ps::PsConsoleState::Ready;
         });
     if (ready == hosts.end()) return false;
@@ -994,6 +1002,11 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
     diagnosticLog("ui-ps", "connect route resolved type=%d", static_cast<int>(route.type));
     const bool requested_remote = route.type == ps::ResolvedRouteType::Remote;
     if (action_status_) action_status_->setText(ps::PsConsoleResolver::routeDescription(route));
+
+    // Discovery owns a UDP socket and worker thread. Streaming no longer
+    // needs it, and leaving it alive competes with Chiaki session sockets in
+    // Applet Mode.
+    stopDiscovery();
 
     const auto settings = loadPsSettings();
     diagnosticLog("ui-ps", "stream profile=%dx%d fps=60 bitrate_kbps=%d codec=%s",

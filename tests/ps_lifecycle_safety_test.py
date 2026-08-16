@@ -7,6 +7,9 @@ CONTROLLER_H = (ROOT / "src/ps/ps_stream_controller.h").read_text()
 CONTROLLER = (ROOT / "src/ps/ps_stream_controller.cpp").read_text()
 BRIDGE_H = (ROOT / "src/ps/ps_media_bridge.h").read_text()
 LOG_ADAPTER = (ROOT / "src/ps/chiaki_log_adapter.cpp").read_text()
+MEDIA_H = (ROOT / "src/stream/media_pipeline.h").read_text()
+MEDIA = (ROOT / "src/stream/media_pipeline.cpp").read_text()
+SESSION = (ROOT / "src/ps/ps_stream_session.cpp").read_text()
 
 
 def require(condition, message):
@@ -36,5 +39,19 @@ require('NoisyLogKind::SendBufferOverflow' in LOG_ADAPTER and
         "send-buffer overflow spam must be aggregated asynchronously")
 require("if (!stream_transport_connected_.load()) continue;" in CONTROLLER,
         "first-video timeout must not run before StreamConnection is connected")
+require("std::atomic<PerfStats*> perf_" in MEDIA_H and
+        "perf_.store(perf" in MEDIA and
+        "perf_.store(nullptr" in MEDIA,
+        "early Chiaki media callbacks must not race media perf lifecycle")
+media_failure = CONTROLLER.split(
+    "if (!media_->initialize", 1)[1].split("requestIDR", 1)[0]
+require("mock_session_->stop()" in media_failure and
+        "session_->stop()" in media_failure,
+        "media initialization failure must stop the already-started PS session")
+session_start_failure = SESSION.split(
+    "if (err != CHIAKI_ERR_SUCCESS)", 2)[2].split("started_ = true", 1)[0]
+require("chiaki_session_fini(&session_)" in session_start_failure and
+        "initialized_ = false" in session_start_failure,
+        "Chiaki start failure must finalize the initialized session immediately")
 
 print("PS lifecycle safety test passed")

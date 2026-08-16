@@ -130,15 +130,15 @@ void PsRegistration::onRegistEvent(ChiakiRegistEvent* event, void* user) {
             if (self->result_out_ && event->registered_host) {
                 std::memcpy(self->result_out_, event->registered_host, sizeof(ChiakiRegisteredHost));
             }
-            if (self->callback_) {
-                self->callback_(RegistrationResult::Success, "");
+            if (auto callback = std::move(self->callback_)) {
+                callback(RegistrationResult::Success, "");
             }
             break;
 
         case CHIAKI_REGIST_EVENT_TYPE_FINISHED_FAILED:
             self->running_.store(false);
-            if (self->callback_) {
-                self->callback_(RegistrationResult::Failed,
+            if (auto callback = std::move(self->callback_)) {
+                callback(RegistrationResult::Failed,
                     registrationFailureDetail(
                         chiaki_log_sniffer_get_buffer(&self->log_sniffer_)));
             }
@@ -146,8 +146,8 @@ void PsRegistration::onRegistEvent(ChiakiRegistEvent* event, void* user) {
 
         case CHIAKI_REGIST_EVENT_TYPE_FINISHED_CANCELED:
             self->running_.store(false);
-            if (self->callback_) {
-                self->callback_(RegistrationResult::Cancelled, "Registration cancelled");
+            if (auto callback = std::move(self->callback_)) {
+                callback(RegistrationResult::Cancelled, "Registration cancelled");
             }
             break;
 

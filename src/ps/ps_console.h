@@ -60,6 +60,10 @@ struct PsLocalEndpoint {
     std::string ip;
     uint16_t port = 0;
     PsConsoleState state = PsConsoleState::Unknown;
+    // True only when this endpoint was discovered or paired during the
+    // current process. A persisted last-known address is display metadata,
+    // not proof that the console is reachable now.
+    bool verified = false;
 };
 
 struct PsRemoteEndpoint {

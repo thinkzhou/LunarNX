@@ -162,6 +162,8 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
     diagnosticLog("ps-session", "chiaki_session_start rc=%d", err);
     if (err != CHIAKI_ERR_SUCCESS) {
         setLastError("Session start failed: " + std::string(chiaki_error_string(err)));
+        chiaki_session_fini(&session_);
+        initialized_ = false;
         state_.store(PsSessionState::Error);
         if (callbacks_.on_error) callbacks_.on_error(lastError());
         return false;

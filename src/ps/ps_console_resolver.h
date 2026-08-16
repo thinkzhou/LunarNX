@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef __SWITCH__
+#if defined(__SWITCH__) || defined(LUNARNX_DESKTOP_TEST)
 
 #include "ps_console.h"
 #include <optional>

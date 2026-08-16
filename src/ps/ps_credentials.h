@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef __SWITCH__
+#if defined(__SWITCH__) || defined(LUNARNX_DESKTOP_TEST)
 
 #include "ps_console.h"
 #include <mutex>
@@ -18,6 +18,9 @@ public:
 
     std::vector<RegisteredCredential> getRegisteredHosts() const;
     std::optional<RegisteredCredential> findByMac(const std::string& server_mac) const;
+    // Replace one credential only after the complete credential set has been
+    // durably written. A failed save leaves the in-memory set unchanged.
+    bool addAndSave(const RegisteredCredential& cred, const std::string& path);
     void add(const RegisteredCredential& cred);
     void remove(const std::string& server_mac);
     bool empty() const;

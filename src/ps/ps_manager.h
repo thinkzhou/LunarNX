@@ -77,6 +77,9 @@ private:
     PsnAuthManager psn_auth_;
     std::unique_ptr<PsConsoleRepository> repository_;
     std::unique_ptr<PsRegistration> registration_;
+    std::atomic<uint64_t> registration_generation_{0};
+    std::shared_ptr<std::atomic<bool>> alive_ =
+        std::make_shared<std::atomic<bool>>(true);
     std::atomic<bool> discovering_{false};
 };
 

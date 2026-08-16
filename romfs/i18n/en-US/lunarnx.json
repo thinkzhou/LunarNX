@@ -397,6 +397,7 @@
   "detail_paired": "Paired",
   "detail_rest": "Rest mode on LAN",
   "detail_ready": "Ready on LAN",
+  "detail_last_known": "Last known address — search LAN to verify",
   "detail_remote": "Remote via PSN",
   "detail_remote_disabled": "Remote Play disabled",
   "btn_pair": "Pair",
