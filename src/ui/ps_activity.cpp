@@ -562,10 +562,14 @@ void PsActivity::onResume() {
     updateAccountUi();
     console_list_refresh_suspended_ = false;
     if (console_list_refresh_pending_) {
-        console_list_refresh_pending_ = false;
         auto alive = alive_;
         brls::sync([this, alive]() {
-            if (!alive->load()) return;
+            // Replacing the connection activity with StreamView briefly
+            // resumes this page before immediately pausing it again. Do not
+            // let that stale resume task steal global focus from the stream.
+            // Keep the refresh pending until this page is genuinely visible.
+            if (!alive->load() || console_list_refresh_suspended_) return;
+            console_list_refresh_pending_ = false;
             // This runs after popActivity has finished restoring its saved
             // focus. Move to a persistent control before deleting list rows.
             if (lan_button_) brls::Application::giveFocus(lan_button_);

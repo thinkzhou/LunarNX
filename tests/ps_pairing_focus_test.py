@@ -18,6 +18,18 @@ def main() -> None:
     assert "if (console_list_refresh_suspended_)" in ps_activity
     assert "brls::Application::giveFocus(lan_button_)" in ps_activity
 
+    resume = ps_activity.split("void PsActivity::onResume()", 1)[1].split(
+        "void PsActivity::startLanDiscovery()", 1)[0]
+    deferred_refresh = resume.split("brls::sync([this, alive]()", 1)[1]
+    foreground_guard = "if (!alive->load() || console_list_refresh_suspended_) return;"
+    assert foreground_guard in deferred_refresh
+    assert deferred_refresh.index(foreground_guard) < deferred_refresh.index(
+        "brls::Application::giveFocus(lan_button_)")
+    assert deferred_refresh.index("console_list_refresh_pending_ = false;") < \
+        deferred_refresh.index("brls::Application::giveFocus(lan_button_)")
+    before_deferred_refresh = resume.split("brls::sync([this, alive]()", 1)[0]
+    assert "console_list_refresh_pending_ = false;" not in before_deferred_refresh
+
     print("PS pairing focus tests passed")
 
 
