@@ -66,8 +66,9 @@ void PsStreamSession::configureConnectInfo() {
     connect_info_.video_profile.codec = video_codec_ == stream::VideoCodec::HEVC
         ? CHIAKI_CODEC_H265 : CHIAKI_CODEC_H264;
     connect_info_.video_profile_auto_downgrade = true;
-    connect_info_.packet_loss_max = 0.02;
-    connect_info_.enable_dualsense = true;
+    connect_info_.packet_loss_max = 0.05;
+    connect_info_.enable_dualsense = is_ps5_;
+    connect_info_.enable_idr_on_fec_failure = true;
     // LunarNX does not expose Chiaki's remote keyboard protocol. Keep this
     // disabled like chiaki-ng instead of advertising an unsupported optional
     // feature and sending extra CTRL messages after the session ID arrives.
