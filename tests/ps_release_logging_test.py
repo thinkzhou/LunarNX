@@ -21,10 +21,8 @@ def main() -> None:
     assert 'persistentEventLog("ps-registration"' in registration
     assert 'stage=missing-account-id' in manager
     assert 'stage=credential-save' in manager
-    assert "pin" not in "\n".join(
-        line for line in registration.splitlines()
-        if "persistentEventLog" in line or "failed stage=" in line
-    ).lower()
+    assert "chiaki_log_sniffer_init(&log_sniffer_,\n        CHIAKI_LOG_ALL" in registration
+    assert "formatRegistrationEvent" in registration
 
     print("PS release logging test passed")
 

@@ -1,94 +1,12 @@
 #ifdef __SWITCH__
 
 #include "ps_registration.h"
+#include "ps_registration_diagnostics.h"
 #include "../diagnostics.h"
 #include <chiaki/base64.h>
 #include <cstring>
 
 namespace lunar::ps {
-namespace {
-
-std::string registrationFailureDetail(const char* log) {
-    if (!log) return "Registration failed";
-    const std::string messages(log);
-    if (messages.find("failed to generate random ambassador") != std::string::npos) {
-        return "Could not initialize registration encryption";
-    }
-    if (messages.find("failed to format payload") != std::string::npos ||
-        messages.find("failed to format request") != std::string::npos) {
-        return "Could not prepare the registration request";
-    }
-    if (messages.find("failed to getaddrinfo") != std::string::npos) {
-        return "Invalid console address";
-    }
-    if (messages.find("failed to create socket for search") != std::string::npos) {
-        return "Local pairing socket unavailable; restart LunarNX and try again";
-    }
-    if (messages.find("failed to connect for search") != std::string::npos ||
-        messages.find("connect failed: tried all addresses") != std::string::npos) {
-        return "Could not reach the console pairing port; check its IP address and network";
-    }
-    if (messages.find("timed out waiting for search response") != std::string::npos ||
-        messages.find("Regist search failed") != std::string::npos) {
-        return "Console did not answer the pairing search; check pairing mode and console type";
-    }
-    if (messages.find("failed to connect for request") != std::string::npos) {
-        return "Could not connect to the console registration port";
-    }
-    if (messages.find("failed to send request header") != std::string::npos ||
-        messages.find("failed to send payload") != std::string::npos) {
-        return "Could not send the registration request";
-    }
-    if (messages.find("received HTTP code") != std::string::npos ||
-        messages.find("Reported Application Reason") != std::string::npos) {
-        return "Console rejected registration; check the active user's Account ID and PIN";
-    }
-    if (messages.find("failed to receive response HTTP header") != std::string::npos) {
-        return "Timed out waiting for the console registration response";
-    }
-    if (messages.find("response does not contain") != std::string::npos ||
-        messages.find("failed to pare response") != std::string::npos) {
-        return "Console returned an invalid registration response";
-    }
-    return "Registration failed; check the active user's Account ID, PIN, and console type";
-}
-
-const char* registrationFailureStage(const char* log) {
-    if (!log) return "unknown";
-    const std::string messages(log);
-    if (messages.find("failed to generate random ambassador") != std::string::npos)
-        return "crypto";
-    if (messages.find("failed to format payload") != std::string::npos ||
-        messages.find("failed to format request") != std::string::npos)
-        return "request-format";
-    if (messages.find("failed to getaddrinfo") != std::string::npos)
-        return "invalid-address";
-    if (messages.find("failed to create socket for search") != std::string::npos)
-        return "search-socket";
-    if (messages.find("failed to connect for search") != std::string::npos ||
-        messages.find("connect failed: tried all addresses") != std::string::npos)
-        return "search-connect";
-    if (messages.find("timed out waiting for search response") != std::string::npos ||
-        messages.find("Regist search failed") != std::string::npos)
-        return "search-timeout";
-    if (messages.find("failed to connect for request") != std::string::npos)
-        return "request-connect";
-    if (messages.find("failed to send request header") != std::string::npos ||
-        messages.find("failed to send payload") != std::string::npos)
-        return "request-send";
-    if (messages.find("received HTTP code") != std::string::npos ||
-        messages.find("Reported Application Reason") != std::string::npos)
-        return "console-rejected";
-    if (messages.find("failed to receive response HTTP header") != std::string::npos)
-        return "response-timeout";
-    if (messages.find("response does not contain") != std::string::npos ||
-        messages.find("failed to pare response") != std::string::npos)
-        return "invalid-response";
-    return "unknown";
-}
-
-} // namespace
-
 PsRegistration::PsRegistration(ChiakiLog* log) : log_(log) {}
 
 PsRegistration::~PsRegistration() {
@@ -128,7 +46,7 @@ ChiakiErrorCode PsRegistration::start(const std::string& host, uint32_t pin, int
     }
 
     chiaki_log_sniffer_init(&log_sniffer_,
-        CHIAKI_LOG_INFO | CHIAKI_LOG_WARNING | CHIAKI_LOG_ERROR, log_);
+        CHIAKI_LOG_ALL, log_);
     log_sniffer_initialized_.store(true);
     ChiakiErrorCode err = chiaki_regist_start(
         &regist_, chiaki_log_sniffer_get_log(&log_sniffer_),
@@ -177,15 +95,18 @@ void PsRegistration::onRegistEvent(ChiakiRegistEvent* event, void* user) {
 
         case CHIAKI_REGIST_EVENT_TYPE_FINISHED_FAILED:
             self->running_.store(false);
-            persistentEventLog("ps-registration",
-                "failed stage=%s target=%d",
-                registrationFailureStage(
-                    chiaki_log_sniffer_get_buffer(&self->log_sniffer_)),
-                static_cast<int>(self->regist_.info.target));
-            if (auto callback = std::move(self->callback_)) {
-                callback(RegistrationResult::Failed,
-                    registrationFailureDetail(
-                        chiaki_log_sniffer_get_buffer(&self->log_sniffer_)));
+            {
+                const char* captured_log =
+                    chiaki_log_sniffer_get_buffer(&self->log_sniffer_);
+                const RegistrationDiagnostic diagnostic =
+                    analyzeRegistrationLog(captured_log);
+                const std::string event = formatRegistrationEvent(
+                    "failed", static_cast<int>(self->regist_.info.target),
+                    captured_log);
+                persistentEventLog("ps-registration", "%s", event.c_str());
+                if (auto callback = std::move(self->callback_)) {
+                    callback(RegistrationResult::Failed, diagnostic.detail);
+                }
             }
             break;
 

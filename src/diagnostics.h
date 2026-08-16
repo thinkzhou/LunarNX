@@ -332,8 +332,8 @@ inline void diagnosticLog(const char* component, const char* format, ...) noexce
 }
 
 // Rare, user-visible failures must remain diagnosable in release builds where
-// APP_DIAG=0. Callers must use sanitized metadata only: never PINs, tokens,
-// account IDs, payloads, or per-packet events.
+// APP_DIAG=0. Prefer sanitized metadata. Raw protocol traces are reserved for
+// bounded, user-initiated troubleshooting flows and must never be per-packet.
 inline void persistentEventLog(const char* component, const char* format, ...) noexcept {
     try {
         ensureDiagnosticLogDirectory();

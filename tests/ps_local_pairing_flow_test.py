@@ -8,6 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> None:
     discovery = (ROOT / "src/ps/ps_discovery.cpp").read_text()
     registration = (ROOT / "src/ps/ps_registration.cpp").read_text()
+    registration_diagnostics = (
+        ROOT / "src/ps/ps_registration_diagnostics.cpp"
+    ).read_text()
     registration_h = (ROOT / "src/ps/ps_registration.h").read_text()
     manager = (ROOT / "src/ps/ps_manager.cpp").read_text()
     repository = (ROOT / "src/ps/ps_console_repository.cpp").read_text()
@@ -46,10 +49,12 @@ def main() -> None:
     assert "info.broadcast = false" in registration
     assert "target >= CHIAKI_TARGET_PS4_9" in registration
     assert "chiaki_log_sniffer_init" in registration
-    assert "registrationFailureDetail" in registration
-    assert 'messages.find("failed to create socket for search")' in registration
-    assert 'messages.find("failed to connect for search")' in registration
-    assert "Local pairing socket unavailable" in registration
+    assert "analyzeRegistrationLog" in registration
+    assert 'contains(messages, "failed to create socket for search")' in \
+        registration_diagnostics
+    assert 'contains(messages, "failed to connect for search")' in \
+        registration_diagnostics
+    assert "Local pairing socket unavailable" in registration_diagnostics
     assert "ChiakiLogSniffer" in registration_h
     assert "phone_pairing_server_.stop();" in (ROOT / "src/ui/ps_registration_activity.cpp").read_text()
     assert "const bool started = ps_manager_->startDiscovery" in activity
