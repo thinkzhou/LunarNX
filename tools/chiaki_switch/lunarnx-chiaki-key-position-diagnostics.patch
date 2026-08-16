@@ -6,7 +6,9 @@ index 52e5bd32..b348251a 100644
  	uint8_t mac[CHIAKI_GKCRYPT_GMAC_SIZE];
  	uint8_t mac_expected[CHIAKI_GKCRYPT_GMAC_SIZE];
  	uint64_t key_pos;
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +	uint64_t key_pos_prev = takion->key_state.prev;
++#endif
  	ChiakiErrorCode err = chiaki_takion_packet_read_key_pos(takion, buf, buf_size, &key_pos);
  	if(err != CHIAKI_ERR_SUCCESS)
  	{
@@ -14,6 +16,7 @@ index 52e5bd32..b348251a 100644
  		return CHIAKI_ERR_INVALID_MAC;
  	}
  
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +	uint32_t epoch_prev = (uint32_t)(key_pos_prev >> 32);
 +	uint32_t epoch_next = (uint32_t)(key_pos >> 32);
 +	if(epoch_prev != epoch_next)
@@ -21,6 +24,7 @@ index 52e5bd32..b348251a 100644
 +			"LUNARNX-PSKEY epoch_prev=%u epoch_next=%u low=%#x key_pos=%#llx",
 +			epoch_prev, epoch_next, (unsigned int)(uint32_t)key_pos,
 +			(unsigned long long)key_pos);
++#endif
  	chiaki_key_state_commit(&takion->key_state, key_pos);
  
  	return CHIAKI_ERR_SUCCESS;

@@ -23,13 +23,25 @@ require("fec_ok=%llu fec_fail=%llu", "FEC outcome counters are missing")
 require("callback_avg_us=%llu callback_max_us=%llu callback_fail=%llu",
         "Video callback timing is missing")
 require(">= 10000000", "Diagnostics must be rate-limited to ten seconds")
+require("#ifndef LUNARNX_CHIAKI_TRANSPORT_DIAG",
+        "Diagnostics patch must define a safe default")
+if PATCH.count("#if LUNARNX_CHIAKI_TRANSPORT_DIAG") < 8:
+    raise AssertionError("Every transport hot path must compile out of release builds")
 
 if "lunarnx-chiaki-transport-diagnostics.patch" not in BUILD:
     raise AssertionError("Switch Chiaki build must apply the diagnostics patch")
 if "lunarnx-chiaki-key-position-diagnostics.patch" not in BUILD:
     raise AssertionError("Switch Chiaki build must apply key-position diagnostics")
+if "CHIAKI_TRANSPORT_DIAG=${CHIAKI_TRANSPORT_DIAG:-0}" not in BUILD:
+    raise AssertionError("Switch Chiaki transport diagnostics must default to disabled")
+if "CHIAKI_TRANSPORT_DIAG must be 0 or 1" not in BUILD:
+    raise AssertionError("Switch Chiaki build must validate the diagnostics option")
+if "-DLUNARNX_CHIAKI_TRANSPORT_DIAG=$CHIAKI_TRANSPORT_DIAG" not in BUILD:
+    raise AssertionError("Switch Chiaki build must pass the diagnostics option to the compiler")
 if "LUNARNX-PSKEY epoch_prev=%u epoch_next=%u" not in KEY_PATCH:
     raise AssertionError("Authenticated key-position epoch changes must be observable")
+if "#if LUNARNX_CHIAKI_TRANSPORT_DIAG" not in KEY_PATCH:
+    raise AssertionError("Key-position diagnostics must compile out of release builds")
 if ("LUNARNX-PSRX " not in ADAPTER or "LUNARNX-PSVIDEO " not in ADAPTER or
         "LUNARNX-PSKEY " not in ADAPTER):
     raise AssertionError("Aggregate records must use the asynchronous diagnostic writer")
