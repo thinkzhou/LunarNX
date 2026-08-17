@@ -10,8 +10,6 @@ bool decimalPsnAccountIdToBase64(const std::string& input, std::string& account_
 bool hexPsnAccountIdToBase64(const std::string& input, std::string& account_id);
 bool normalizePsnAccountId(const std::string& input, std::string& account_id);
 #ifdef __SWITCH__
-bool lookupPsnAccountId(const std::string& username, std::string& account_id,
-                        std::string& error);
 std::string loadManualPsnAccountId(const std::string& console_key = {});
 bool saveManualPsnAccountId(const std::string& account_id,
                             const std::string& console_key = {});

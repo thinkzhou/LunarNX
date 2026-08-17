@@ -11,7 +11,7 @@ def main():
     assert "loadManualPsnAccountId" in header
     assert "saveManualPsnAccountId" in header
     assert "normalizePsnAccountId" in header
-    assert "lookupPsnAccountId" in header
+    assert "lookupPsnAccountId" not in header
     codec = Path("src/ps/ps_pairing_account_codec.cpp").read_text()
     store = Path("src/ps/ps_pairing_account_store.cpp").read_text()
     assert '"ps_local_account_id"' in store
@@ -20,9 +20,8 @@ def main():
     assert "uid >> (i * 8)" in codec
     assert "hexPsnAccountIdToBase64" in codec
     assert "base64Encode(bytes, sizeof(bytes))" in codec
-    assert '"https://psn.flipscreen.games/search.php?username="' in source
-    assert "getSensitive" in source
-    assert '"encoded_id"' in source
+    assert "lookupPsnAccountId" not in source
+    assert "psn.flipscreen.games" not in source
     assert "getPairingAccountId" in manager
     assert "loadManualPsnAccountId(console_key)" in manager
     assert "saveManualPsnAccountId(account_id, console_key)" in manager

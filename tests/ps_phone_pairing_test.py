@@ -11,28 +11,19 @@ def main():
     assert "struct PsPhonePairingInput" in header
     assert "std::string account_id" in header
     assert "uint32_t pin" in header
-    assert "decimalPsnAccountIdToBase64(account_input, account_id)" in source
-    assert "hexPsnAccountIdToBase64(account_input, account_id)" in source
     assert "normalizeBase64PsnAccountId(account_input, account_id)" in source
     assert "pin_text.size() == 8" in source
     assert "valid = valid && pin != 0" not in source
-    assert "PSN username could not be resolved" in source
-    assert "Invalid decimal Account ID" in source
-    assert "Invalid hexadecimal Account ID" in source
     assert "Invalid Base64 Account ID" in source
     assert "PIN must contain exactly 8 digits" in source
     assert 'name=\\"account_input\\"' in source
-    assert 'name=\\"account_type\\"' in source
-    assert 'value=\\"username\\"' in source
-    assert 'value=\\"decimal_id\\"' in source
-    assert 'value=\\"hex_id\\"' in source
-    assert 'value=\\"base64_id\\"' in source
-    assert 'account_type == "username"' in source
-    assert 'account_type == "decimal_id"' in source
-    assert 'account_type == "hex_id"' in source
-    assert 'account_type == "base64_id"' in source
-    assert "lookupPsnAccountId(account_input, account_id, lookup_error)" in source
-    assert "third-party FlipScreen" in source
+    assert 'name=\\"account_type\\"' not in source
+    assert 'value=\\"username\\"' not in source
+    assert 'value=\\"decimal_id\\"' not in source
+    assert 'value=\\"hex_id\\"' not in source
+    assert "lookupPsnAccountId(account_input, account_id" not in source
+    assert "https://www.psntools.com/psn/checker/" in source
+    assert "Base64" in source
     assert 'name=\\"pin\\"' in source
     assert 'type=\\"password\\"' in source
     assert "sessionToken" in source
