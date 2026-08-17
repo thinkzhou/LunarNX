@@ -51,7 +51,16 @@ for patch in \
     lunarnx-chiaki-transport-diagnostics.patch \
     lunarnx-chiaki-key-position-diagnostics.patch
 do
-    git -C "$src" apply "$project_root/tools/chiaki_switch/$patch"
+    case "$patch" in
+        lunarnx-chiaki-transport-diagnostics.patch|\
+        lunarnx-chiaki-key-position-diagnostics.patch)
+            git -C "$src" apply --recount \
+                "$project_root/tools/chiaki_switch/$patch"
+            ;;
+        *)
+            git -C "$src" apply "$project_root/tools/chiaki_switch/$patch"
+            ;;
+    esac
 done
 
 cp "$project_root/tools/chiaki_switch/protoc_from_pbgen.sh" "$tools_dir/protoc"
