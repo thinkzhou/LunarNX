@@ -6,10 +6,10 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 borealis_dir="$project_root/lib/borealis"
 libpeer_dir="$project_root/lib/libpeer"
 borealis_patch="$project_root/tools/borealis_switch/lunarnx-borealis-gpu-lifecycle.patch"
-libpeer_patch="$project_root/tools/libpeer_legacy/legacy-libpeer-switch.patch"
+libpeer_patch_dir="$project_root/tools/libpeer_legacy"
 
 borealis_commit="240223f372731949e04cba943c453dc45b69faa1"
-libpeer_commit="bdc50f0cae13f19a31bb11827daea3a8354b173f"
+libpeer_commit="9319aa434cb9e893faed0293ba9d2a21eca59c8b"
 
 clone_at_commit() {
     local url="$1"
@@ -54,24 +54,27 @@ else
     exit 2
 fi
 
-libpeer_was_missing=0
-if [[ ! -e "$libpeer_dir" ]]; then
-    libpeer_was_missing=1
-fi
 clone_at_commit \
     https://github.com/sepfy/libpeer.git \
     "$libpeer_dir" \
     "$libpeer_commit"
 
-if [[ "$libpeer_was_missing" -eq 1 ]]; then
-    git -C "$libpeer_dir" apply "$libpeer_patch"
-    printf 'Applied LunarNX legacy libpeer patch.\n'
-elif git -C "$libpeer_dir" apply --reverse --check "$libpeer_patch" >/dev/null 2>&1; then
-    printf 'LunarNX legacy libpeer patch is already applied.\n'
-else
-    printf '%s\n' \
-        'Existing lib/libpeer was not modified.' \
-        'Verify its revision and apply tools/libpeer_legacy/legacy-libpeer-switch.patch manually.'
-fi
+for libpeer_patch in \
+    "$libpeer_patch_dir/0001-switch-adapt-libpeer-WebRTC-path.patch" \
+    "$libpeer_patch_dir/0002-fix-H264-access-unit-flush-and-quiet-SCTP-logs.patch" \
+    "$libpeer_patch_dir/legacy-libpeer-switch.patch"
+do
+    if git -C "$libpeer_dir" apply --reverse --check "$libpeer_patch" >/dev/null 2>&1; then
+        printf 'LunarNX libpeer patch is already applied: %s\n' "$(basename "$libpeer_patch")"
+    elif git -C "$libpeer_dir" apply --check "$libpeer_patch" >/dev/null 2>&1; then
+        git -C "$libpeer_dir" apply --index "$libpeer_patch"
+        printf 'Applied LunarNX libpeer patch: %s\n' "$(basename "$libpeer_patch")"
+    else
+        printf 'libpeer patch conflicts with the local checkout: %s\n' \
+            "$libpeer_patch" >&2
+        exit 2
+    fi
+done
+git -C "$libpeer_dir" submodule update --init --recursive
 
 printf 'Dependency setup complete.\n'

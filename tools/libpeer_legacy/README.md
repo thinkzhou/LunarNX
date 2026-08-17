@@ -5,12 +5,16 @@ LunarNX currently builds Switch WebRTC with the legacy local clone at
 embedded git checkout with generated build outputs and third-party dependency
 trees.
 
-Use `legacy-libpeer-switch.patch` to reproduce the local Switch/Xbox changes on
-top of the libpeer checkout currently used by this project.
+The local Switch/Xbox changes are stored as an ordered three-patch series. The
+first two patches preserve commits that previously existed only in the local
+embedded checkout; `legacy-libpeer-switch.patch` contains the later working-tree
+changes.
 
 ```sh
 git clone https://github.com/sepfy/libpeer.git lib/libpeer
-git -C lib/libpeer checkout bdc50f0cae13f19a31bb11827daea3a8354b173f
+git -C lib/libpeer checkout 9319aa434cb9e893faed0293ba9d2a21eca59c8b
+git -C lib/libpeer apply ../../tools/libpeer_legacy/0001-switch-adapt-libpeer-WebRTC-path.patch
+git -C lib/libpeer apply ../../tools/libpeer_legacy/0002-fix-H264-access-unit-flush-and-quiet-SCTP-logs.patch
 git -C lib/libpeer apply ../../tools/libpeer_legacy/legacy-libpeer-switch.patch
 ```
 

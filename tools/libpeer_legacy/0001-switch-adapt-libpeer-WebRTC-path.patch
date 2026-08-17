@@ -1,0 +1,1770 @@
+From 351348e5e32b6af53c7db95c41d9ae0e58527a75 Mon Sep 17 00:00:00 2001
+From: zhouyang <zhouyang@leyantech.com>
+Date: Wed, 8 Jul 2026 16:56:16 +0800
+Subject: [PATCH 1/2] switch: adapt libpeer WebRTC path
+
+---
+ CMakeLists.txt        |  31 ++--
+ include/ifaddrs.h     |  13 ++
+ include/sys/endian.h  |  11 ++
+ src/CMakeLists.txt    |   2 +-
+ src/agent.c           |  32 ++--
+ src/config.h          |   2 +-
+ src/dtls_srtp.c       | 139 ++++++++++++-----
+ src/dtls_srtp.h       |  10 ++
+ src/peer_connection.c | 348 ++++++++++++++++++++++++++++++++++++++++--
+ src/peer_connection.h |   6 +
+ src/rtp.c             | 267 +++++++++++++++++++++++++++-----
+ src/rtp.h             |  11 ++
+ src/sctp.c            | 213 ++++++++++++++++++++------
+ src/sctp.h            |   5 +
+ src/sdp.c             |   2 +-
+ third_party/libsrtp   |   2 +-
+ third_party/mbedtls   |   2 +-
+ third_party/usrsctp   |   2 +-
+ 18 files changed, 924 insertions(+), 174 deletions(-)
+ create mode 100644 include/ifaddrs.h
+ create mode 100644 include/sys/endian.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 83789d0..e4cd95d 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -31,7 +31,12 @@ include_directories(${CMAKE_BINARY_DIR}/dist/include ${CMAKE_BINARY_DIR}/dist/in
+ 
+ link_directories(${CMAKE_BINARY_DIR}/dist/lib)
+ 
+-set(DEP_LIBS "srtp2" "usrsctp" "mbedtls" "mbedcrypto" "mbedx509" "cjson")
++# usrsctp is optional - libpeer has built-in SCTP on embedded platforms
++if(DEFINED CONFIG_USE_USRSCTP AND NOT CONFIG_USE_USRSCTP)
++  set(DEP_LIBS "srtp2" "mbedtls" "mbedcrypto" "mbedx509" "cjson")
++else()
++  set(DEP_LIBS "srtp2" "usrsctp" "mbedtls" "mbedcrypto" "mbedx509" "cjson")
++endif()
+ # Extended debug information (symbols, source code, and macro definitions)
+ set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g3")
+ set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g3")
+@@ -71,7 +76,7 @@ endif()
+ ExternalProject_Add(cjson
+   SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/cJSON
+   CMAKE_ARGS
+-    -DCMAKE_C_FLAGS="-fPIC"
++    -DCMAKE_C_FLAGS="-fPIC" -DMBEDTLS_FATAL_WARNINGS=OFF -D__SWITCH__ -I${DEVKITPRO}/libnx/include
+     -DBUILD_SHARED_LIBS=off
+     -DENABLE_CJSON_TEST=off
+     -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/dist
+@@ -81,7 +86,7 @@ ExternalProject_Add(cjson
+ ExternalProject_Add(mbedtls
+   SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls
+   CMAKE_ARGS
+-    -DCMAKE_C_FLAGS="-fPIC"
++    -DCMAKE_C_FLAGS="-fPIC" -DMBEDTLS_FATAL_WARNINGS=OFF -D__SWITCH__ -I${DEVKITPRO}/libnx/include
+     -DENABLE_TESTING=off
+     -DENABLE_PROGRAMS=off
+     -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/dist
+@@ -94,17 +99,19 @@ file(WRITE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls/include/mbedtls/mbedt
+ ExternalProject_Add(srtp2
+   SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/libsrtp
+   CMAKE_ARGS
+-    -DCMAKE_C_FLAGS="-fPIC"
++    -DCMAKE_C_FLAGS="-fPIC" -DMBEDTLS_FATAL_WARNINGS=OFF -D__SWITCH__ -I${DEVKITPRO}/libnx/include -D__SWITCH__ -I${DEVKITPRO}/libnx/include
+     -DTEST_APPS=off
+     -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/dist
+     -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+ )
+ 
+-ExternalProject_Add(usrsctp
+-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/usrsctp
+-  CMAKE_ARGS
+-    -DCMAKE_C_FLAGS="-fPIC"
+-    -Dsctp_build_programs=off
+-    -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/dist
+-    -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+-)
++if(NOT DEFINED CONFIG_USE_USRSCTP OR CONFIG_USE_USRSCTP)
++  ExternalProject_Add(usrsctp
++    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/usrsctp
++    CMAKE_ARGS
++      -DCMAKE_C_FLAGS="-fPIC" -DMBEDTLS_FATAL_WARNINGS=OFF -D__SWITCH__ -I${DEVKITPRO}/libnx/include
++      -Dsctp_build_programs=off
++      -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/dist
++      -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
++  )
++endif()
+diff --git a/include/ifaddrs.h b/include/ifaddrs.h
+new file mode 100644
+index 0000000..c0e0676
+--- /dev/null
++++ b/include/ifaddrs.h
+@@ -0,0 +1,13 @@
++// Stub for Switch (lwIP doesn't provide ifaddrs)
++#pragma once
++#include <sys/socket.h>
++struct ifaddrs {
++    struct ifaddrs *ifa_next;
++    char *ifa_name;
++    unsigned int ifa_flags;
++    struct sockaddr *ifa_addr;
++    struct sockaddr *ifa_netmask;
++    void *ifa_data;
++};
++static inline int getifaddrs(struct ifaddrs **ifap) { *ifap = NULL; return 0; }
++static inline void freeifaddrs(struct ifaddrs *ifa) { (void)ifa; }
+diff --git a/include/sys/endian.h b/include/sys/endian.h
+new file mode 100644
+index 0000000..ee6bb40
+--- /dev/null
++++ b/include/sys/endian.h
+@@ -0,0 +1,11 @@
++// Stub endian.h for Switch (aarch64 is little-endian)
++#pragma once
++#define __LITTLE_ENDIAN 1234
++#define __BIG_ENDIAN    4321
++#define __BYTE_ORDER    __LITTLE_ENDIAN
++#define htole16(x) (x)
++#define htole32(x) (x)
++#define htole64(x) (x)
++#define le16toh(x) (x)
++#define le32toh(x) (x)
++#define le64toh(x) (x)
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 7721f87..c3545b9 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -16,7 +16,7 @@ include_directories(peer PUBLIC
+   ${MQTT_INCLUDE_PUBLIC_DIRS}
+ )
+ 
+-add_dependencies(peer cjson mbedtls usrsctp srtp2)
++add_dependencies(peer ${DEP_LIBS})
+ 
+ target_link_libraries(peer ${DEP_LIBS})
+ 
+diff --git a/src/agent.c b/src/agent.c
+index 57de5c9..6055e0f 100644
+--- a/src/agent.c
++++ b/src/agent.c
+@@ -373,25 +373,31 @@ int agent_recv(Agent* agent, uint8_t* buf, int len) {
+   int ret = -1;
+   StunMessage stun_msg;
+   Address addr;
+-  if ((ret = agent_socket_recv(agent, &addr, buf, len)) > 0 && stun_probe(buf, len) == 0) {
++
++  for (int attempts = 0; attempts < 8; attempts++) {
++    ret = agent_socket_recv(agent, &addr, buf, len);
++    if (ret <= 0 || stun_probe(buf, ret) != 0) {
++      return ret;
++    }
++
+     memcpy(stun_msg.buf, buf, ret);
+     stun_msg.size = ret;
+     stun_parse_msg_buf(&stun_msg);
+     switch (stun_msg.stunclass) {
+-      case STUN_CLASS_REQUEST:
+-        agent_process_stun_request(agent, &stun_msg, &addr);
+-        break;
+-      case STUN_CLASS_RESPONSE:
+-        agent_process_stun_response(agent, &stun_msg);
+-        break;
+-      case STUN_CLASS_ERROR:
+-        break;
+-      default:
+-        break;
++    case STUN_CLASS_REQUEST:
++      agent_process_stun_request(agent, &stun_msg, &addr);
++      break;
++    case STUN_CLASS_RESPONSE:
++      agent_process_stun_response(agent, &stun_msg);
++      break;
++    case STUN_CLASS_ERROR:
++      break;
++    default:
++      break;
+     }
+-    ret = 0;
+   }
+-  return ret;
++
++  return 0;
+ }
+ 
+ void agent_set_remote_description(Agent* agent, char* description) {
+diff --git a/src/config.h b/src/config.h
+index 94905a8..c655d38 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -58,7 +58,7 @@
+ #endif
+ 
+ #ifndef CONFIG_MAX_NALU_SIZE
+-#define CONFIG_MAX_NALU_SIZE (10 * 1024)  // 10KB
++#define CONFIG_MAX_NALU_SIZE (2 * 1024 * 1024)
+ #endif
+ 
+ #define CONFIG_IPV6 0
+diff --git a/src/dtls_srtp.c b/src/dtls_srtp.c
+index dd54616..4d750e0 100644
+--- a/src/dtls_srtp.c
++++ b/src/dtls_srtp.c
+@@ -71,12 +71,9 @@ static int dtls_srtp_selfsign_cert(DtlsSrtp* dtls_srtp) {
+ 
+   mbedtls_x509write_cert crt;
+ 
++  unsigned char serial_buf[16];
+   unsigned char* cert_buf = NULL;
+-#if CONFIG_MBEDTLS_2_X
+   mbedtls_mpi serial;
+-#else
+-  const char* serial = "peer";
+-#endif
+   const char* pers = "dtls_srtp";
+ 
+   cert_buf = (unsigned char*)malloc(RSA_KEY_LENGTH * 2);
+@@ -111,16 +108,21 @@ static int dtls_srtp_selfsign_cert(DtlsSrtp* dtls_srtp) {
+ 
+   mbedtls_x509write_crt_set_issuer_name(&crt, "CN=dtls_srtp");
+ 
+-#if CONFIG_MBEDTLS_2_X
+   mbedtls_mpi_init(&serial);
+-  mbedtls_mpi_fill_random(&serial, 16, mbedtls_ctr_drbg_random, &dtls_srtp->ctr_drbg);
++  ret = mbedtls_ctr_drbg_random(&dtls_srtp->ctr_drbg, serial_buf, sizeof(serial_buf));
++  if (ret < 0) {
++    LOGE("mbedtls_ctr_drbg_random failed -0x%.4x", (unsigned int)-ret);
++  }
++
++  ret = mbedtls_mpi_read_binary(&serial, serial_buf, sizeof(serial_buf));
++  if (ret < 0) {
++    LOGE("mbedtls_mpi_read_binary failed -0x%.4x", (unsigned int)-ret);
++  }
++
+   ret = mbedtls_x509write_crt_set_serial(&crt, &serial);
+   if (ret < 0) {
+     LOGE("mbedtls_x509write_crt_set_serial failed -0x%.4x", (unsigned int)-ret);
+   }
+-#else
+-  mbedtls_x509write_crt_set_serial_raw(&crt, (unsigned char*)serial, strlen(serial));
+-#endif
+ 
+   mbedtls_x509write_crt_set_validity(&crt, "20180101000000", "20280101000000");
+ 
+@@ -133,6 +135,7 @@ static int dtls_srtp_selfsign_cert(DtlsSrtp* dtls_srtp) {
+   mbedtls_x509_crt_parse(&dtls_srtp->cert, cert_buf, 2 * RSA_KEY_LENGTH);
+ 
+   mbedtls_x509write_crt_free(&crt);
++  mbedtls_mpi_free(&serial);
+ 
+   free(cert_buf);
+ 
+@@ -145,13 +148,58 @@ static void dtls_srtp_debug(void* ctx, int level, const char* file, int line, co
+ }
+ #endif
+ 
++static void dtls_srtp_set_delay(void* data, uint32_t int_ms, uint32_t fin_ms) {
++  DtlsSrtpTimer* timer = (DtlsSrtpTimer*)data;
++  timer->int_ms = int_ms;
++  timer->fin_ms = fin_ms;
++  timer->start_ms = fin_ms ? ports_get_epoch_time() : 0;
++}
++
++static int dtls_srtp_get_delay(void* data) {
++  DtlsSrtpTimer* timer = (DtlsSrtpTimer*)data;
++  if (timer->fin_ms == 0) {
++    return -1;
++  }
++
++  uint32_t elapsed_ms = ports_get_epoch_time() - timer->start_ms;
++  if (elapsed_ms >= timer->fin_ms) {
++    return 2;
++  }
++  if (elapsed_ms >= timer->int_ms) {
++    return 1;
++  }
++  return 0;
++}
++
++#if CONFIG_MBEDTLS_2_X
++static int dtls_srtp_key_derivation_cb(void* context,
++                                       const unsigned char* ms,
++                                       const unsigned char* kb,
++                                       size_t maclen,
++                                       size_t keylen,
++                                       size_t ivlen,
++                                       const unsigned char client_random[32],
++                                       const unsigned char server_random[32],
++                                       mbedtls_tls_prf_types tls_prf_type);
++#else
++static void dtls_srtp_key_derivation_cb(void* context,
++                                        mbedtls_ssl_key_export_type secret_type,
++                                        const unsigned char* secret,
++                                        size_t secret_len,
++                                        const unsigned char client_random[32],
++                                        const unsigned char server_random[32],
++                                        mbedtls_tls_prf_types tls_prf_type);
++#endif
++
+ int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data) {
++#if !CONFIG_MBEDTLS_2_X
+   static const mbedtls_ssl_srtp_profile default_profiles[] = {
+       MBEDTLS_TLS_SRTP_AES128_CM_HMAC_SHA1_80,
+       MBEDTLS_TLS_SRTP_AES128_CM_HMAC_SHA1_32,
+       MBEDTLS_TLS_SRTP_NULL_HMAC_SHA1_80,
+       MBEDTLS_TLS_SRTP_NULL_HMAC_SHA1_32,
+       MBEDTLS_TLS_SRTP_UNSET};
++#endif
+ 
+   dtls_srtp->role = role;
+   dtls_srtp->state = DTLS_SRTP_STATE_INIT;
+@@ -166,24 +214,8 @@ int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data) {
+   mbedtls_pk_init(&dtls_srtp->pkey);
+   mbedtls_entropy_init(&dtls_srtp->entropy);
+   mbedtls_ctr_drbg_init(&dtls_srtp->ctr_drbg);
+-#if CONFIG_MBEDTLS_DEBUG
+-  mbedtls_debug_set_threshold(3);
+-  mbedtls_ssl_conf_dbg(&dtls_srtp->conf, dtls_srtp_debug, NULL);
+-#endif
+   dtls_srtp_selfsign_cert(dtls_srtp);
+ 
+-  mbedtls_ssl_conf_verify(&dtls_srtp->conf, dtls_srtp_cert_verify, NULL);
+-
+-  mbedtls_ssl_conf_authmode(&dtls_srtp->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+-
+-  mbedtls_ssl_conf_ca_chain(&dtls_srtp->conf, &dtls_srtp->cert, NULL);
+-
+-  mbedtls_ssl_conf_own_cert(&dtls_srtp->conf, &dtls_srtp->cert, &dtls_srtp->pkey);
+-
+-  mbedtls_ssl_conf_rng(&dtls_srtp->conf, mbedtls_ctr_drbg_random, &dtls_srtp->ctr_drbg);
+-
+-  mbedtls_ssl_conf_read_timeout(&dtls_srtp->conf, 1000);
+-
+   if (dtls_srtp->role == DTLS_SRTP_ROLE_SERVER) {
+     mbedtls_ssl_config_defaults(&dtls_srtp->conf,
+                                 MBEDTLS_SSL_IS_SERVER,
+@@ -192,9 +224,9 @@ int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data) {
+ 
+     mbedtls_ssl_cookie_init(&dtls_srtp->cookie_ctx);
+ 
+-    mbedtls_ssl_cookie_setup(&dtls_srtp->cookie_ctx, mbedtls_ctr_drbg_random, &dtls_srtp->ctr_drbg);
+-
+-    mbedtls_ssl_conf_dtls_cookies(&dtls_srtp->conf, mbedtls_ssl_cookie_write, mbedtls_ssl_cookie_check, &dtls_srtp->cookie_ctx);
++    // WebRTC peers expect DTLS to proceed immediately after ICE nomination.
++    // Do not send DTLS HelloVerifyRequest cookie retries.
++    mbedtls_ssl_conf_dtls_cookies(&dtls_srtp->conf, NULL, NULL, NULL);
+ 
+   } else {
+     mbedtls_ssl_config_defaults(&dtls_srtp->conf,
+@@ -203,13 +235,36 @@ int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data) {
+                                 MBEDTLS_SSL_PRESET_DEFAULT);
+   }
+ 
++#if CONFIG_MBEDTLS_DEBUG
++  mbedtls_debug_set_threshold(3);
++  mbedtls_ssl_conf_dbg(&dtls_srtp->conf, dtls_srtp_debug, NULL);
++#endif
++
++  mbedtls_ssl_conf_verify(&dtls_srtp->conf, dtls_srtp_cert_verify, NULL);
++
++  mbedtls_ssl_conf_authmode(&dtls_srtp->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
++
++  mbedtls_ssl_conf_ca_chain(&dtls_srtp->conf, &dtls_srtp->cert, NULL);
++
++  mbedtls_ssl_conf_own_cert(&dtls_srtp->conf, &dtls_srtp->cert, &dtls_srtp->pkey);
++
++  mbedtls_ssl_conf_rng(&dtls_srtp->conf, mbedtls_ctr_drbg_random, &dtls_srtp->ctr_drbg);
++
++  mbedtls_ssl_conf_read_timeout(&dtls_srtp->conf, 1000);
++
+   dtls_srtp_x509_digest(&dtls_srtp->cert, dtls_srtp->local_fingerprint);
+ 
+   LOGD("local fingerprint: %s", dtls_srtp->local_fingerprint);
+ 
++#if CONFIG_MBEDTLS_2_X
++  mbedtls_ssl_conf_export_keys_ext_cb(&dtls_srtp->conf,
++                                      dtls_srtp_key_derivation_cb,
++                                      dtls_srtp);
++#else
+   mbedtls_ssl_conf_dtls_srtp_protection_profiles(&dtls_srtp->conf, default_profiles);
+ 
+   mbedtls_ssl_conf_srtp_mki_value_supported(&dtls_srtp->conf, MBEDTLS_SSL_DTLS_SRTP_MKI_UNSUPPORTED);
++#endif
+ 
+   mbedtls_ssl_conf_cert_req_ca_list(&dtls_srtp->conf, MBEDTLS_SSL_CERT_REQ_CA_LIST_DISABLED);
+ 
+@@ -274,7 +329,7 @@ static int dtls_srtp_key_derivation(DtlsSrtp* dtls_srtp, const unsigned char* ma
+   const uint8_t* server_key = client_key + SRTP_MASTER_KEY_LENGTH;
+   const uint8_t* client_salt = server_key + SRTP_MASTER_KEY_LENGTH;
+   const uint8_t* server_salt = client_salt + SRTP_MASTER_SALT_LENGTH;
+-  uint8_t *local_key, *remote_key, *local_salt, *remote_salt;
++  const uint8_t *local_key, *remote_key, *local_salt, *remote_salt;
+   if (dtls_srtp->role == DTLS_SRTP_ROLE_SERVER) {
+     local_key = server_key;
+     local_salt = server_salt;
+@@ -340,6 +395,10 @@ static int dtls_srtp_key_derivation_cb(void* context,
+                                        const unsigned char client_random[32],
+                                        const unsigned char server_random[32],
+                                        mbedtls_tls_prf_types tls_prf_type) {
++  (void)kb;
++  (void)maclen;
++  (void)keylen;
++  (void)ivlen;
+ #else
+ static void dtls_srtp_key_derivation_cb(void* context,
+                                         mbedtls_ssl_key_export_type secret_type,
+@@ -348,6 +407,8 @@ static void dtls_srtp_key_derivation_cb(void* context,
+                                         const unsigned char client_random[32],
+                                         const unsigned char server_random[32],
+                                         mbedtls_tls_prf_types tls_prf_type) {
++  (void)secret_type;
++  (void)secret_len;
+ #endif
+   DtlsSrtp* dtls_srtp = (DtlsSrtp*)context;
+ 
+@@ -369,13 +430,10 @@ static void dtls_srtp_key_derivation_cb(void* context,
+ static int dtls_srtp_do_handshake(DtlsSrtp* dtls_srtp) {
+   int ret;
+ 
+-  static mbedtls_timing_delay_context timer;
+-
+-  mbedtls_ssl_set_timer_cb(&dtls_srtp->ssl, &timer, mbedtls_timing_set_delay, mbedtls_timing_get_delay);
++  memset(&dtls_srtp->timer, 0, sizeof(dtls_srtp->timer));
++  mbedtls_ssl_set_timer_cb(&dtls_srtp->ssl, &dtls_srtp->timer, dtls_srtp_set_delay, dtls_srtp_get_delay);
+ 
+-#if CONFIG_MBEDTLS_2_X
+-  mbedtls_ssl_conf_export_keys_ext_cb(&dtls_srtp->conf, dtls_srtp_key_derivation_cb, dtls_srtp);
+-#else
++#if !CONFIG_MBEDTLS_2_X
+   mbedtls_ssl_set_export_keys_cb(&dtls_srtp->ssl, dtls_srtp_key_derivation_cb, dtls_srtp);
+ #endif
+ 
+@@ -458,8 +516,10 @@ int dtls_srtp_handshake(DtlsSrtp* dtls_srtp, Address* addr) {
+     return -1;
+   }
+ 
++#if !CONFIG_MBEDTLS_2_X
+   mbedtls_dtls_srtp_info dtls_srtp_negotiation_result;
+   mbedtls_ssl_get_dtls_srtp_negotiation_result(&dtls_srtp->ssl, &dtls_srtp_negotiation_result);
++#endif
+ 
+   return ret;
+ }
+@@ -489,14 +549,15 @@ int dtls_srtp_read(DtlsSrtp* dtls_srtp, unsigned char* buf, size_t len) {
+ 
+   memset(buf, 0, len);
+ 
+-  do {
+-    ret = mbedtls_ssl_read(&dtls_srtp->ssl, buf, len);
+-
+-  } while (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE);
++  ret = mbedtls_ssl_read(&dtls_srtp->ssl, buf, len);
+ 
+   return ret;
+ }
+ 
++int dtls_srtp_has_pending(DtlsSrtp* dtls_srtp) {
++  return mbedtls_ssl_check_pending(&dtls_srtp->ssl);
++}
++
+ int dtls_srtp_probe(uint8_t* buf) {
+   if (buf == NULL)
+     return 0;
+diff --git a/src/dtls_srtp.h b/src/dtls_srtp.h
+index 09d2401..8bfce43 100644
+--- a/src/dtls_srtp.h
++++ b/src/dtls_srtp.h
+@@ -3,6 +3,7 @@
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <stdint.h>
+ 
+ #include <mbedtls/ctr_drbg.h>
+ #include <mbedtls/entropy.h>
+@@ -37,6 +38,12 @@ typedef enum DtlsSrtpState {
+ 
+ } DtlsSrtpState;
+ 
++typedef struct DtlsSrtpTimer {
++  uint32_t int_ms;
++  uint32_t fin_ms;
++  uint32_t start_ms;
++} DtlsSrtpTimer;
++
+ typedef struct DtlsSrtp {
+   // MbedTLS
+   mbedtls_ssl_context ssl;
+@@ -46,6 +53,7 @@ typedef struct DtlsSrtp {
+   mbedtls_pk_context pkey;
+   mbedtls_entropy_context entropy;
+   mbedtls_ctr_drbg_context ctr_drbg;
++  DtlsSrtpTimer timer;
+ 
+   // SRTP
+   srtp_policy_t remote_policy;
+@@ -85,6 +93,8 @@ int dtls_srtp_write(DtlsSrtp* dtls_srtp, const uint8_t* buf, size_t len);
+ 
+ int dtls_srtp_read(DtlsSrtp* dtls_srtp, uint8_t* buf, size_t len);
+ 
++int dtls_srtp_has_pending(DtlsSrtp* dtls_srtp);
++
+ void dtls_srtp_sctp_to_dtls(DtlsSrtp* dtls_srtp, uint8_t* packet, int bytes);
+ 
+ int dtls_srtp_probe(uint8_t* buf);
+diff --git a/src/peer_connection.c b/src/peer_connection.c
+index c763e80..fe0f63e 100644
+--- a/src/peer_connection.c
++++ b/src/peer_connection.c
+@@ -1,6 +1,8 @@
++#include <string.h>
+ #include <inttypes.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <stdarg.h>
+ #include <unistd.h>
+ 
+ #include "agent.h"
+@@ -13,6 +15,19 @@
+ #include "sctp.h"
+ #include "sdp.h"
+ 
++#define PEER_CONNECTION_MAX_PACKETS_PER_LOOP 64
++#define PEER_CONNECTION_RTP_QUEUE_CAPACITY 4096
++#define PEER_CONNECTION_RTP_DECODE_BUDGET 64
++
++#ifndef PEER_CONNECTION_ENABLE_DEBUG_LOGS
++#define PEER_CONNECTION_ENABLE_DEBUG_LOGS 0
++#endif
++
++typedef struct QueuedRtpPacket {
++  int len;
++  uint8_t data[CONFIG_MTU];
++} QueuedRtpPacket;
++
+ #define STATE_CHANGED(pc, curr_state)                                 \
+   if (pc->oniceconnectionstatechange && pc->state != curr_state) {    \
+     pc->oniceconnectionstatechange(curr_state, pc->config.user_data); \
+@@ -45,8 +60,135 @@ struct PeerConnection {
+ 
+   uint32_t remote_assrc;
+   uint32_t remote_vssrc;
++
++  int debug_dtls_handshake_logs;
++  int debug_dtls_recv_logs;
++  int debug_dtls_send_logs;
++  int debug_completed_recv_logs;
++  int debug_completed_summary_logs;
++  int debug_rtp_logs;
++  int debug_rtp_queue_logs;
++
++  int media_enabled;
++  QueuedRtpPacket rtp_queue[PEER_CONNECTION_RTP_QUEUE_CAPACITY];
++  int rtp_queue_head;
++  int rtp_queue_count;
+ };
+ 
++#if PEER_CONNECTION_ENABLE_DEBUG_LOGS
++static void peer_connection_debug_log(const char* format, ...) {
++#ifdef __SWITCH__
++  const char* path = "sdmc:/switch/LunarNX/lunarnx.log";
++#else
++  const char* path = "./lunarnx.log";
++#endif
++  FILE* log = fopen(path, "a");
++  if (!log) {
++    return;
++  }
++
++  fputs("[DEBUG-dtls] ", log);
++  va_list args;
++  va_start(args, format);
++  vfprintf(log, format, args);
++  va_end(args);
++  fputc('\n', log);
++  fclose(log);
++}
++#else
++#define peer_connection_debug_log(...) ((void)0)
++#endif
++
++static int peer_connection_enqueue_rtp(PeerConnection* pc, const uint8_t* data, int len) {
++  if (!pc || !data || len <= 0 || len > CONFIG_MTU) {
++    return -1;
++  }
++
++  if (pc->rtp_queue_count >= PEER_CONNECTION_RTP_QUEUE_CAPACITY) {
++    if (pc->debug_rtp_queue_logs < 16) {
++      peer_connection_debug_log("RTP queue overflow len=%d count=%d",
++                                len, pc->rtp_queue_count);
++      pc->debug_rtp_queue_logs++;
++    }
++    return -1;
++  }
++
++  int index = (pc->rtp_queue_head + pc->rtp_queue_count) %
++              PEER_CONNECTION_RTP_QUEUE_CAPACITY;
++  pc->rtp_queue[index].len = len;
++  memcpy(pc->rtp_queue[index].data, data, len);
++  pc->rtp_queue_count++;
++  return 0;
++}
++
++static void peer_connection_decode_rtp_packet(PeerConnection* pc, uint8_t* packet, int len) {
++  if (!pc || !packet || len <= 0) {
++    return;
++  }
++
++  dtls_srtp_decrypt_rtp_packet(&pc->dtls_srtp, packet, &len);
++  if (pc->debug_rtp_logs < 64) {
++    peer_connection_debug_log("rtp branch after decrypt len=%d first=0x%02x",
++                              len,
++                              len > 0 ? packet[0] : 0);
++    pc->debug_rtp_logs++;
++  }
++  if (len <= (int)sizeof(RtpHeader)) {
++    if (pc->debug_rtp_logs < 64) {
++      peer_connection_debug_log("rtp branch drop short len=%d", len);
++      pc->debug_rtp_logs++;
++    }
++    return;
++  }
++
++  uint32_t ssrc = rtp_get_ssrc(packet);
++  if (pc->debug_rtp_logs < 64) {
++    peer_connection_debug_log("rtp branch ssrc=%" PRIu32 " audio=%" PRIu32 " video=%" PRIu32,
++                              ssrc,
++                              pc->remote_assrc,
++                              pc->remote_vssrc);
++    pc->debug_rtp_logs++;
++  }
++  if (ssrc == pc->remote_assrc) {
++    if (pc->debug_rtp_logs < 64) {
++      peer_connection_debug_log("rtp decode audio begin len=%d", len);
++      pc->debug_rtp_logs++;
++    }
++    rtp_decoder_decode(&pc->artp_decoder, packet, len);
++    if (pc->debug_rtp_logs < 64) {
++      peer_connection_debug_log("rtp decode audio done");
++      pc->debug_rtp_logs++;
++    }
++  } else if (ssrc == pc->remote_vssrc) {
++    if (pc->debug_rtp_logs < 64) {
++      peer_connection_debug_log("rtp decode video begin len=%d", len);
++      pc->debug_rtp_logs++;
++    }
++    rtp_decoder_decode(&pc->vrtp_decoder, packet, len);
++    if (pc->debug_rtp_logs < 64) {
++      peer_connection_debug_log("rtp decode video done");
++      pc->debug_rtp_logs++;
++    }
++  }
++}
++
++static int peer_connection_drain_rtp_queue(PeerConnection* pc, int budget) {
++  if (!pc || !pc->media_enabled || budget <= 0) {
++    return 0;
++  }
++
++  int decoded = 0;
++  while (decoded < budget && pc->rtp_queue_count > 0) {
++    QueuedRtpPacket* packet = &pc->rtp_queue[pc->rtp_queue_head];
++    peer_connection_decode_rtp_packet(pc, packet->data, packet->len);
++    pc->rtp_queue_head = (pc->rtp_queue_head + 1) %
++                         PEER_CONNECTION_RTP_QUEUE_CAPACITY;
++    pc->rtp_queue_count--;
++    decoded++;
++  }
++  return decoded;
++}
++
+ static void peer_connection_outgoing_rtp_packet(uint8_t* data, size_t size, void* user_data) {
+   PeerConnection* pc = (PeerConnection*)user_data;
+   dtls_srtp_encrypt_rtp_packet(&pc->dtls_srtp, data, (int*)&size);
+@@ -60,19 +202,44 @@ static int peer_connection_dtls_srtp_recv(void* ctx, unsigned char* buf, size_t
+   PeerConnection* pc = (PeerConnection*)dtls_srtp->user_data;
+ 
+   if (pc->agent_ret > 0 && pc->agent_ret <= len) {
++    int cached_len = pc->agent_ret;
+     memcpy(buf, pc->agent_buf, pc->agent_ret);
+-    return pc->agent_ret;
++    if (pc->debug_dtls_recv_logs < 12) {
++      peer_connection_debug_log("recv cached len=%d first=0x%02x mbed_len=%zu",
++                                pc->agent_ret, pc->agent_buf[0], len);
++      pc->debug_dtls_recv_logs++;
++    }
++    pc->agent_ret = 0;
++    return cached_len;
+   }
+ 
+-  while (recv_max < CONFIG_TLS_READ_TIMEOUT && pc->state == PEER_CONNECTION_CONNECTED) {
++  if (pc->state == PEER_CONNECTION_COMPLETED) {
++    if (pc->debug_dtls_recv_logs < 12) {
++      peer_connection_debug_log("recv completed no cached dtls, want read");
++      pc->debug_dtls_recv_logs++;
++    }
++    return MBEDTLS_ERR_SSL_WANT_READ;
++  }
++
++  while (recv_max < CONFIG_TLS_READ_TIMEOUT &&
++         pc->state == PEER_CONNECTION_CONNECTED) {
+     ret = agent_recv(&pc->agent, buf, len);
+ 
+     if (ret > 0) {
++      if (pc->debug_dtls_recv_logs < 12) {
++        peer_connection_debug_log("recv socket len=%d first=0x%02x mbed_len=%zu loops=%d",
++                                  ret, buf[0], len, recv_max);
++        pc->debug_dtls_recv_logs++;
++      }
+       break;
+     }
+ 
+     recv_max++;
+   }
++  if (ret <= 0 && pc->debug_dtls_recv_logs < 12) {
++    peer_connection_debug_log("recv timeout ret=%d loops=%d state=%d", ret, recv_max, pc->state);
++    pc->debug_dtls_recv_logs++;
++  }
+   return ret;
+ }
+ 
+@@ -81,7 +248,12 @@ static int peer_connection_dtls_srtp_send(void* ctx, const uint8_t* buf, size_t
+   PeerConnection* pc = (PeerConnection*)dtls_srtp->user_data;
+ 
+   // LOGD("send %.4x %.4x, %ld", *(uint16_t*)buf, *(uint16_t*)(buf + 2), len);
+-  return agent_send(&pc->agent, buf, len);
++  int ret = agent_send(&pc->agent, buf, len);
++  if (pc->debug_dtls_send_logs < 12) {
++    peer_connection_debug_log("send len=%zu first=0x%02x ret=%d", len, buf ? buf[0] : 0, ret);
++    pc->debug_dtls_send_logs++;
++  }
++  return ret;
+ }
+ 
+ static void peer_connection_incoming_rtcp(PeerConnection* pc, uint8_t* buf, size_t len) {
+@@ -163,6 +335,7 @@ PeerConnection* peer_connection_create(PeerConfiguration* config) {
+   agent_create(&pc->agent);
+ 
+   memset(&pc->sctp, 0, sizeof(pc->sctp));
++  pc->media_enabled = 1;
+ 
+   if (pc->config.audio_codec) {
+     rtp_encoder_init(&pc->artp_encoder, pc->config.audio_codec,
+@@ -228,6 +401,26 @@ int peer_connection_datachannel_send_sid(PeerConnection* pc, char* message, size
+     return sctp_outgoing_data(&pc->sctp, message, len, PPID_BINARY, sid);
+ }
+ 
++int peer_connection_datachannel_send_sid_binary(PeerConnection* pc, char* message, size_t len, uint16_t sid) {
++  if (!sctp_is_connected(&pc->sctp)) {
++    LOGE("sctp not connected");
++    return -1;
++  }
++  return sctp_outgoing_data(&pc->sctp, message, len, PPID_BINARY, sid);
++}
++
++int peer_connection_is_datachannel_connected(PeerConnection* pc) {
++  return pc && sctp_is_connected(&pc->sctp);
++}
++
++void peer_connection_set_media_enabled(PeerConnection* pc, int enabled) {
++  if (!pc) {
++    return;
++  }
++  pc->media_enabled = enabled ? 1 : 0;
++  peer_connection_debug_log("media enabled=%d", pc->media_enabled);
++}
++
+ int peer_connection_create_datachannel(PeerConnection* pc, DecpChannelType channel_type, uint16_t priority, uint32_t reliability_parameter, char* label, char* protocol) {
+   return peer_connection_create_datachannel_sid(pc, channel_type, priority, reliability_parameter, label, protocol, 0);
+ }
+@@ -276,6 +469,9 @@ int peer_connection_create_datachannel_sid(PeerConnection* pc, DecpChannelType c
+   memcpy(msg + 12 + strlen(label), protocol, strlen(protocol));
+ 
+   rtrn = sctp_outgoing_data(&pc->sctp, msg, msg_size, PPID_CONTROL, sid);
++  if (rtrn >= 0) {
++    sctp_add_stream_mapping(&pc->sctp, label, sid);
++  }
+   free(msg);
+   return rtrn;
+ }
+@@ -285,7 +481,6 @@ static char* peer_connection_dtls_role_setup_value(DtlsSrtpRole d) {
+ }
+ 
+ int peer_connection_loop(PeerConnection* pc) {
+-  uint32_t ssrc = 0;
+   memset(pc->agent_buf, 0, sizeof(pc->agent_buf));
+   pc->agent_ret = -1;
+ 
+@@ -297,13 +492,25 @@ int peer_connection_loop(PeerConnection* pc) {
+       if (agent_select_candidate_pair(&pc->agent) < 0) {
+         STATE_CHANGED(pc, PEER_CONNECTION_FAILED);
+       } else if (agent_connectivity_check(&pc->agent) == 0) {
++        pc->agent.binding_request_time = ports_get_epoch_time();
+         STATE_CHANGED(pc, PEER_CONNECTION_CONNECTED);
+       }
+       break;
+ 
+     case PEER_CONNECTION_CONNECTED:
+-
+-      if (dtls_srtp_handshake(&pc->dtls_srtp, NULL) == 0) {
++    {
++      if (pc->debug_dtls_handshake_logs < 12) {
++        peer_connection_debug_log("handshake begin role=%d state=%d call=%d",
++                                  pc->dtls_srtp.role, pc->dtls_srtp.state,
++                                  pc->debug_dtls_handshake_logs + 1);
++      }
++      int handshake_ret = dtls_srtp_handshake(&pc->dtls_srtp, NULL);
++      if (pc->debug_dtls_handshake_logs < 12) {
++        peer_connection_debug_log("handshake ret=%d role=%d dtls_state=%d",
++                                  handshake_ret, pc->dtls_srtp.role, pc->dtls_srtp.state);
++        pc->debug_dtls_handshake_logs++;
++      }
++      if (handshake_ret == 0) {
+         LOGD("DTLS-SRTP handshake done");
+ 
+         if (pc->config.datachannel) {
+@@ -315,46 +522,127 @@ int peer_connection_loop(PeerConnection* pc) {
+         STATE_CHANGED(pc, PEER_CONNECTION_COMPLETED);
+       }
+       break;
+-    case PEER_CONNECTION_COMPLETED:
+-      if ((pc->agent_ret = agent_recv(&pc->agent, pc->agent_buf, sizeof(pc->agent_buf))) > 0) {
++    }
++    case PEER_CONNECTION_COMPLETED: {
++      int packets_processed = 0;
++      int rtcp_packets = 0;
++      int dtls_packets = 0;
++      int rtp_packets = 0;
++      int unknown_packets = 0;
++      int dtls_read_positive = 0;
++      int dtls_read_nonpositive = 0;
++      int rtp_decoded_packets = 0;
++      while (packets_processed < PEER_CONNECTION_MAX_PACKETS_PER_LOOP) {
++        memset(pc->agent_buf, 0, sizeof(pc->agent_buf));
++        pc->agent_ret = agent_recv(&pc->agent, pc->agent_buf, sizeof(pc->agent_buf));
++        if (pc->agent_ret <= 0) {
++          break;
++        }
++        packets_processed++;
++
+         LOGD("agent_recv %d", pc->agent_ret);
++        if (pc->debug_completed_recv_logs < 32) {
++          peer_connection_debug_log("completed recv len=%d first=0x%02x rtcp=%d dtls=%d rtp=%d",
++                                    pc->agent_ret,
++                                    pc->agent_buf[0],
++                                    rtcp_probe(pc->agent_buf, pc->agent_ret),
++                                    dtls_srtp_probe(pc->agent_buf),
++                                    rtp_packet_validate(pc->agent_buf, pc->agent_ret));
++          pc->debug_completed_recv_logs++;
++        }
+ 
+         if (rtcp_probe(pc->agent_buf, pc->agent_ret)) {
++          rtcp_packets++;
+           LOGD("Got RTCP packet");
+           dtls_srtp_decrypt_rtcp_packet(&pc->dtls_srtp, pc->agent_buf, &pc->agent_ret);
+           peer_connection_incoming_rtcp(pc, pc->agent_buf, pc->agent_ret);
+ 
+         } else if (dtls_srtp_probe(pc->agent_buf)) {
++          dtls_packets++;
+           int ret = dtls_srtp_read(&pc->dtls_srtp, pc->temp_buf, sizeof(pc->temp_buf));
+           LOGD("Got DTLS data %d", ret);
++          if (pc->debug_completed_recv_logs < 32) {
++            peer_connection_debug_log("completed dtls_read ret=%d first=0x%02x", ret, ret > 0 ? pc->temp_buf[0] : 0);
++            pc->debug_completed_recv_logs++;
++          }
+ 
+           if (ret > 0) {
++            dtls_read_positive++;
++            sctp_incoming_data(&pc->sctp, (char*)pc->temp_buf, ret);
++          } else {
++            dtls_read_nonpositive++;
++          }
++
++          while (dtls_srtp_has_pending(&pc->dtls_srtp)) {
++            ret = dtls_srtp_read(&pc->dtls_srtp, pc->temp_buf, sizeof(pc->temp_buf));
++            if (pc->debug_completed_recv_logs < 32) {
++              peer_connection_debug_log("completed dtls_pending read ret=%d first=0x%02x",
++                                        ret, ret > 0 ? pc->temp_buf[0] : 0);
++              pc->debug_completed_recv_logs++;
++            }
++            if (ret <= 0) {
++              dtls_read_nonpositive++;
++              break;
++            }
++            dtls_read_positive++;
+             sctp_incoming_data(&pc->sctp, (char*)pc->temp_buf, ret);
+           }
+ 
+         } else if (rtp_packet_validate(pc->agent_buf, pc->agent_ret)) {
++          rtp_packets++;
+           LOGD("Got RTP packet");
+ 
+-          dtls_srtp_decrypt_rtp_packet(&pc->dtls_srtp, pc->agent_buf, &pc->agent_ret);
+-
+-          ssrc = rtp_get_ssrc(pc->agent_buf);
+-          if (ssrc == pc->remote_assrc) {
+-            rtp_decoder_decode(&pc->artp_decoder, pc->agent_buf, pc->agent_ret);
+-          } else if (ssrc == pc->remote_vssrc) {
+-            rtp_decoder_decode(&pc->vrtp_decoder, pc->agent_buf, pc->agent_ret);
++          if (pc->debug_rtp_logs < 64) {
++            peer_connection_debug_log("rtp branch before decrypt len=%d first=0x%02x",
++                                      pc->agent_ret,
++                                      pc->agent_buf[0]);
++            pc->debug_rtp_logs++;
++          }
++          if (!pc->media_enabled) {
++            if (pc->debug_rtp_logs < 64) {
++              peer_connection_debug_log("drop RTP while media disabled len=%d", pc->agent_ret);
++              pc->debug_rtp_logs++;
++            }
++            continue;
++          }
++          if (peer_connection_enqueue_rtp(pc, pc->agent_buf, pc->agent_ret) < 0) {
++            if (pc->debug_rtp_queue_logs < 16) {
++              peer_connection_debug_log("RTP enqueue failed len=%d count=%d",
++                                        pc->agent_ret, pc->rtp_queue_count);
++              pc->debug_rtp_queue_logs++;
++            }
+           }
+ 
+         } else {
++          unknown_packets++;
+           LOGW("Unknown data");
+         }
+       }
++      rtp_decoded_packets = peer_connection_drain_rtp_queue(pc, PEER_CONNECTION_RTP_DECODE_BUDGET);
++      (void)rtp_decoded_packets;
++
++      if (packets_processed > 0 && pc->debug_completed_summary_logs < 64) {
++        peer_connection_debug_log("completed summary processed=%d rtcp=%d dtls=%d rtp=%d rtp_decoded=%d rtp_queued=%d unknown=%d dtls_read_pos=%d dtls_read_nonpos=%d",
++                                  packets_processed,
++                                  rtcp_packets,
++                                  dtls_packets,
++                                  rtp_packets,
++                                  rtp_decoded_packets,
++                                  pc->rtp_queue_count,
++                                  unknown_packets,
++                                  dtls_read_positive,
++                                  dtls_read_nonpositive);
++        pc->debug_completed_summary_logs++;
++      }
+ 
+-      if (CONFIG_KEEPALIVE_TIMEOUT > 0 && (ports_get_epoch_time() - pc->agent.binding_request_time) > CONFIG_KEEPALIVE_TIMEOUT) {
++      if (CONFIG_KEEPALIVE_TIMEOUT > 0 && pc->agent.binding_request_time > 0 &&
++          (ports_get_epoch_time() - pc->agent.binding_request_time) > CONFIG_KEEPALIVE_TIMEOUT) {
+         LOGI("binding request timeout");
+         STATE_CHANGED(pc, PEER_CONNECTION_CLOSED);
+       }
+ 
+       break;
++    }
+     case PEER_CONNECTION_FAILED:
+       break;
+     case PEER_CONNECTION_DISCONNECTED:
+@@ -578,10 +866,38 @@ char* peer_connection_lookup_sid_label(PeerConnection* pc, uint16_t sid) {
+ 
+ int peer_connection_add_ice_candidate(PeerConnection* pc, char* candidate) {
+   Agent* agent = &pc->agent;
++  if (agent->remote_candidates_count >= AGENT_MAX_CANDIDATES) {
++    return -1;
++  }
+   if (ice_candidate_from_description(&agent->remote_candidates[agent->remote_candidates_count], candidate, candidate + strlen(candidate)) != 0) {
+     return -1;
+   }
+   LOGD("Add candidate: %s", candidate);
++  int remote_idx = agent->remote_candidates_count;
+   agent->remote_candidates_count++;
++  for (int i = 0; i < agent->local_candidates_count; i++) {
++    if (agent->candidate_pairs_num >= AGENT_MAX_CANDIDATE_PAIRS) {
++      break;
++    }
++    if (agent->local_candidates[i].addr.family == agent->remote_candidates[remote_idx].addr.family) {
++      int exists = 0;
++      for (int j = 0; j < agent->candidate_pairs_num; j++) {
++        if (agent->candidate_pairs[j].local == &agent->local_candidates[i] &&
++            agent->candidate_pairs[j].remote == &agent->remote_candidates[remote_idx]) {
++          exists = 1;
++          break;
++        }
++      }
++      if (exists) {
++        continue;
++      }
++      agent->candidate_pairs[agent->candidate_pairs_num].local = &agent->local_candidates[i];
++      agent->candidate_pairs[agent->candidate_pairs_num].remote = &agent->remote_candidates[remote_idx];
++      agent->candidate_pairs[agent->candidate_pairs_num].priority =
++          agent->local_candidates[i].priority + agent->remote_candidates[remote_idx].priority;
++      agent->candidate_pairs[agent->candidate_pairs_num].state = ICE_CANDIDATE_STATE_FROZEN;
++      agent->candidate_pairs_num++;
++    }
++  }
+   return 0;
+ }
+diff --git a/src/peer_connection.h b/src/peer_connection.h
+index b087893..9d3e900 100644
+--- a/src/peer_connection.h
++++ b/src/peer_connection.h
+@@ -113,6 +113,12 @@ int peer_connection_datachannel_send(PeerConnection* pc, char* message, size_t l
+ 
+ int peer_connection_datachannel_send_sid(PeerConnection* pc, char* message, size_t len, uint16_t sid);
+ 
++int peer_connection_datachannel_send_sid_binary(PeerConnection* pc, char* message, size_t len, uint16_t sid);
++
++int peer_connection_is_datachannel_connected(PeerConnection* pc);
++
++void peer_connection_set_media_enabled(PeerConnection* pc, int enabled);
++
+ int peer_connection_send_audio(PeerConnection* pc, const uint8_t* packet, size_t bytes);
+ 
+ int peer_connection_send_video(PeerConnection* pc, const uint8_t* packet, size_t bytes);
+diff --git a/src/rtp.c b/src/rtp.c
+index 0a3136a..14b5452 100644
+--- a/src/rtp.c
++++ b/src/rtp.c
+@@ -30,6 +30,72 @@ typedef struct FuHeader {
+ #define RTP_PAYLOAD_SIZE (CONFIG_MTU - sizeof(RtpHeader))
+ #define FU_PAYLOAD_SIZE (CONFIG_MTU - sizeof(RtpHeader) - sizeof(FuHeader) - sizeof(NaluHeader))
+ 
++static uint16_t rtp_read_u16(const uint8_t* data) {
++  return ((uint16_t)data[0] << 8) | data[1];
++}
++
++static uint32_t rtp_read_u32(const uint8_t* data) {
++  return ((uint32_t)data[0] << 24) |
++         ((uint32_t)data[1] << 16) |
++         ((uint32_t)data[2] << 8) |
++         data[3];
++}
++
++static int rtp_payload(uint8_t* packet, size_t size, uint8_t** payload, size_t* payload_size) {
++  if (!packet || size < 12 || !payload || !payload_size) {
++    return -1;
++  }
++
++  size_t offset = 12 + ((size_t)(packet[0] & 0x0f) * 4);
++  if (offset > size) {
++    return -1;
++  }
++
++  if (packet[0] & 0x10) {
++    if (offset + 4 > size) {
++      return -1;
++    }
++    size_t extension_words = rtp_read_u16(packet + offset + 2);
++    offset += 4 + extension_words * 4;
++    if (offset > size) {
++      return -1;
++    }
++  }
++
++  size_t padding_size = 0;
++  if (packet[0] & 0x20) {
++    padding_size = packet[size - 1];
++    if (padding_size == 0 || padding_size > size - offset) {
++      return -1;
++    }
++  }
++
++  *payload = packet + offset;
++  *payload_size = size - offset - padding_size;
++  return 0;
++}
++
++static uint16_t rtp_sequence(uint8_t* packet, size_t size) {
++  if (!packet || size < 4) {
++    return 0;
++  }
++  return rtp_read_u16(packet + 2);
++}
++
++static int rtp_marker(uint8_t* packet, size_t size) {
++  if (!packet || size < 2) {
++    return 0;
++  }
++  return (packet[1] & 0x80) != 0;
++}
++
++static uint32_t rtp_timestamp(uint8_t* packet, size_t size) {
++  if (!packet || size < 8) {
++    return 0;
++  }
++  return rtp_read_u32(packet + 4);
++}
++
+ int rtp_packet_validate(uint8_t* packet, size_t size) {
+   if (size < 12)
+     return 0;
+@@ -220,61 +286,181 @@ int rtp_encoder_encode(RtpEncoder* rtp_encoder, const uint8_t* buf, size_t size)
+   return rtp_encoder->encode_func(rtp_encoder, (uint8_t*)buf, size);
+ }
+ 
+-static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
++static void h264_reset_frame(RtpDecoder* rtp_decoder) {
++  rtp_decoder->h264_frame_offset = 0;
++  rtp_decoder->h264_offset = 0;
++  rtp_decoder->h264_frame_started = 0;
++  rtp_decoder->h264_frame_corrupt = 0;
++  rtp_decoder->h264_fu_started = 0;
++}
++
++static void h264_begin_frame(RtpDecoder* rtp_decoder, uint32_t timestamp) {
++  rtp_decoder->h264_frame_timestamp = timestamp;
++  rtp_decoder->h264_frame_started = 1;
++  rtp_decoder->h264_frame_corrupt = 0;
++  rtp_decoder->h264_frame_offset = 0;
++  rtp_decoder->h264_offset = 0;
++  rtp_decoder->h264_fu_started = 0;
++}
++
++static int h264_append_bytes(RtpDecoder* rtp_decoder, const uint8_t* data, size_t size) {
++  if (rtp_decoder->h264_frame_offset + size > CONFIG_MAX_NALU_SIZE) {
++    rtp_decoder->h264_frame_corrupt = 1;
++    return -1;
++  }
++  memcpy(rtp_decoder->h264_frame_buf + rtp_decoder->h264_frame_offset, data, size);
++  rtp_decoder->h264_frame_offset += size;
++  rtp_decoder->h264_offset = rtp_decoder->h264_frame_offset;
++  return 0;
++}
++
++static int h264_append_nalu(RtpDecoder* rtp_decoder, const uint8_t* payload, size_t payload_size) {
+   static const uint32_t nalu_start_4bytecode = 0x01000000;
+-  static uint8_t nalu_buf[CONFIG_MAX_NALU_SIZE];
+-  static int offset = 0;
+-  RtpPacket* rtp_packet = (RtpPacket*)buf;
+-  uint8_t nalu_type = *rtp_packet->payload & 0x1f;
+-  int payload_size = size - sizeof(RtpHeader);
++  if (sizeof(nalu_start_4bytecode) + payload_size > CONFIG_MAX_NALU_SIZE) {
++    rtp_decoder->h264_frame_corrupt = 1;
++    return -1;
++  }
++  if (h264_append_bytes(rtp_decoder,
++                        (const uint8_t*)&nalu_start_4bytecode,
++                        sizeof(nalu_start_4bytecode)) < 0) {
++    return -1;
++  }
++  return h264_append_bytes(rtp_decoder, payload, payload_size);
++}
++
++static int h264_flush_frame(RtpDecoder* rtp_decoder) {
++  int sent = 0;
++  if (rtp_decoder->h264_frame_started &&
++      !rtp_decoder->h264_frame_corrupt &&
++      rtp_decoder->h264_frame_offset > 0 &&
++      rtp_decoder->on_packet != NULL) {
++    rtp_decoder->on_packet(rtp_decoder->h264_frame_buf,
++                           rtp_decoder->h264_frame_offset,
++                           rtp_decoder->user_data);
++    sent = 1;
++  }
++  h264_reset_frame(rtp_decoder);
++  return sent;
++}
++
++static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
++  uint8_t* payload = NULL;
++  size_t payload_size = 0;
++  if (rtp_payload(buf, size, &payload, &payload_size) < 0 || payload_size == 0) {
++    return -1;
++  }
++  uint16_t seq = rtp_sequence(buf, size);
++  uint32_t timestamp = rtp_timestamp(buf, size);
++  int marker = rtp_marker(buf, size);
++  uint8_t nalu_type = *payload & 0x1f;
++
++  int same_frame = rtp_decoder->h264_frame_started &&
++                   timestamp == rtp_decoder->h264_frame_timestamp;
++  int timestamp_changed = rtp_decoder->h264_frame_started &&
++                          timestamp != rtp_decoder->h264_frame_timestamp;
++  if (timestamp_changed) {
++    h264_flush_frame(rtp_decoder);
++  }
++  if (!rtp_decoder->h264_frame_started) {
++    h264_begin_frame(rtp_decoder, timestamp);
++  }
++
++  if (same_frame &&
++      rtp_decoder->h264_have_last_seq &&
++      seq != (uint16_t)(rtp_decoder->h264_last_seq + 1)) {
++    rtp_decoder->h264_frame_corrupt = 1;
++    rtp_decoder->h264_fu_started = 0;
++  }
++
+   if (nalu_type > 0 && nalu_type < 24) {
+     // NALU type 1-23 are single NALUs
+-    memcpy(nalu_buf, &nalu_start_4bytecode, sizeof(nalu_start_4bytecode));
+-    offset = sizeof(nalu_start_4bytecode);
+-    memcpy(nalu_buf + offset, rtp_packet->payload, payload_size);
+-    offset += payload_size;
+-    if (rtp_decoder->on_packet != NULL) {
+-      rtp_decoder->on_packet(nalu_buf, offset, rtp_decoder->user_data);
++    if (!rtp_decoder->h264_frame_corrupt) {
++      h264_append_nalu(rtp_decoder, payload, payload_size);
+     }
+-    return (int)size;
+-  } else {
+-    NaluHeader* fu_indicator = (NaluHeader*)rtp_packet->payload;
+-    FuHeader* fu_header = (FuHeader*)(rtp_packet->payload + sizeof(NaluHeader));
+-    uint8_t reconstructed_nalu_type = (fu_indicator->f << 7) |
+-                                      (fu_indicator->nri << 5) |
+-                                      fu_header->type;
+-    payload_size -= sizeof(NaluHeader) + sizeof(FuHeader);
+-    if (fu_header->s) {
+-      memcpy(nalu_buf, &nalu_start_4bytecode, sizeof(nalu_start_4bytecode));
+-      offset = sizeof(nalu_start_4bytecode);
+-      memcpy(nalu_buf + offset, &reconstructed_nalu_type, 1);
+-      offset += 1;
+-      memcpy(nalu_buf + offset, rtp_packet->payload + 2, payload_size);
+-      offset += payload_size;
+-    } else if (offset < CONFIG_MAX_NALU_SIZE) {
+-      memcpy(nalu_buf + offset, rtp_packet->payload + 2, payload_size);
+-      offset += payload_size;
+-      if (fu_header->e) {
+-        // end of fragmented NALU
+-        if (rtp_decoder->on_packet != NULL) {
+-          rtp_decoder->on_packet(nalu_buf, offset, rtp_decoder->user_data);
++    rtp_decoder->h264_fu_started = 0;
++  } else if (nalu_type == 24) {
++    // STAP-A: one RTP payload contains multiple length-prefixed NALUs.
++    size_t pos = 1;
++    while (!rtp_decoder->h264_frame_corrupt && pos + 2 <= payload_size) {
++      size_t nalu_size = ((size_t)payload[pos] << 8) |
++                         (size_t)payload[pos + 1];
++      pos += 2;
++      if (nalu_size == 0 || pos + nalu_size > payload_size) {
++        rtp_decoder->h264_frame_corrupt = 1;
++        return -1;
++      }
++      h264_append_nalu(rtp_decoder, payload + pos, nalu_size);
++      pos += nalu_size;
++    }
++    rtp_decoder->h264_fu_started = 0;
++  } else if (nalu_type == 28) {
++    if (payload_size < 2) {
++      rtp_decoder->h264_frame_corrupt = 1;
++      return -1;
++    }
++    uint8_t fu_indicator = payload[0];
++    uint8_t fu_header = payload[1];
++    uint8_t reconstructed_nalu_type = (fu_indicator & 0xe0) | (fu_header & 0x1f);
++    int start = (fu_header & 0x80) != 0;
++    int end = (fu_header & 0x40) != 0;
++    payload += 2;
++    payload_size -= 2;
++
++    if (!rtp_decoder->h264_frame_corrupt) {
++      if (start) {
++        static const uint32_t nalu_start_4bytecode = 0x01000000;
++        if (sizeof(nalu_start_4bytecode) + 1 + payload_size > CONFIG_MAX_NALU_SIZE) {
++          rtp_decoder->h264_frame_corrupt = 1;
++          rtp_decoder->h264_fu_started = 0;
++          return -1;
+         }
+-        offset = 0;  // reset for next NALU
++        if (h264_append_bytes(rtp_decoder,
++                              (const uint8_t*)&nalu_start_4bytecode,
++                              sizeof(nalu_start_4bytecode)) < 0 ||
++            h264_append_bytes(rtp_decoder, &reconstructed_nalu_type, 1) < 0) {
++          rtp_decoder->h264_fu_started = 0;
++          return -1;
++        }
++        rtp_decoder->h264_fu_started = 1;
++      } else if (!rtp_decoder->h264_fu_started) {
++        rtp_decoder->h264_frame_corrupt = 1;
++        return -1;
++      }
++
++      if (h264_append_bytes(rtp_decoder, payload, payload_size) < 0) {
++        rtp_decoder->h264_fu_started = 0;
++        return -1;
+       }
+     }
++    if (end) {
++      rtp_decoder->h264_fu_started = 0;
++    }
++  } else {
++    rtp_decoder->h264_frame_corrupt = 1;
+   }
+-  return 0;
++
++  rtp_decoder->h264_last_seq = seq;
++  rtp_decoder->h264_have_last_seq = 1;
++  if (marker) {
++    h264_flush_frame(rtp_decoder);
++  }
++  return (int)size;
+ }
+ 
+ static int rtp_decode_generic(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
+-  RtpPacket* rtp_packet = (RtpPacket*)buf;
++  uint8_t* payload = NULL;
++  size_t payload_size = 0;
++  if (rtp_payload(buf, size, &payload, &payload_size) < 0) {
++    return -1;
++  }
+   if (rtp_decoder->on_packet != NULL)
+-    rtp_decoder->on_packet(rtp_packet->payload, size - sizeof(RtpHeader), rtp_decoder->user_data);
++    rtp_decoder->on_packet(payload, payload_size, rtp_decoder->user_data);
+   // even if there is no callback set, assume everything is ok for caller and do not return an error
+   return (int)size;
+ }
+ 
+ void rtp_decoder_init(RtpDecoder* rtp_decoder, MediaCodec codec, RtpOnPacket on_packet, void* user_data) {
++  memset(rtp_decoder, 0, sizeof(*rtp_decoder));
+   rtp_decoder->on_packet = on_packet;
+   rtp_decoder->user_data = user_data;
+ 
+@@ -282,11 +468,8 @@ void rtp_decoder_init(RtpDecoder* rtp_decoder, MediaCodec codec, RtpOnPacket on_
+     case CODEC_H264:
+       rtp_decoder->decode_func = rtp_decode_h264;
+       break;
+-    case CODEC_PCMA:
+-    case CODEC_PCMU:
+-    case CODEC_OPUS:
+-      rtp_decoder->decode_func = rtp_decode_generic;
+     default:
++      rtp_decoder->decode_func = rtp_decode_generic;
+       break;
+   }
+ }
+diff --git a/src/rtp.h b/src/rtp.h
+index 4f94614..9cd3e55 100644
+--- a/src/rtp.h
++++ b/src/rtp.h
+@@ -1,6 +1,7 @@
+ #ifndef RTP_H_
+ #define RTP_H_
+ 
++#include <stddef.h>
+ #include <stdint.h>
+ 
+ #ifdef __BYTE_ORDER
+@@ -79,6 +80,16 @@ struct RtpDecoder {
+   RtpOnPacket on_packet;
+   int (*decode_func)(RtpDecoder* rtp_decoder, uint8_t* data, size_t size);
+   void* user_data;
++  uint8_t h264_buf[CONFIG_MAX_NALU_SIZE];
++  size_t h264_offset;
++  uint8_t h264_frame_buf[CONFIG_MAX_NALU_SIZE];
++  size_t h264_frame_offset;
++  uint32_t h264_frame_timestamp;
++  int h264_frame_started;
++  int h264_frame_corrupt;
++  uint16_t h264_last_seq;
++  int h264_have_last_seq;
++  int h264_fu_started;
+ };
+ 
+ struct RtpEncoder {
+diff --git a/src/sctp.c b/src/sctp.c
+index 644f8d8..466d0c6 100644
+--- a/src/sctp.c
++++ b/src/sctp.c
+@@ -1,5 +1,7 @@
+ #include <stdlib.h>
+ #include <string.h>
++#include <stdarg.h>
++#include <stdio.h>
+ 
+ #include "dtls_srtp.h"
+ #include "sctp.h"
+@@ -8,6 +10,26 @@
+ #include <usrsctp.h>
+ #endif
+ 
++static void sctp_debug_log(const char* format, ...) {
++#ifdef __SWITCH__
++  const char* path = "sdmc:/switch/LunarNX/lunarnx.log";
++#else
++  const char* path = "./lunarnx.log";
++#endif
++  FILE* log = fopen(path, "a");
++  if (!log) {
++    return;
++  }
++
++  fputs("[DEBUG-sctp] ", log);
++  va_list args;
++  va_start(args, format);
++  vfprintf(log, format, args);
++  va_end(args);
++  fputc('\n', log);
++  fclose(log);
++}
++
+ static const uint32_t crc32c_table[256] = {
+     0x00000000L, 0xF26B8303L, 0xE13B70F7L, 0x1350F3F4L,
+     0xC79A971FL, 0x35F1141CL, 0x26A1E7E8L, 0xD4CA64EBL,
+@@ -86,6 +108,56 @@ static uint32_t sctp_get_checksum(Sctp* sctp, const uint8_t* buf, size_t len) {
+   return crc;
+ }
+ 
++#if !CONFIG_USE_USRSCTP
++static size_t sctp_padded_length(size_t len) {
++  return 4 * ((len + 3) / 4);
++}
++
++static size_t sctp_param_padded_length(const SctpChunkParam* param) {
++  return sctp_padded_length(ntohs(param->length));
++}
++
++static uint16_t sctp_next_stream_sequence(Sctp* sctp, uint16_t sid) {
++  if (sid < SCTP_MAX_TRACKED_STREAM_SEQUENCES) {
++    return sctp->outbound_stream_sequence[sid]++;
++  }
++  return sctp->outbound_fallback_sequence++;
++}
++
++static void sctp_prepare_outgoing_packet(Sctp* sctp, SctpPacket* packet) {
++  packet->header.source_port = htons(sctp->local_port);
++  packet->header.destination_port = htons(sctp->remote_port);
++  packet->header.verification_tag = sctp->verification_tag;
++  packet->header.checksum = 0x00;
++}
++
++static void sctp_send_prepared_packet(Sctp* sctp, size_t length) {
++  length = sctp_padded_length(length);
++  SctpPacket* packet = (SctpPacket*)sctp->buf;
++  packet->header.checksum = sctp_get_checksum(sctp, sctp->buf, length);
++  dtls_srtp_write(sctp->dtls_srtp, sctp->buf, length);
++}
++
++static void sctp_send_sack(Sctp* sctp, uint32_t cumulative_tsn_ack) {
++  memset(sctp->buf, 0, sizeof(sctp->buf));
++
++  SctpPacket* packet = (SctpPacket*)sctp->buf;
++  SctpSackChunk* sack_chunk = (SctpSackChunk*)packet->chunks;
++  sctp_prepare_outgoing_packet(sctp, packet);
++
++  sack_chunk->common.type = SCTP_SACK;
++  sack_chunk->common.flags = 0x00;
++  sack_chunk->common.length = htons(sizeof(SctpSackChunk));
++  sack_chunk->cumulative_tsn_ack = htonl(cumulative_tsn_ack);
++  sack_chunk->a_rwnd = htonl(0x100000);
++  sack_chunk->number_of_gap_ack_blocks = 0;
++  sack_chunk->number_of_dup_tsns = 0;
++
++  sctp_debug_log("send SACK cumulative_tsn=%lu", (unsigned long)cumulative_tsn_ack);
++  sctp_send_prepared_packet(sctp, sizeof(SctpHeader) + sizeof(SctpSackChunk));
++}
++#endif
++
+ static int sctp_outgoing_data_cb(void* userdata, void* buf, size_t len, uint8_t tos, uint8_t set_df) {
+   Sctp* sctp = (Sctp*)userdata;
+ 
+@@ -113,7 +185,7 @@ int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uin
+   size_t padding_len = 0;
+   size_t payload_max = SCTP_MTU - sizeof(SctpPacket) - sizeof(SctpDataChunk);
+   size_t pos = 0;
+-  static uint16_t sqn = 0;
++  uint16_t sqn = sctp_next_stream_sequence(sctp, sid);
+ 
+   SctpPacket* packet = (SctpPacket*)(sctp->buf);
+   SctpDataChunk* chunk = (SctpDataChunk*)(packet->chunks);
+@@ -124,9 +196,15 @@ int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uin
+ 
+   chunk->type = SCTP_DATA;
+   chunk->iube = 0x06;
+-  chunk->sid = htons(0);
++  chunk->sid = htons(sid);
+   chunk->sqn = htons(sqn++);
+   chunk->ppid = htonl(ppid);
++  if (ppid == PPID_CONTROL && len >= 12) {
++    sctp_debug_log("send DCEP sid=%u sqn=%u len=%zu label_len=%u proto_len=%u",
++                   sid, sqn, len, ntohs(*(uint16_t*)(buf + 8)), ntohs(*(uint16_t*)(buf + 10)));
++  } else {
++    sctp_debug_log("send DATA sid=%u sqn=%u ppid=%d len=%zu", sid, sqn, ppid, len);
++  }
+ 
+   while (len > payload_max) {
+     chunk->length = htons(payload_max + sizeof(SctpDataChunk));
+@@ -150,7 +228,7 @@ int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uin
+     memcpy(chunk->data, buf + pos, len);
+     packet->header.checksum = 0;
+ 
+-    padding_len = 4 * ((len + sizeof(SctpDataChunk) + sizeof(SctpPacket) + 3) / 4);
++    padding_len = sctp_padded_length(len + sizeof(SctpDataChunk) + sizeof(SctpPacket));
+ 
+     packet->header.checksum = sctp_get_checksum(sctp, (const uint8_t*)sctp->buf, padding_len);
+ 
+@@ -161,6 +239,11 @@ int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uin
+ }
+ 
+ void sctp_add_stream_mapping(Sctp* sctp, const char* label, uint16_t sid) {
++  for (int i = 0; i < sctp->stream_count; i++) {
++    if (sctp->stream_table[i].sid == sid) {
++      return;
++    }
++  }
+   if (sctp->stream_count < SCTP_MAX_STREAMS) {
+     strncpy(sctp->stream_table[sctp->stream_count].label, label, sizeof(sctp->stream_table[sctp->stream_count].label));
+     sctp->stream_table[sctp->stream_count].sid = sid;
+@@ -212,6 +295,29 @@ void sctp_handle_sctp_packet(Sctp* sctp, char* buf, size_t len) {
+     sctp_parse_data_channel_open(sctp, sid, buf + 28, len - 28);
+ }
+ 
++#if !CONFIG_USE_USRSCTP
++static void sctp_handle_data_channel_control(Sctp* sctp, uint16_t sid, char* data, size_t length) {
++  if (!data || length == 0)
++    return;
++
++  switch ((uint8_t)data[0]) {
++    case DATA_CHANNEL_OPEN:
++      sctp_debug_log("recv DCEP OPEN sid=%u len=%zu", sid, length);
++      sctp_parse_data_channel_open(sctp, sid, data, length);
++      break;
++    case DATA_CHANNEL_ACK:
++      // DCEP ACK confirms a locally opened data channel. It is SCTP control
++      // traffic, not an application message.
++      sctp_debug_log("recv DCEP ACK sid=%u", sid);
++      break;
++    default:
++      sctp_debug_log("recv DCEP unknown sid=%u type=0x%02x len=%zu",
++                     sid, (unsigned char)data[0], length);
++      break;
++  }
++}
++#endif
++
+ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
+   if (!sctp)
+     return;
+@@ -220,6 +326,7 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
+   sctp_handle_sctp_packet(sctp, buf, len);
+   usrsctp_conninput(sctp, buf, len, 0);
+ #else
++  sctp_debug_log("incoming len=%zu first_chunk=%u", len, len > sizeof(SctpHeader) ? (unsigned)buf[sizeof(SctpHeader)] : 255);
+   size_t length = 0;
+   size_t pos = sizeof(SctpHeader);
+   SctpChunkCommon* chunk_common;
+@@ -238,6 +345,8 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
+   in_packet->header.checksum = 0;
+ 
+   if (crc32c != sctp_get_checksum(sctp, (const uint8_t*)buf, len)) {
++    sctp_debug_log("checksum error packet=0x%08x computed=0x%08x len=%zu",
++                   crc32c, sctp_get_checksum(sctp, (const uint8_t*)buf, len), len);
+     LOGE("checksum error");
+     return;
+   }
+@@ -249,37 +358,33 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
+ 
+     switch (chunk_common->type) {
+       case SCTP_DATA: {
++        sctp_debug_log("chunk DATA len=%u flags=0x%02x", ntohs(chunk_common->length), chunk_common->flags);
+         SctpDataChunk* data_chunk = (SctpDataChunk*)(buf + pos);
+-        SctpSackChunk* sack_chunk = (SctpSackChunk*)out_packet->chunks;
+-
+-        sack_chunk->common.type = SCTP_SACK;
+-        sack_chunk->common.flags = 0x00;
+-        sack_chunk->common.length = htons(16);
+-        sack_chunk->cumulative_tsn_ack = data_chunk->tsn;
+-        sack_chunk->a_rwnd = htonl(0x02);
+-        length = ntohs(sack_chunk->common.length) + sizeof(SctpHeader);
+-
+-        LOGD("SCTP_DATA. ppid = %ld, data = %.2x", ntohl(data_chunk->ppid), data_chunk->data[0]);
+-        if (ntohl(data_chunk->ppid) == DATA_CHANNEL_PPID_CONTROL && data_chunk->data[0] == DATA_CHANNEL_OPEN) {
+-          data_chunk = (SctpDataChunk*)sack_chunk->blocks;
+-          data_chunk->type = SCTP_DATA;
+-          data_chunk->iube = 0x03;
+-          data_chunk->tsn = htonl(sctp->tsn++);
+-          data_chunk->sid = htons(0);
+-          data_chunk->sqn = htons(0);
+-          data_chunk->ppid = htonl(DATA_CHANNEL_PPID_CONTROL);
+-          data_chunk->length = htons(1 + sizeof(SctpDataChunk));
+-          data_chunk->data[0] = DATA_CHANNEL_ACK;
+-          length += ntohs(data_chunk->length);
+-        } else if (ntohl(data_chunk->ppid) == DATA_CHANNEL_PPID_DOMSTRING || ntohl(data_chunk->ppid) == DATA_CHANNEL_PPID_BINARY) {
++        uint16_t data_length = ntohs(data_chunk->length);
++        if (data_length < sizeof(SctpDataChunk)) {
++          sctp_debug_log("DATA too short len=%u", data_length);
++          length = 0;
++          break;
++        }
++
++        uint16_t sid = ntohs(data_chunk->sid);
++        uint32_t ppid = ntohl(data_chunk->ppid);
++        size_t payload_length = data_length - sizeof(SctpDataChunk);
++
++        sctp_send_sack(sctp, ntohl(data_chunk->tsn));
++
++        LOGD("SCTP_DATA. ppid = %ld, data = %.2x", ppid, payload_length ? data_chunk->data[0] : 0);
++        if (ppid == DATA_CHANNEL_PPID_CONTROL) {
++          sctp_handle_data_channel_control(sctp, sid, (char*)data_chunk->data, payload_length);
++        } else if (ppid == DATA_CHANNEL_PPID_DOMSTRING || ppid == DATA_CHANNEL_PPID_BINARY) {
+           if (sctp->onmessage) {
+-            sctp->onmessage((char*)data_chunk->data, ntohs(data_chunk->length) - sizeof(SctpDataChunk),
+-                            sctp->userdata, ntohs(data_chunk->sid));
++            sctp->onmessage((char*)data_chunk->data, payload_length, sctp->userdata, sid);
+           }
+         }
+-        pos = len;  // Do not handle other msg
++        length = 0;
+       } break;
+       case SCTP_INIT: {
++        sctp_debug_log("chunk INIT len=%u", ntohs(chunk_common->length));
+         LOGD("SCTP_INIT");
+ 
+         SctpInitChunk* init_chunk;
+@@ -304,22 +409,40 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
+         length = ntohs(init_ack->common.length) + sizeof(SctpHeader);
+       } break;
+       case SCTP_INIT_ACK: {
++        sctp_debug_log("chunk INIT_ACK len=%u", ntohs(chunk_common->length));
+         SctpInitChunk* init_ack = (SctpInitChunk*)in_packet->chunks;
+         SctpCookieEchoChunk* cookie_echo = (SctpCookieEchoChunk*)out_packet->chunks;
+         SctpChunkParam* param = NULL;
+         sctp->verification_tag = init_ack->initiate_tag;
+-        int type;
+-        // find cookie
+-        uint8_t* cookie = NULL;
+-        cookie = (uint8_t*)&init_ack->param[0];
+-        for (int i = 0; i < init_ack->common.length - 20; i += 2) {
+-          type = ntohs(*(uint16_t*)&cookie[i]);
+-          // find cookie param
+-          if (type == 0x07) {
+-            param = (SctpChunkParam*)&cookie[i];
++        uint16_t init_ack_length = ntohs(init_ack->common.length);
++        if (init_ack_length < 20) {
++          LOGE("SCTP INIT_ACK too short");
++          length = 0;
++          break;
++        }
++        size_t params_len = init_ack_length - 20;
++        size_t param_pos = 0;
++
++        while (param_pos + sizeof(SctpChunkParam) <= params_len) {
++          SctpChunkParam* current = (SctpChunkParam*)((uint8_t*)&init_ack->param[0] + param_pos);
++          size_t current_len = ntohs(current->length);
++          if (current_len < sizeof(SctpChunkParam) || param_pos + current_len > params_len) {
++            break;
++          }
++          if (ntohs(current->type) == SCTP_PARAM_STATE_COOKIE) {
++            param = current;
+             break;
+           }
++          param_pos += sctp_param_padded_length(current);
++        }
++
++        if (!param) {
++          sctp_debug_log("INIT_ACK missing cookie params_len=%zu", params_len);
++          LOGE("SCTP INIT_ACK missing state cookie");
++          length = 0;
++          break;
+         }
++        sctp_debug_log("INIT_ACK cookie param_len=%u", ntohs(param->length));
+ 
+         cookie_echo->common.type = SCTP_COOKIE_ECHO;
+         cookie_echo->common.flags = 0x00;
+@@ -362,6 +485,7 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
+ #endif
+         break;
+       case SCTP_COOKIE_ECHO: {
++        sctp_debug_log("chunk COOKIE_ECHO len=%u", ntohs(chunk_common->length));
+         LOGD("SCTP_COOKIE_ECHO");
+         SctpChunkCommon* common = (SctpChunkCommon*)out_packet->chunks;
+         common->type = SCTP_COOKIE_ACK;
+@@ -376,6 +500,7 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
+         }
+       } break;
+       case SCTP_COOKIE_ACK: {
++        sctp_debug_log("chunk COOKIE_ACK len=%u", ntohs(chunk_common->length));
+         if (!sctp->connected) {
+           sctp->connected = 1;
+           if (sctp->onopen) {
+@@ -391,24 +516,19 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
+         }
+         break;
+       default:
++        sctp_debug_log("chunk unknown type=%u len=%u", chunk_common->type, ntohs(chunk_common->length));
+         LOGI("Unknown chunk type %d", chunk_common->type);
+         length = 0;
+         break;
+     }
+ 
+-    out_packet->header.source_port = htons(sctp->local_port);
+-    out_packet->header.destination_port = htons(sctp->remote_port);
+-    out_packet->header.verification_tag = sctp->verification_tag;
+-    out_packet->header.checksum = 0x00;
++    sctp_prepare_outgoing_packet(sctp, out_packet);
+ 
+     if (length > 0) {
+-      // padding 4
+-      length = (4 * ((length + 3) / 4));
+-      out_packet->header.checksum = sctp_get_checksum(sctp, sctp->buf, length);
+-      dtls_srtp_write(sctp->dtls_srtp, sctp->buf, length);
++      sctp_send_prepared_packet(sctp, length);
+       // sctp_outgoing_data_cb(sctp, sctp->buf, SCTP_MTU, 0, 0);
+     }
+-    pos += ntohs(chunk_common->length);
++    pos += sctp_padded_length(ntohs(chunk_common->length));
+   }
+ #endif
+ }
+@@ -626,6 +746,7 @@ int sctp_create_association(Sctp* sctp, DtlsSrtp* dtls_srtp) {
+   length = ntohs(init_chunk->common.length) + sizeof(SctpHeader);
+   length = (4 * ((length + 3) / 4));
+   header->checksum = sctp_get_checksum(sctp, sctp->buf, length);
++  sctp_debug_log("send INIT len=%d checksum=0x%08x", length, header->checksum);
+   dtls_srtp_write(sctp->dtls_srtp, sctp->buf, length);
+ #endif
+ 
+diff --git a/src/sctp.h b/src/sctp.h
+index 1116996..5d30bad 100644
+--- a/src/sctp.h
++++ b/src/sctp.h
+@@ -141,6 +141,7 @@ typedef enum SctpDataPpid {
+ } SctpDataPpid;
+ 
+ #define SCTP_MAX_STREAMS 5
++#define SCTP_MAX_TRACKED_STREAM_SEQUENCES 16
+ 
+ typedef struct {
+   char label[32];  // Stream label
+@@ -158,6 +159,8 @@ typedef struct Sctp {
+   DtlsSrtp* dtls_srtp;
+   int stream_count;
+   SctpStreamEntry stream_table[SCTP_MAX_STREAMS];
++  uint16_t outbound_stream_sequence[SCTP_MAX_TRACKED_STREAM_SEQUENCES];
++  uint16_t outbound_fallback_sequence;
+ 
+   /* datachannel */
+   void (*onmessage)(char* msg, size_t len, void* userdata, uint16_t sid);
+@@ -182,6 +185,8 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len);
+ 
+ int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uint16_t sid);
+ 
++void sctp_add_stream_mapping(Sctp* sctp, const char* label, uint16_t sid);
++
+ void sctp_onmessage(Sctp* sctp, void (*onmessage)(char* msg, size_t len, void* userdata, uint16_t sid));
+ 
+ void sctp_onopen(Sctp* sctp, void (*onopen)(void* userdata));
+diff --git a/src/sdp.c b/src/sdp.c
+index b7661a4..d4702dc 100644
+--- a/src/sdp.c
++++ b/src/sdp.c
+@@ -34,7 +34,7 @@ void sdp_append_h264(char* sdp) {
+   sdp_append(sdp, "a=fmtp:96 profile-level-id=42e01f;level-asymmetry-allowed=1");
+   sdp_append(sdp, "a=rtpmap:96 H264/90000");
+   sdp_append(sdp, "a=ssrc:1 cname:webrtc-h264");
+-  sdp_append(sdp, "a=sendrecv");
++  sdp_append(sdp, "a=recvonly");
+   sdp_append(sdp, "a=mid:video");
+   sdp_append(sdp, "a=rtcp-mux");
+ }
+diff --git a/third_party/libsrtp b/third_party/libsrtp
+index 90d05bf..d95116d 160000
+--- a/third_party/libsrtp
++++ b/third_party/libsrtp
+@@ -1 +1 @@
+-Subproject commit 90d05bf8980d16e4ac3f16c19b77e296c4bc207b
++Subproject commit d95116d1ee69cf6439c6523fd304bec9d9b7f5a6
+diff --git a/third_party/mbedtls b/third_party/mbedtls
+index 1873d3b..f815c0d 160000
+--- a/third_party/mbedtls
++++ b/third_party/mbedtls
+@@ -1 +1 @@
+-Subproject commit 1873d3bfc2da771672bd8e7e8f41f57e0af77f33
++Subproject commit f815c0d349edf83c3f86f3e864e85da852e49555
+diff --git a/third_party/usrsctp b/third_party/usrsctp
+index 01cc4e0..a8db67a 160000
+--- a/third_party/usrsctp
++++ b/third_party/usrsctp
+@@ -1 +1 @@
+-Subproject commit 01cc4e042e2235b29d9d489d89728a6f9ac063ed
++Subproject commit a8db67a8b25ac391f8b93747ac8b712d64bf5a01
