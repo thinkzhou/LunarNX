@@ -1667,6 +1667,15 @@ diff --git a/src/dtls_srtp.h b/src/dtls_srtp.h
 index 8bfce43..5466302 100644
 --- a/src/dtls_srtp.h
 +++ b/src/dtls_srtp.h
+@@ -14,7 +14,7 @@
+ #include <mbedtls/x509_crt.h>
+ #include <mbedtls/x509_csr.h>
+ 
+-#include <srtp2/srtp.h>
++#include <srtp.h>
+ 
+ #include "address.h"
+ 
 @@ -81,6 +81,8 @@ typedef struct DtlsSrtp {
  
  int dtls_srtp_init(DtlsSrtp* dtls_srtp, DtlsSrtpRole role, void* user_data);
@@ -1695,6 +1704,15 @@ index 8bfce43..5466302 100644
 +                                  size_t packet_capacity);
  
  #endif  // DTLS_SRTP_H_
+diff --git a/src/peer.c b/src/peer.c
+--- a/src/peer.c
++++ b/src/peer.c
+@@ -1,4 +1,4 @@
+-#include <srtp2/srtp.h>
++#include <srtp.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <unistd.h>
 diff --git a/src/ice.c b/src/ice.c
 index 756e961..abce36a 100644
 --- a/src/ice.c

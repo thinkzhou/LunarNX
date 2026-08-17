@@ -1,0 +1,62 @@
+From d95116d1ee69cf6439c6523fd304bec9d9b7f5a6 Mon Sep 17 00:00:00 2001
+From: thinkzhou <thinkingzhou@163.com>
+Date: Wed, 8 Jul 2026 16:56:00 +0800
+Subject: [PATCH] switch: add libnx network byte-order includes
+
+From: zhouyang <zhouyang@leyantech.com>
+
+---
+ crypto/include/datatypes.h | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/crypto/include/datatypes.h b/crypto/include/datatypes.h
+index 5164cf0..42668fa 100644
+--- a/crypto/include/datatypes.h
++++ b/crypto/include/datatypes.h
+@@ -56,11 +56,30 @@
+ #include <time.h>
+ #ifdef HAVE_NETINET_IN_H
+ #include <netinet/in.h>
++#if defined(__SWITCH__)
++#include <arpa/inet.h>
++#endif
++#if defined(__SWITCH__)
++#include <arpa/inet.h>
++#endif
+ #elif defined HAVE_WINSOCK2_H
+ #include <winsock2.h>
+ #else
++#if defined(__SWITCH__)
++#include <netinet/in.h>
++#if defined(__SWITCH__)
++#include <arpa/inet.h>
++#endif
++#include <arpa/inet.h>
++#else
++#if defined(__SWITCH__)
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#else
+ #error "Platform not recognized"
+ #endif
++#endif
++#endif
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -179,6 +198,12 @@ static inline uint32_t be32_to_cpu(uint32_t v)
+ #else /* HAVE_X86 */
+ #ifdef HAVE_NETINET_IN_H
+ #include <netinet/in.h>
++#if defined(__SWITCH__)
++#include <arpa/inet.h>
++#endif
++#if defined(__SWITCH__)
++#include <arpa/inet.h>
++#endif
+ #elif defined HAVE_WINSOCK2_H
+ #include <winsock2.h>
+ #endif /* HAVE_NETINET_IN_H */
+-- 
+2.50.1 (Apple Git-155)
+

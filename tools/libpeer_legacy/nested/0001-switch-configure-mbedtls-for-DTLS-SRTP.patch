@@ -1,0 +1,201 @@
+From f815c0d349edf83c3f86f3e864e85da852e49555 Mon Sep 17 00:00:00 2001
+From: thinkzhou <thinkingzhou@163.com>
+Date: Wed, 8 Jul 2026 16:56:00 +0800
+Subject: [PATCH] switch: configure mbedtls for DTLS-SRTP
+
+From: zhouyang <zhouyang@leyantech.com>
+
+---
+ CMakeLists.txt                   |  6 +++---
+ include/mbedtls/mbedtls_config.h | 33 ++++++++++++++++----------------
+ library/asn1write.c              | 15 ++++++++++++++-
+ 3 files changed, 34 insertions(+), 20 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8d3f08a98..73edaf2be 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -52,10 +52,10 @@ endif()
+ # Set the project root directory.
+ set(MBEDTLS_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+ 
+-option(ENABLE_PROGRAMS "Build mbed TLS programs." ON)
++option(ENABLE_PROGRAMS "Build mbed TLS programs." OFF)
+ 
+ option(UNSAFE_BUILD "Allow unsafe builds. These builds ARE NOT SECURE." OFF)
+-option(MBEDTLS_FATAL_WARNINGS "Compiler warnings treated as errors" ON)
++option(MBEDTLS_FATAL_WARNINGS "Compiler warnings treated as errors" OFF)
+ if(CMAKE_HOST_WIN32)
+     option(GEN_FILES "Generate the auto-generated files as needed" OFF)
+ else()
+@@ -73,7 +73,7 @@ string(REGEX MATCH "MSVC" CMAKE_COMPILER_IS_MSVC "${CMAKE_C_COMPILER_ID}")
+ if(CMAKE_COMPILER_IS_MSVC)
+     option(ENABLE_TESTING "Build mbed TLS tests." OFF)
+ else()
+-    option(ENABLE_TESTING "Build mbed TLS tests." ON)
++    option(ENABLE_TESTING "Build mbed TLS tests." OFF)
+ endif()
+ 
+ # Warning string - created as a list for compatibility with CMake 2.8
+diff --git a/include/mbedtls/mbedtls_config.h b/include/mbedtls/mbedtls_config.h
+index 4292b493b..be2cac138 100644
+--- a/include/mbedtls/mbedtls_config.h
++++ b/include/mbedtls/mbedtls_config.h
+@@ -11,7 +11,7 @@
+  *  Copyright The Mbed TLS Contributors
+  *  SPDX-License-Identifier: Apache-2.0
+  *
+- *  Licensed under the Apache License, Version 2.0 (the "License"); you may
++ *  Licensed under the Apache License, Version 2.0 (the "License") you may
+  *  not use this file except in compliance with the License.
+  *  You may obtain a copy of the License at
+  *
+@@ -218,7 +218,7 @@
+  *
+  * All these define require MBEDTLS_PLATFORM_C to be defined!
+  *
+- * \note MBEDTLS_PLATFORM_SNPRINTF_ALT is required on Windows;
++ * \note MBEDTLS_PLATFORM_SNPRINTF_ALT is required on Windows
+  * it will be enabled automatically by check_config.h
+  *
+  * \warning MBEDTLS_PLATFORM_XXX_ALT cannot be defined at the same time as
+@@ -688,7 +688,7 @@
+  * #MBEDTLS_ERR_SSL_CRYPTO_IN_PROGRESS) and then be called later again in
+  * order to further progress and eventually complete their operation. This is
+  * controlled through mbedtls_ecp_set_max_ops() which limits the maximum
+- * number of ECC operations a function may perform before pausing; see
++ * number of ECC operations a function may perform before pausing see
+  * mbedtls_ecp_set_max_ops() for more information.
+  *
+  * This is useful in non-threaded environments if you want to avoid blocking
+@@ -698,9 +698,9 @@
+  * - Adds xxx_restartable() variants of existing operations in the
+  *   following modules, with corresponding restart context types:
+  *   - ECP (for Short Weierstrass curves only): scalar multiplication (mul),
+- *     linear combination (muladd);
+- *   - ECDSA: signature generation & verification;
+- *   - PK: signature generation & verification;
++ *     linear combination (muladd)
++ *   - ECDSA: signature generation & verification
++ *   - PK: signature generation & verification
+  *   - X509: certificate chain verification.
+  * - Adds mbedtls_ecdh_enable_restart() in the ECDH module.
+  * - Changes the behaviour of TLS 1.2 clients (not servers) when using the
+@@ -708,8 +708,8 @@
+  *   computations restartable:
+  *   - ECDH operations from the key exchange, only for Short Weierstrass
+  *     curves, only when MBEDTLS_USE_PSA_CRYPTO is not enabled.
+- *   - verification of the server's key exchange signature;
+- *   - verification of the server's certificate chain;
++ *   - verification of the server's key exchange signature
++ *   - verification of the server's certificate chain
+  *   - generation of the client's signature if client authentication is used,
+  *     with an ECC key/certificate.
+  *
+@@ -989,7 +989,7 @@
+  * Enable the ECJPAKE based ciphersuite modes in SSL / TLS.
+  *
+  * \warning This is currently experimental. EC J-PAKE support is based on the
+- * Thread v1.0.0 specification; incompatible changes to the specification
++ * Thread v1.0.0 specification incompatible changes to the specification
+  * might still happen. For this reason, this is disabled by default.
+  *
+  * Requires: MBEDTLS_ECJPAKE_C
+@@ -1254,8 +1254,8 @@
+  * ```
+  * psa_status_t mbedtls_psa_external_get_random(
+  *     mbedtls_psa_external_random_context_t *context,
+- *     uint8_t *output, size_t output_size, size_t *output_length);
+- * );
++ *     uint8_t *output, size_t output_size, size_t *output_length)
++ * )
+  * ```
+  * The \c context value is initialized to 0 before the first call.
+  * The function must fill the \c output buffer with \p output_size bytes
+@@ -1788,7 +1788,7 @@
+  *
+  * Uncomment this to enable support for use_srtp extension.
+  */
+-//#define MBEDTLS_SSL_DTLS_SRTP
++#define MBEDTLS_SSL_DTLS_SRTP
+ 
+ /**
+  * \def MBEDTLS_SSL_DTLS_CLIENT_PORT_REUSE
+@@ -1851,7 +1851,7 @@
+  * This setting requires compiling with clang -fsanitize=memory. The test
+  * suites can then be run normally.
+  *
+- * \warning This macro is only used for extended testing; it is not considered
++ * \warning This macro is only used for extended testing it is not considered
+  * part of the library's API, so it may change or disappear at any time.
+  *
+  * Uncomment to enable testing of the constant-flow nature of selected code.
+@@ -1870,7 +1870,7 @@
+  * done for an individual test suite with 'valgrind ./test_suite_xxx', or when
+  * using CMake, this can be done for all test suites with 'make memcheck'.
+  *
+- * \warning This macro is only used for extended testing; it is not considered
++ * \warning This macro is only used for extended testing it is not considered
+  * part of the library's API, so it may change or disappear at any time.
+  *
+  * Uncomment to enable testing of the constant-flow nature of selected code.
+@@ -2741,7 +2741,7 @@
+  *
+  * This module provides networking routines.
+  */
+-#define MBEDTLS_NET_C
++//#define MBEDTLS_NET_C
+ 
+ /**
+  * \def MBEDTLS_OID_C
+@@ -3336,7 +3336,8 @@
+  *
+  * Module:  library/timing.c
+  */
+-#define MBEDTLS_TIMING_C
++#define MBEDTLS_NO_TIMING_C
++//#define MBEDTLS_TIMING_C
+ 
+ /**
+  * \def MBEDTLS_VERSION_C
+diff --git a/library/asn1write.c b/library/asn1write.c
+index b9d586aef..18df05f79 100644
+--- a/library/asn1write.c
++++ b/library/asn1write.c
+@@ -23,11 +23,24 @@
+ 
+ #include "mbedtls/asn1write.h"
+ #include "mbedtls/error.h"
++#include "mbedtls/oid.h"
+ 
+ #include <string.h>
+ 
+ #include "mbedtls/platform.h"
+ 
++static int mbedtls_asn1_algorithm_identifier_omits_params(const char *oid,
++                                                          size_t oid_len)
++{
++#define OID_EQUALS(value) (oid_len == sizeof(value) - 1 && memcmp(oid, value, sizeof(value) - 1) == 0)
++    return OID_EQUALS(MBEDTLS_OID_ECDSA_SHA1) ||
++           OID_EQUALS(MBEDTLS_OID_ECDSA_SHA224) ||
++           OID_EQUALS(MBEDTLS_OID_ECDSA_SHA256) ||
++           OID_EQUALS(MBEDTLS_OID_ECDSA_SHA384) ||
++           OID_EQUALS(MBEDTLS_OID_ECDSA_SHA512);
++#undef OID_EQUALS
++}
++
+ int mbedtls_asn1_write_len(unsigned char **p, const unsigned char *start, size_t len)
+ {
+     if (len < 0x80) {
+@@ -198,7 +211,7 @@ int mbedtls_asn1_write_algorithm_identifier(unsigned char **p, const unsigned ch
+     int ret = MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED;
+     size_t len = 0;
+ 
+-    if (par_len == 0) {
++    if (par_len == 0 && !mbedtls_asn1_algorithm_identifier_omits_params(oid, oid_len)) {
+         MBEDTLS_ASN1_CHK_ADD(len, mbedtls_asn1_write_null(p, start));
+     } else {
+         len += par_len;
+-- 
+2.50.1 (Apple Git-155)
+

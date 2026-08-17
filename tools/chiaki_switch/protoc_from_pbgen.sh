@@ -13,4 +13,9 @@ if [ -z "$output" ]; then
     exit 2
 fi
 
-    cp /work/github_repos/chiaki-ng/pbgen/takion.pb "$output"
+if [ -z "${LUNARNX_CHIAKI_PBGEN:-}" ]; then
+    echo "protoc_from_pbgen: LUNARNX_CHIAKI_PBGEN is not set" >&2
+    exit 2
+fi
+
+cp "$LUNARNX_CHIAKI_PBGEN/takion.pb" "$output"
