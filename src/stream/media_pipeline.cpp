@@ -21,7 +21,10 @@
 namespace lunar::stream {
 
 namespace {
-constexpr size_t kMaxVideoQueuePackets = 2048;
+// Xbox/WebRTC must never replay a long access-unit backlog. Three frames keep
+// decode off the network pump while bounding steady-state queueing to a small
+// fraction of a second at both 30 and 60 fps.
+constexpr size_t kRealtimeVideoQueueFrames = 3;
 constexpr size_t kMaxVideoQueueBytes = 32 * 1024 * 1024;
 constexpr size_t kMaxAudioQueuePackets = 512;
 constexpr size_t kMaxAudioQueueBytes = 4 * 1024 * 1024;
@@ -370,7 +373,7 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
         std::lock_guard<std::mutex> lock(video_queue_mutex_);
         if (video_worker_stop_ || !running_) return false;
         if (!video_queue_.empty() &&
-            (video_queue_.size() >= kMaxVideoQueuePackets ||
+            (video_queue_.size() >= kRealtimeVideoQueueFrames ||
              queued_video_bytes_ + packet.data.size() > kMaxVideoQueueBytes)) {
             recovery_was_pending = video_recovery_request_.exchange(true);
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
