@@ -20,6 +20,12 @@ pruner = (ROOT / "tools/dev_bridge/prune_builds.sh").read_text()
 
 require("/dev/versions.json" in client and "cJSON_ArrayForEach" in client,
         "development client must parse the version index")
+require("persistentEventLog(" in client and '"dev-index"' in client and
+        "cJSON_GetErrorPtr" in client and
+        "response.body.size()" in client and
+        "responsePreview" in client and
+        "responseHeader" in client,
+        "invalid version indexes must persist response diagnostics in release builds")
 require("25LL * 1024LL * 1024LL" in client,
         "updater must enforce the Workers KV object limit")
 require("mbedtls_sha256" in client and "build.sha256" in client,

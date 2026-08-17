@@ -10,6 +10,8 @@
 
 #include <cstdio>
 #include <cerrno>
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <map>
 #include <array>
@@ -38,6 +40,36 @@ constexpr long long kMaxLogBytes = 2LL * 1024LL * 1024LL;
 constexpr long kDownloadTimeoutSeconds = 30L * 60L;
 constexpr long kDownloadLowSpeedBytesPerSecond = 512L;
 constexpr long kDownloadLowSpeedSeconds = 3L * 60L;
+
+std::string responseHeader(const api::HttpResponse& response,
+                           const char* requested_name) {
+    for (const auto& [name, value] : response.headers) {
+        if (name.size() != std::strlen(requested_name)) continue;
+        bool matches = true;
+        for (size_t i = 0; i < name.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(name[i])) !=
+                std::tolower(static_cast<unsigned char>(requested_name[i]))) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) return value;
+    }
+    return "missing";
+}
+
+std::string responsePreview(const std::string& body) {
+    constexpr size_t kPreviewBytes = 96;
+    std::string preview;
+    preview.reserve(std::min(body.size(), kPreviewBytes));
+    for (size_t i = 0; i < body.size() && i < kPreviewBytes; ++i) {
+        const unsigned char c = static_cast<unsigned char>(body[i]);
+        if (c == '\r' || c == '\n' || c == '\t') preview.push_back(' ');
+        else if (c >= 0x20 && c <= 0x7e) preview.push_back(static_cast<char>(c));
+        else preview.push_back('?');
+    }
+    return preview;
+}
 
 int sha256Starts(mbedtls_sha256_context* context) {
 #if defined(MBEDTLS_VERSION_MAJOR) && MBEDTLS_VERSION_MAJOR >= 3
@@ -254,8 +286,25 @@ bool DevBridgeClient::fetchVersions(std::vector<DevBuild>& builds,
     cJSON* root = cJSON_Parse(response.body.c_str());
     cJSON* versions = root ? cJSON_GetObjectItemCaseSensitive(root, "versions") : nullptr;
     if (!cJSON_IsArray(versions)) {
+        long long parse_offset = -1;
+        if (!root) {
+            const char* parse_error = cJSON_GetErrorPtr();
+            const char* body_start = response.body.c_str();
+            const char* body_end = body_start + response.body.size();
+            if (parse_error && parse_error >= body_start && parse_error <= body_end) {
+                parse_offset = static_cast<long long>(parse_error - body_start);
+            }
+        }
+        const std::string content_type = responseHeader(response, "content-type");
+        const std::string preview = responsePreview(response.body);
+        persistentEventLog(
+            "dev-index",
+            "invalid status=%d bytes=%zu content_type=%s parse_offset=%lld preview=%s",
+            response.status_code, response.body.size(), content_type.c_str(),
+            parse_offset, preview.c_str());
         cJSON_Delete(root);
-        error = "Invalid version index";
+        error = "Invalid version index (" + std::to_string(response.body.size()) +
+            " bytes, " + content_type + ")";
         return false;
     }
     builds.clear();
