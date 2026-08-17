@@ -25,6 +25,9 @@ jobs:
       - name: Check out LunarNX
         uses: actions/checkout@v5
 
+      - name: Trust the container workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Select application version
         shell: bash
         run: |
