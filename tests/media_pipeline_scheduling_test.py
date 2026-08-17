@@ -35,12 +35,18 @@ require("video_queue_.size() >= kRealtimeVideoQueueFrames" in pipeline,
         "queued video ingress must enforce the realtime frame bound")
 require("return enqueueVideoPacket(data, len, timestamp);" in pipeline,
         "queued scheduling must preserve asynchronous network/decode isolation")
-require("video_scheduling_ == VideoSchedulingMode::DirectLowLatency" in pipeline,
+require("video_scheduling_.load(std::memory_order_acquire) ==" in pipeline and
+        "VideoSchedulingMode::DirectLowLatency" in pipeline,
         "video ingress must dispatch direct low-latency samples separately")
 require("return decodeVideoDirect(data, len, timestamp);" in pipeline,
         "direct low-latency samples must bypass the encoded queue")
 require("std::recursive_mutex lifecycle_mutex_" in header,
         "direct decode and its renderer callback must serialize safely with shutdown")
+require("std::atomic<VideoSchedulingMode> video_scheduling_" in header,
+        "early transport callbacks must read scheduling state without a data race")
+require("video_scheduling_.store(options.video_scheduling" in pipeline and
+        "video_scheduling_.load(" in pipeline,
+        "scheduling mode publication and callback dispatch must use atomic access")
 require("bool decodeVideoDirect(" in header,
         "the direct path must be an explicit testable media operation")
 require("reset = resetVideoDecoderForKeyframe()" in pipeline and

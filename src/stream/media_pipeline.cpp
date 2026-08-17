@@ -73,7 +73,8 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         video_ready_notified_ = false;
         perf_.store(perf, std::memory_order_release);
         video_codec_ = options.video_codec;
-        video_scheduling_ = options.video_scheduling;
+        video_scheduling_.store(options.video_scheduling,
+                                std::memory_order_release);
 
         try {
             lunar::diagnosticLog("media", "create components begin backend=%s",
@@ -251,7 +252,8 @@ void MediaPipeline::shutdownUnlocked() {
 
 bool MediaPipeline::decodeVideoPacket(const uint8_t* data, size_t len,
                                       uint64_t timestamp) {
-    if (video_scheduling_ == VideoSchedulingMode::DirectLowLatency) {
+    if (video_scheduling_.load(std::memory_order_acquire) ==
+        VideoSchedulingMode::DirectLowLatency) {
         return decodeVideoDirect(data, len, timestamp);
     }
     return enqueueVideoPacket(data, len, timestamp);

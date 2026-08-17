@@ -184,7 +184,8 @@ private:
 
     std::atomic<PerfStats*> perf_{nullptr};
     VideoCodec video_codec_ = VideoCodec::H264;
-    VideoSchedulingMode video_scheduling_ = VideoSchedulingMode::RealtimeQueued;
+    std::atomic<VideoSchedulingMode> video_scheduling_{
+        VideoSchedulingMode::RealtimeQueued};
     std::atomic<bool> running_{false};
     std::atomic<uint32_t> generation_{0};
     // DirectLowLatency decoding invokes the frame callback synchronously. A
