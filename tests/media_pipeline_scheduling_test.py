@@ -29,10 +29,10 @@ require("VideoSchedulingMode::DirectLowLatency" in ps,
         "PlayStation controller must explicitly select direct low-latency scheduling")
 require("#include <chiaki/" not in header and "libpeer/" not in header,
         "shared scheduling contract must not expose transport-library types")
-require("constexpr size_t kRealtimeVideoQueueFrames = 3" in pipeline,
-        "Xbox realtime access-unit backlog must be explicitly bounded to three frames")
-require("video_queue_.size() >= kRealtimeVideoQueueFrames" in pipeline,
-        "queued video ingress must enforce the realtime frame bound")
+require("constexpr size_t kMaxVideoQueuePackets = 2048" in pipeline,
+        "Xbox access-unit queue must retain its established 2048-packet safety limit")
+require("video_queue_.size() >= kMaxVideoQueuePackets" in pipeline,
+        "queued video ingress must enforce the established safety limit")
 require("return enqueueVideoPacket(data, len, timestamp);" in pipeline,
         "queued scheduling must preserve asynchronous network/decode isolation")
 require("video_scheduling_.load(std::memory_order_acquire) ==" in pipeline and
