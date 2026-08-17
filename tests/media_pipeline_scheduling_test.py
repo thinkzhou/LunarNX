@@ -14,6 +14,8 @@ header = (ROOT / "src/stream/media_pipeline.h").read_text()
 xbox = (ROOT / "src/app/stream_controller.cpp").read_text()
 ps = (ROOT / "src/ps/ps_stream_controller.cpp").read_text()
 pipeline = (ROOT / "src/stream/media_pipeline.cpp").read_text()
+renderer = (ROOT / "src/stream/video_renderer.cpp").read_text()
+audio = (ROOT / "src/stream/audio_player.cpp").read_text()
 
 require("enum class VideoSchedulingMode" in header,
         "media pipeline must expose a protocol-neutral scheduling mode")
@@ -44,5 +46,11 @@ require("bool decodeVideoDirect(" in header,
 require("reset = resetVideoDecoderForKeyframe()" in pipeline and
         "requestVideoRecovery(\"direct video decoder error\")" in pipeline,
         "direct decode failure must reset synchronously and request an IDR")
+require("if(s->pending_frame)av_frame_free(&s->pending_frame);" in renderer and
+        "s->pending_frame=keep;" in renderer,
+        "shared renderer must replace its pending frame instead of buffering decoded frames")
+require("VideoSchedulingMode" not in renderer and
+        "VideoSchedulingMode" not in audio,
+        "decoder sinks must remain independent of protocol scheduling policy")
 
 print("media pipeline scheduling contract passed")
