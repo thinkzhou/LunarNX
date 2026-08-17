@@ -146,6 +146,7 @@ private:
     };
 
     bool enqueueVideoPacket(const uint8_t* data, size_t len, uint64_t timestamp);
+    bool decodeVideoDirect(const uint8_t* data, size_t len, uint64_t timestamp);
     bool enqueueAudioPacket(const uint8_t* data,
                             size_t len,
                             uint16_t sequence,
@@ -183,9 +184,13 @@ private:
 
     std::atomic<PerfStats*> perf_{nullptr};
     VideoCodec video_codec_ = VideoCodec::H264;
+    VideoSchedulingMode video_scheduling_ = VideoSchedulingMode::RealtimeQueued;
     std::atomic<bool> running_{false};
     std::atomic<uint32_t> generation_{0};
-    mutable std::mutex lifecycle_mutex_;
+    // DirectLowLatency decoding invokes the frame callback synchronously. A
+    // recursive mutex lets that callback enter handleVideoFrame while keeping
+    // shutdown from destroying decoder/renderer state underneath the callback.
+    mutable std::recursive_mutex lifecycle_mutex_;
     std::mutex video_ready_callback_mutex_;
     std::function<void()> video_ready_callback_;
     std::atomic<bool> video_ready_notified_{false};

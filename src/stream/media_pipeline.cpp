@@ -62,7 +62,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
 
     uint32_t worker_generation = 0;
     {
-        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
         lunar::diagnosticLog("media", "initialize begin width=%d height=%d codec=%s",
                              width,
                              height,
@@ -73,6 +73,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         video_ready_notified_ = false;
         perf_.store(perf, std::memory_order_release);
         video_codec_ = options.video_codec;
+        video_scheduling_ = options.video_scheduling;
 
         try {
             lunar::diagnosticLog("media", "create components begin backend=%s",
@@ -188,7 +189,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
 
     if (startWorkers(worker_generation)) return true;
 
-    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
     generation_.fetch_add(1);
     shutdownUnlocked();
     return false;
@@ -199,7 +200,7 @@ void MediaPipeline::shutdown() {
     running_ = false;
     stopWorkers();
     lunar::diagnosticLog("media", "shutdown after worker stop");
-    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
     generation_.fetch_add(1);
     shutdownUnlocked();
     lunar::diagnosticLog("media", "shutdown done");
@@ -250,7 +251,32 @@ void MediaPipeline::shutdownUnlocked() {
 
 bool MediaPipeline::decodeVideoPacket(const uint8_t* data, size_t len,
                                       uint64_t timestamp) {
+    if (video_scheduling_ == VideoSchedulingMode::DirectLowLatency) {
+        return decodeVideoDirect(data, len, timestamp);
+    }
     return enqueueVideoPacket(data, len, timestamp);
+}
+
+bool MediaPipeline::decodeVideoDirect(const uint8_t* data,
+                                      size_t len,
+                                      uint64_t timestamp) {
+    if (!data || len == 0 || len > kMaxVideoQueueBytes) return false;
+
+    bool decoded = false;
+    bool reset = true;
+    {
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
+        if (!running_.load() || !video_decoder_) return false;
+        decoded = video_decoder_->decode(data, len, timestamp);
+        if (!decoded) reset = resetVideoDecoderForKeyframe();
+    }
+    if (!decoded) {
+        lunar::diagnosticLog("media",
+                             "direct video decoder recovery reset=%s",
+                             reset ? "true" : "false");
+        requestVideoRecovery("direct video decoder error");
+    }
+    return decoded;
 }
 
 bool MediaPipeline::decodeAudioPacket(const uint8_t* data, size_t len,
@@ -852,7 +878,7 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
     }
     int64_t delay_ns = 0;
     {
-        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
         if (!isGenerationActive(generation) || !av_sync_ || !video_renderer_) return;
 
         av_sync_->updateVideoPts(frame.timestamp);
@@ -905,7 +931,7 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
     }
 
     {
-        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
         if (!isGenerationActive(generation) || !video_renderer_) return;
         const bool rendered = video_renderer_->render(frame);
         if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
@@ -954,7 +980,7 @@ bool MediaPipeline::submitDecodedAudio(const AudioFrame& frame,
 }
 
 void MediaPipeline::presentVideoFrame() {
-    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
     if (running_.load() && video_renderer_) {
         video_renderer_->present();
     }
