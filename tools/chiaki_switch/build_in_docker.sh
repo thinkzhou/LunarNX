@@ -57,7 +57,7 @@ cmake -S "$src" -B "$build" \
     -DCMAKE_TOOLCHAIN_FILE="$src/cmake/switch.cmake" \
     -DPKG_CONFIG_EXECUTABLE=/tmp/lunarnx-chiaki-tools/pkg-config \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-    -DCMAKE_C_FLAGS="-I/work/lib/switch/include/curl -include /work/lib/switch/include/curl/curl/curl.h -DLUNARNX_CHIAKI_RECV_OPT=$CHIAKI_RECV_OPT" \
+    -DCMAKE_C_FLAGS="-I/work/lib/switch/include -include /work/lib/switch/include/curl/curl.h -DLUNARNX_CHIAKI_RECV_OPT=$CHIAKI_RECV_OPT" \
     -DNSWITCH=TRUE \
     -DCHIAKI_ENABLE_TESTS=OFF \
     -DCHIAKI_ENABLE_CLI=OFF \
@@ -75,7 +75,7 @@ cmake -S "$src" -B "$build" \
     -DCHIAKI_LIB_ENABLE_LIBNX_EXPERIMENTAL=ON \
     -DCHIAKI_USE_SYSTEM_CURL=ON \
     -DCURL_LIBRARY=/work/lib/switch/libcurl.a \
-    -DCURL_INCLUDE_DIR=/work/lib/switch/include/curl \
+    -DCURL_INCLUDE_DIR=/work/lib/switch/include \
     -DCHIAKI_USE_SYSTEM_NANOPB=OFF \
     -DCHIAKI_USE_SYSTEM_JERASURE=OFF \
     -DCHIAKI_LIB_JSONC_EXTERNAL_PROJECT=OFF \
@@ -110,6 +110,19 @@ PY
 "$ar" rcs "$build/lib/libchiaki.a" "$build/chiaki-abi.o"
 
 cp "$build/lib/libchiaki.a" "$stage/libchiaki.a"
+copy_built_archive() {
+    archive_name="$1"
+    destination="$2"
+    archive_path=$(find "$build" -type f -name "$archive_name" -print -quit)
+    if [ -z "$archive_path" ]; then
+        echo "Missing built Chiaki dependency: $archive_name" >&2
+        exit 1
+    fi
+    cp "$archive_path" "$stage/$destination"
+}
+copy_built_archive libgf_complete.a libgf_complete.a
+copy_built_archive libjerasure.a libjerasure.a
+copy_built_archive libprotobuf-nanopb.a libprotobuf-nanopb.a
 cp -R "$src/lib/include/chiaki" "$stage/include/"
 # The Akira public gkcrypt.h intentionally refers to the libnx backend with a
 # relative ../src path.  Preserve that source-tree-relative include layout in
@@ -123,5 +136,8 @@ mkdir -p /work/lib/switch/include
 mv "$stage/include/chiaki" /work/lib/switch/include/chiaki
 mv "$stage/include/src" /work/lib/switch/include/src
 mv "$stage/libchiaki.a" /work/lib/switch/libchiaki.a
+mv "$stage/libgf_complete.a" /work/lib/switch/libgf_complete.a
+mv "$stage/libjerasure.a" /work/lib/switch/libjerasure.a
+mv "$stage/libprotobuf-nanopb.a" /work/lib/switch/libprotobuf-nanopb.a
 echo "Installed coherent Chiaki Switch SDK into /work/lib/switch"
 '
