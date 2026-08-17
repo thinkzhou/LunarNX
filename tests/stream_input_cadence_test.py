@@ -14,7 +14,7 @@ def require(condition, message):
         raise SystemExit(f"FAIL: {message}")
 
 
-require("kInputPollInterval{16}" in XBOX_SESSION and
+require("kInputPollInterval{8}" in XBOX_SESSION and
         "next_input_tick += kInputPollInterval" in XBOX_SESSION and
         "gamepad_state = gamepad_.read()" in XBOX_SESSION,
         "Xbox input must be sampled by its protocol loop at normal gamepad cadence")

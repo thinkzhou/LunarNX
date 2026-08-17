@@ -17,8 +17,8 @@ renderer = (ROOT / "src/stream/video_renderer.cpp").read_text()
 decode_start = decoder.index("bool VideoDecoder::decode(")
 hardware_start = decoder.index("#ifdef __SWITCH__", decode_start)
 decode_gate = decoder[decode_start:hardware_start]
-require("if (!au.has_vcl)" in decode_gate and
-        decode_gate.index("if (!au.has_vcl)") <
+require("if (playstation_path && !au.has_vcl)" in decode_gate and
+        decode_gate.index("if (playstation_path && !au.has_vcl)") <
         decode_gate.index("if (!decoder_ready_)") and
         "parameter_sets_" in decode_gate,
         "parameter-set/metadata-only video AUs must be consumed before the "

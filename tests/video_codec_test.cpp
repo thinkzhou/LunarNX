@@ -6,6 +6,7 @@
 
 using lunar::stream::VideoCodec;
 using lunar::stream::inspectVideoAccessUnit;
+using lunar::stream::inspectXboxH264AccessUnit;
 
 namespace {
 
@@ -33,6 +34,13 @@ int main() {
                  "H264 SPS/PPS should be recognized") ||
         !require(h264_info.has_random_access && h264_info.has_vcl,
                  "H264 IDR should be random access VCL")) return 1;
+
+    const auto xbox_info = inspectXboxH264AccessUnit(h264.data(), h264.size());
+    if (!require(xbox_info.has_sps && xbox_info.has_pps &&
+                     xbox_info.has_random_access && xbox_info.has_vcl,
+                 "Xbox fast path should recognize H264 startup data") ||
+        !require(xbox_info.nal_types.empty(),
+                 "Xbox fast path must not construct NAL strings")) return 1;
 
     const auto hevc = annexB({0x40, 0x42, 0x44, 0x26}); // VPS, SPS, PPS, IDR_W_RADL
     const auto hevc_info = inspectVideoAccessUnit(

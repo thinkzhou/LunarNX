@@ -12,6 +12,11 @@ enum class VideoCodec {
     HEVC,
 };
 
+enum class VideoPipelinePath {
+    Xbox,
+    PlayStation,
+};
+
 inline const char* videoCodecName(VideoCodec codec) {
     return codec == VideoCodec::HEVC ? "hevc" : "h264";
 }
@@ -104,6 +109,46 @@ inline VideoAccessUnitInfo inspectVideoAccessUnit(VideoCodec codec,
         findVideoStartCode(data, len, nalu_start, next, next_code_size);
         if (nalu_start < next && nalu_start < len) {
             inspectVideoNal(codec, data[nalu_start], info);
+        }
+        if (next >= len) break;
+        pos = next;
+        code_size = next_code_size;
+    }
+    return info;
+}
+
+// Xbox/WebRTC always supplies complete Annex-B H.264 access units. Keep its
+// realtime path allocation-free; the richer parser is reserved for Chiaki's
+// H.264/HEVC samples and standalone parameter sets.
+inline VideoAccessUnitInfo inspectXboxH264AccessUnit(const uint8_t* data,
+                                                     size_t len) {
+    VideoAccessUnitInfo info;
+    if (!data || len == 0) return info;
+
+    size_t pos = 0;
+    size_t code_size = 0;
+    if (!findVideoStartCode(data, len, 0, pos, code_size)) {
+        const uint8_t type = data[0] & 0x1f;
+        info.nal_count = 1;
+        info.has_sps = type == 7;
+        info.has_pps = type == 8;
+        info.has_random_access = type == 5;
+        info.has_vcl = type >= 1 && type <= 5;
+        return info;
+    }
+
+    while (pos < len) {
+        const size_t nalu_start = pos + code_size;
+        size_t next = len;
+        size_t next_code_size = 0;
+        findVideoStartCode(data, len, nalu_start, next, next_code_size);
+        if (nalu_start < next && nalu_start < len) {
+            const uint8_t type = data[nalu_start] & 0x1f;
+            info.nal_count++;
+            info.has_sps = info.has_sps || type == 7;
+            info.has_pps = info.has_pps || type == 8;
+            info.has_random_access = info.has_random_access || type == 5;
+            info.has_vcl = info.has_vcl || (type >= 1 && type <= 5);
         }
         if (next >= len) break;
         pos = next;

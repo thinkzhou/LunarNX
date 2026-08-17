@@ -297,6 +297,7 @@ bool PsStreamController::startStream() {
     // Now initialize the media pipeline (NVDEC, audio) while the session
     // thread already runs regist/request on the CTRL channel in parallel.
     stream::MediaPipelineOptions media_opts;
+    media_opts.video_path = stream::VideoPipelinePath::PlayStation;
     media_opts.video_codec = video_codec_;
     media_opts.hold_non_target_startup_frames = true;
     media_opts.video_backend = video_backend_;

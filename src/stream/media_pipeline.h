@@ -78,6 +78,7 @@ inline bool usesZeroCopyRender(VideoBackend backend) {
 }
 
 struct MediaPipelineOptions {
+    VideoPipelinePath video_path = VideoPipelinePath::Xbox;
     VideoCodec video_codec = VideoCodec::H264;
     VideoBackend video_backend = VideoBackend::HardwareZeroCopy;
     PostProcessMode post_process_mode = PostProcessMode::Off;
@@ -133,6 +134,7 @@ private:
         uint32_t generation = 0;
         uint32_t recovery_epoch = 0;
         bool contains_idr = false;
+        VideoAccessUnitInfo access_unit;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         std::chrono::steady_clock::time_point enqueued_at;
         uint64_t queue_age_us = 0;
@@ -184,6 +186,7 @@ private:
 
     std::atomic<PerfStats*> perf_{nullptr};
     VideoCodec video_codec_ = VideoCodec::H264;
+    VideoPipelinePath video_path_ = VideoPipelinePath::Xbox;
     std::atomic<VideoSchedulingMode> video_scheduling_{
         VideoSchedulingMode::RealtimeQueued};
     std::atomic<bool> running_{false};

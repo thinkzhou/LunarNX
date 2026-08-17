@@ -4,7 +4,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PATCH = (ROOT / "tools/chiaki_switch/lunarnx-chiaki-transport-diagnostics.patch").read_text()
 KEY_PATCH = (ROOT / "tools/chiaki_switch/lunarnx-chiaki-key-position-diagnostics.patch").read_text()
-BUILD = (ROOT / "tools/chiaki_switch/build_in_docker.sh").read_text()
+DOCKER_BUILD = (ROOT / "tools/chiaki_switch/build_in_docker.sh").read_text()
+CONTAINER_BUILD = (ROOT / "tools/chiaki_switch/build_in_container.sh").read_text()
 ADAPTER = (ROOT / "src/ps/chiaki_log_adapter.cpp").read_text()
 SESSION = (ROOT / "src/ps/ps_stream_session.cpp").read_text()
 
@@ -31,15 +32,18 @@ require("#ifndef LUNARNX_CHIAKI_TRANSPORT_DIAG",
 if PATCH.count("#if LUNARNX_CHIAKI_TRANSPORT_DIAG") < 8:
     raise AssertionError("Every transport hot path must compile out of release builds")
 
-if "lunarnx-chiaki-transport-diagnostics.patch" not in BUILD:
+if "lunarnx-chiaki-transport-diagnostics.patch" not in CONTAINER_BUILD:
     raise AssertionError("Switch Chiaki build must apply the diagnostics patch")
-if "lunarnx-chiaki-key-position-diagnostics.patch" not in BUILD:
+if "lunarnx-chiaki-key-position-diagnostics.patch" not in CONTAINER_BUILD:
     raise AssertionError("Switch Chiaki build must apply key-position diagnostics")
-if "CHIAKI_TRANSPORT_DIAG=${CHIAKI_TRANSPORT_DIAG:-0}" not in BUILD:
+if ('-e CHIAKI_TRANSPORT_DIAG="${CHIAKI_TRANSPORT_DIAG:-0}"' not in
+        DOCKER_BUILD or
+        'chiaki_transport_diag="${CHIAKI_TRANSPORT_DIAG:-0}"' not in
+        CONTAINER_BUILD):
     raise AssertionError("Switch Chiaki transport diagnostics must default to disabled")
-if "CHIAKI_TRANSPORT_DIAG must be 0 or 1" not in BUILD:
+if "CHIAKI_TRANSPORT_DIAG must be 0 or 1" not in CONTAINER_BUILD:
     raise AssertionError("Switch Chiaki build must validate the diagnostics option")
-if "-DLUNARNX_CHIAKI_TRANSPORT_DIAG=$CHIAKI_TRANSPORT_DIAG" not in BUILD:
+if "-DLUNARNX_CHIAKI_TRANSPORT_DIAG=$chiaki_transport_diag" not in CONTAINER_BUILD:
     raise AssertionError("Switch Chiaki build must pass the diagnostics option to the compiler")
 if "LUNARNX-PSKEY epoch_prev=%u epoch_next=%u" not in KEY_PATCH:
     raise AssertionError("Authenticated key-position epoch changes must be observable")
