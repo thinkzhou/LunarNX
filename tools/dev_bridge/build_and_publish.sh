@@ -7,7 +7,16 @@ SCRIPT_DIR=${0:A:h}
 SCRIPT_NAME=${0:t}
 PROJECT_DIR=${SCRIPT_DIR:h:h}
 BASE_URL=${LUNARNX_DEV_BRIDGE_URL:-https://lunarnx.tooyang.qzz.io}
-BASE_VERSION=${LUNARNX_BASE_VERSION:-0.1.0}
+BASE_VERSION=${LUNARNX_BASE_VERSION:-}
+if [[ -z "$BASE_VERSION" ]]; then
+    BASE_VERSION=$(/usr/bin/awk '
+        $1 == "APP_VERSION" && $2 == "?=" { print $3; exit }
+    ' "$PROJECT_DIR/Makefile.switch")
+    if [[ -z "$BASE_VERSION" ]]; then
+        print -u2 -- 'Could not read APP_VERSION from Makefile.switch'
+        exit 3
+    fi
+fi
 VERSION=''
 NOTES='Development build'
 NOTIFY_FEISHU=1

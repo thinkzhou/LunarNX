@@ -15,6 +15,7 @@ ui = (ROOT / "src/ui/dev_tools_activity.cpp").read_text()
 platform = (ROOT / "src/ui/platform_activity.cpp").read_text()
 makefile = (ROOT / "Makefile.switch").read_text()
 publisher = (ROOT / "tools/dev_bridge/publish_build.sh").read_text()
+build_publisher = (ROOT / "tools/dev_bridge/build_and_publish.sh").read_text()
 pruner = (ROOT / "tools/dev_bridge/prune_builds.sh").read_text()
 
 require("/dev/versions.json" in client and "cJSON_ArrayForEach" in client,
@@ -67,6 +68,10 @@ require("compressed_download_url" in client_header and
 require("compressed_download_url" in publisher and ".nro.gz" in publisher and
         "/usr/bin/gzip" in publisher,
         "publishing must upload a gzip transport artifact alongside the raw NRO")
+require('"$PROJECT_DIR/Makefile.switch"' in build_publisher and
+        'LUNARNX_BASE_VERSION' in build_publisher and
+        'LUNARNX_BASE_VERSION:-0.1.0' not in build_publisher,
+        "automatic development versions must follow Makefile.switch APP_VERSION")
 require('\\\\.nro(\\\\.gz)?$' in pruner and 'sha=${sha%.gz}' in pruner,
         "build pruning must remove orphaned raw and gzip artifacts")
 
