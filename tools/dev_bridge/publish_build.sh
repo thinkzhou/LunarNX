@@ -6,6 +6,7 @@ set +x
 SCRIPT_DIR=${0:A:h}
 PROJECT_DIR=${SCRIPT_DIR:h:h}
 CLOUDFLARE_DIR="$SCRIPT_DIR/cloudflare"
+MANIFEST_PATH=${LUNARNX_BUILD_MANIFEST:-$PROJECT_DIR/build/switch/build-manifest.json}
 NRO_INPUT=${1:-build/switch/LunarNX.nro}
 VERSION_INPUT=${2:-}
 NOTES=${3:-Development build}
@@ -41,6 +42,13 @@ if [[ ! -d "$CLOUDFLARE_DIR/node_modules/wrangler" ]]; then
 fi
 
 SHA256=$(/usr/bin/shasum -a 256 "$NRO_PATH" | /usr/bin/awk '{print $1}')
+if [[ ! -f "$MANIFEST_PATH" ]] || ! /usr/bin/jq -e \
+    --arg sha256 "$SHA256" \
+    '.sha256 == $sha256 and .build.upload_token_embedded == true' \
+    "$MANIFEST_PATH" >/dev/null; then
+    print -u2 -- 'Refusing to publish without a matching token-verified build manifest'
+    exit 10
+fi
 SIZE=$(/usr/bin/stat -f '%z' "$NRO_PATH")
 KV_MAX_VALUE_BYTES=$((25 * 1024 * 1024))
 if (( SIZE > KV_MAX_VALUE_BYTES )); then

@@ -33,6 +33,10 @@ if [[ -z "$DEVICE_UPLOAD_TOKEN" ]]; then
         exit 4
     }
 fi
+if [[ -z "$DEVICE_UPLOAD_TOKEN" ]]; then
+    print -u2 -- 'Development upload token is empty'
+    exit 4
+fi
 
 usage() {
     print -- "Usage: $SCRIPT_NAME [--version VERSION] [--notes TEXT] [--no-feishu]"
@@ -153,12 +157,14 @@ BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     '{schema:1,version:$version,git_commit:$git_commit,notes:$notes,
       built_at:$built_at,size:$size,sha256:$sha256,
       build:{drop_diag:($drop_diag == 1),app_diag:($app_diag == 1),
-             curl_provider:$curl_provider},published:false}' \
+             curl_provider:$curl_provider,upload_token_embedded:true},
+      published:false}' \
     > "$MANIFEST_PATH"
 
 PUBLISH_ARGS=("$NRO_PATH" "$VERSION" "$NOTES")
 (( NOTIFY_FEISHU )) || PUBLISH_ARGS=(--no-feishu "${PUBLISH_ARGS[@]}")
 LUNARNX_DEV_BRIDGE_URL="$BASE_URL" \
+LUNARNX_BUILD_MANIFEST="$MANIFEST_PATH" \
     "$SCRIPT_DIR/publish_build.sh" "${PUBLISH_ARGS[@]}"
 
 PUBLISHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)

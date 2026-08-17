@@ -74,6 +74,9 @@ require("compressed_download_url" in client_header and
 require("compressed_download_url" in publisher and ".nro.gz" in publisher and
         "/usr/bin/gzip" in publisher,
         "publishing must upload a gzip transport artifact alongside the raw NRO")
+require("LUNARNX_BUILD_MANIFEST" in publisher and
+        "upload_token_embedded" in publisher,
+        "publishing must reject builds without proof of an embedded upload token")
 require('"$PROJECT_DIR/Makefile.switch"' in build_publisher and
         'LUNARNX_BASE_VERSION' in build_publisher and
         'LUNARNX_BASE_VERSION:-0.1.0' not in build_publisher,
