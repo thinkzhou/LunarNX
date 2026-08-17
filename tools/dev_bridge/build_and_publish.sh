@@ -133,6 +133,13 @@ GIT_COMMIT="$GIT_COMMIT" \
 DEV_BRIDGE_UPLOAD_TOKEN="$DEVICE_UPLOAD_TOKEN" \
     "$PROJECT_DIR/scripts/docker_build_full.sh"
 
+ELF_PATH="$PROJECT_DIR/build/switch/LunarNX.elf"
+if [[ ! -f "$ELF_PATH" ]] || ! /usr/bin/grep -aFq -f \
+    =(print -rn -- "$DEVICE_UPLOAD_TOKEN") "$ELF_PATH"; then
+    print -u2 -- 'Upload token was not embedded in LunarNX.elf'
+    exit 5
+fi
+
 python3 tests/switch_nro_bss_test.py
 python3 tests/chiaki_transport_diagnostics_test.py
 python3 tests/drop_diagnostics_test.py

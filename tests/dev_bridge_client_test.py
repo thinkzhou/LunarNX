@@ -81,6 +81,10 @@ require('"$PROJECT_DIR/Makefile.switch"' in build_publisher and
         'LUNARNX_BASE_VERSION' in build_publisher and
         'LUNARNX_BASE_VERSION:-0.1.0' not in build_publisher,
         "automatic development versions must follow Makefile.switch APP_VERSION")
+require('build/switch/LunarNX.elf' in build_publisher and
+        'grep -aFq -f' in build_publisher and
+        'Upload token was not embedded in LunarNX.elf' in build_publisher,
+        "release builds must verify that the upload token reached the linked ELF")
 require('\\\\.nro(\\\\.gz)?$' in pruner and 'sha=${sha%.gz}' in pruner,
         "build pruning must remove orphaned raw and gzip artifacts")
 
