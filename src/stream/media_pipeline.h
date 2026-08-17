@@ -42,6 +42,14 @@ enum class VideoBackend {
     Software,
 };
 
+// Selects where complete encoded access units are decoded. The transport
+// remains responsible for choosing a policy; decoder and renderer components
+// stay protocol-neutral.
+enum class VideoSchedulingMode {
+    RealtimeQueued,
+    DirectLowLatency,
+};
+
 inline const char* videoBackendName(VideoBackend backend) {
     switch (backend) {
         case VideoBackend::HardwareZeroCopy: return "hardware_zero_copy";
@@ -76,6 +84,7 @@ struct MediaPipelineOptions {
     bool dithering_enabled = false;
     float dithering_strength = 3.0f;
     bool hold_non_target_startup_frames = false;
+    VideoSchedulingMode video_scheduling = VideoSchedulingMode::RealtimeQueued;
 };
 
 /// Owns the media half of a streaming session.

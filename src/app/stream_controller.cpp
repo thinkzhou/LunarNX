@@ -926,10 +926,13 @@ bool StreamController::startStreamWithProfile(
     const StreamProfile& input_profile,
     const stream::MediaPipelineOptions& options) {
     StreamProfile profile = input_profile;
+    stream::MediaPipelineOptions xbox_options = options;
+    xbox_options.video_scheduling =
+        stream::VideoSchedulingMode::RealtimeQueued;
     {
         std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
         active_profile_ = input_profile;
-        active_media_options_ = options;
+        active_media_options_ = xbox_options;
         has_active_profile_ = true;
     }
     lunar::diagnosticLog(
@@ -1124,7 +1127,7 @@ bool StreamController::startStreamWithProfile(
         return true;
     };
 
-    return stream_session_->start(profile, options, std::move(callbacks));
+    return stream_session_->start(profile, xbox_options, std::move(callbacks));
 }
 
 void StreamController::stopStream() {

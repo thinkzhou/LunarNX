@@ -300,6 +300,8 @@ bool PsStreamController::startStream() {
     media_opts.video_codec = video_codec_;
     media_opts.hold_non_target_startup_frames = true;
     media_opts.video_backend = video_backend_;
+    media_opts.video_scheduling =
+        stream::VideoSchedulingMode::DirectLowLatency;
     if (!media_->initialize(width_, height_, &perf_, media_opts)) {
         last_error_ = "Failed to initialize media pipeline";
         if (mock_session_) mock_session_->stop();
