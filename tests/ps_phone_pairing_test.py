@@ -24,6 +24,7 @@ def main():
     assert "lookupPsnAccountId(account_input, account_id" not in source
     assert "https://www.psntools.com/psn/checker/" in source
     assert "Base64" in source
+    assert "Chiaki" not in source
     assert 'name=\\"pin\\"' in source
     assert 'type=\\"password\\"' in source
     assert "sessionToken" in source

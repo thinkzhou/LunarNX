@@ -43,9 +43,9 @@ struct PairingText {
 const PairingText& pairingText(const std::string& locale) {
     static const PairingText english{
         "en", "LunarNX local pairing",
-        "Paste the console user's Chiaki Base64 Account ID, then enter the 8-digit PIN shown by the console.",
-        "Chiaki Base64 Account ID", "Paste the Encoded ID, for example AbCdEf12345=",
-        "Open PSNTools, search for your PSN Online ID, then copy the Encoded ID for Chiaki and paste it below.",
+        "Paste the console user's Base64 Account ID, then enter the 8-digit PIN shown by the console.",
+        "Base64 Account ID", "Paste the Encoded ID, for example AbCdEf12345=",
+        "Open PSNTools, search for your PSN Online ID, then copy the Base64 Encoded ID and paste it below.",
         "Open PSNTools Account ID Checker",
         "Only an 8-byte Base64 Account ID is accepted.", "8-digit PIN",
         "Send to Switch", "Account ID and PIN are sent only to LunarNX on your local network.",
@@ -56,9 +56,9 @@ const PairingText& pairingText(const std::string& locale) {
     };
     static const PairingText simplified{
         "zh-CN", "LunarNX 本地配对",
-        "请粘贴主机用户的 Chiaki Base64 Account ID，然后输入主机画面显示的 8 位 PIN 码。",
-        "Chiaki Base64 Account ID", "粘贴 Encoded ID，例如 AbCdEf12345=",
-        "打开 PSNTools，搜索你的 PSN 在线 ID，复制 Chiaki 所需的 Encoded ID，再粘贴到下方。",
+        "请粘贴主机用户的 Base64 Account ID，然后输入主机画面显示的 8 位 PIN 码。",
+        "Base64 Account ID", "粘贴 Encoded ID，例如 AbCdEf12345=",
+        "打开 PSNTools，搜索你的 PSN 在线 ID，复制 Base64 格式的 Encoded ID，再粘贴到下方。",
         "打开 PSNTools Account ID 查询工具",
         "仅接受解码后为 8 字节的 Base64 Account ID。", "8 位 PIN 码",
         "发送到 Switch", "Account ID 和 PIN 只会通过当前局域网发送给 LunarNX。",
@@ -69,9 +69,9 @@ const PairingText& pairingText(const std::string& locale) {
     };
     static const PairingText traditional{
         "zh-TW", "LunarNX 本機配對",
-        "請貼上主機使用者的 Chiaki Base64 Account ID，然後輸入主機畫面顯示的 8 位 PIN 碼。",
-        "Chiaki Base64 Account ID", "貼上 Encoded ID，例如 AbCdEf12345=",
-        "開啟 PSNTools，搜尋你的 PSN 線上 ID，複製 Chiaki 所需的 Encoded ID，再貼到下方。",
+        "請貼上主機使用者的 Base64 Account ID，然後輸入主機畫面顯示的 8 位 PIN 碼。",
+        "Base64 Account ID", "貼上 Encoded ID，例如 AbCdEf12345=",
+        "開啟 PSNTools，搜尋你的 PSN 線上 ID，複製 Base64 格式的 Encoded ID，再貼到下方。",
         "開啟 PSNTools Account ID 查詢工具",
         "僅接受解碼後為 8 位元組的 Base64 Account ID。", "8 位 PIN 碼",
         "傳送至 Switch", "Account ID 和 PIN 只會透過目前區域網路傳送給 LunarNX。",
