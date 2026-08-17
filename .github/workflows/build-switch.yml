@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Check out LunarNX
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Select application version
         shell: bash

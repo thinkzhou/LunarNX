@@ -8,7 +8,9 @@ trees.
 The local Switch/Xbox changes are stored as an ordered three-patch series. The
 first two patches preserve commits that previously existed only in the local
 embedded checkout; `legacy-libpeer-switch.patch` contains the later working-tree
-changes.
+changes. Local commits in libpeer's libsrtp, mbedtls, and usrsctp submodules are
+stored separately under `nested/`; the setup script applies them to the pinned
+upstream submodule revisions instead of recording unreachable gitlink commits.
 
 ```sh
 git clone https://github.com/sepfy/libpeer.git lib/libpeer
@@ -16,6 +18,7 @@ git -C lib/libpeer checkout 9319aa434cb9e893faed0293ba9d2a21eca59c8b
 git -C lib/libpeer apply ../../tools/libpeer_legacy/0001-switch-adapt-libpeer-WebRTC-path.patch
 git -C lib/libpeer apply ../../tools/libpeer_legacy/0002-fix-H264-access-unit-flush-and-quiet-SCTP-logs.patch
 git -C lib/libpeer apply ../../tools/libpeer_legacy/legacy-libpeer-switch.patch
+./scripts/setup_dependencies.sh
 ```
 
 The patch includes the Switch/Xbox media-path fixes, including the inbound RTP

@@ -1747,24 +1747,3 @@ index b7661a4..d4702dc 100644
    sdp_append(sdp, "a=mid:video");
    sdp_append(sdp, "a=rtcp-mux");
  }
-diff --git a/third_party/libsrtp b/third_party/libsrtp
-index 90d05bf..d95116d 160000
---- a/third_party/libsrtp
-+++ b/third_party/libsrtp
-@@ -1 +1 @@
--Subproject commit 90d05bf8980d16e4ac3f16c19b77e296c4bc207b
-+Subproject commit d95116d1ee69cf6439c6523fd304bec9d9b7f5a6
-diff --git a/third_party/mbedtls b/third_party/mbedtls
-index 1873d3b..f815c0d 160000
---- a/third_party/mbedtls
-+++ b/third_party/mbedtls
-@@ -1 +1 @@
--Subproject commit 1873d3bfc2da771672bd8e7e8f41f57e0af77f33
-+Subproject commit f815c0d349edf83c3f86f3e864e85da852e49555
-diff --git a/third_party/usrsctp b/third_party/usrsctp
-index 01cc4e0..a8db67a 160000
---- a/third_party/usrsctp
-+++ b/third_party/usrsctp
-@@ -1 +1 @@
--Subproject commit 01cc4e042e2235b29d9d489d89728a6f9ac063ed
-+Subproject commit a8db67a8b25ac391f8b93747ac8b712d64bf5a01

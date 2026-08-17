@@ -7,6 +7,7 @@ borealis_dir="$project_root/lib/borealis"
 libpeer_dir="$project_root/lib/libpeer"
 borealis_patch="$project_root/tools/borealis_switch/lunarnx-borealis-gpu-lifecycle.patch"
 libpeer_patch_dir="$project_root/tools/libpeer_legacy"
+libpeer_nested_patch_dir="$libpeer_patch_dir/nested"
 
 borealis_commit="240223f372731949e04cba943c453dc45b69faa1"
 libpeer_commit="9319aa434cb9e893faed0293ba9d2a21eca59c8b"
@@ -75,6 +76,30 @@ do
         exit 2
     fi
 done
+
+apply_nested_patch() {
+    local submodule="$1"
+    local patch="$2"
+    local submodule_dir="$libpeer_dir/third_party/$submodule"
+
+    if git -C "$submodule_dir" apply --reverse --check "$patch" >/dev/null 2>&1; then
+        printf 'LunarNX nested libpeer patch is already applied: %s\n' "$(basename "$patch")"
+    elif git -C "$submodule_dir" apply --check "$patch" >/dev/null 2>&1; then
+        git -C "$submodule_dir" apply "$patch"
+        printf 'Applied LunarNX nested libpeer patch: %s\n' "$(basename "$patch")"
+    else
+        printf 'Nested libpeer patch conflicts with %s: %s\n' "$submodule" "$patch" >&2
+        exit 2
+    fi
+}
+
+apply_nested_patch libsrtp \
+    "$libpeer_nested_patch_dir/0001-switch-add-libnx-network-byte-order-includes.patch"
+apply_nested_patch mbedtls \
+    "$libpeer_nested_patch_dir/0001-switch-configure-mbedtls-for-DTLS-SRTP.patch"
+apply_nested_patch usrsctp \
+    "$libpeer_nested_patch_dir/0001-switch-add-libnx-compatibility-stubs.patch"
+
 git -C "$libpeer_dir" submodule update --init --recursive
 
 printf 'Dependency setup complete.\n'
