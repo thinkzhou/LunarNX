@@ -76,7 +76,7 @@ jobs:
           sha256sum LunarNX.nro > SHA256SUMS
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: LunarNX-${{ env.APP_VERSION }}-${{ github.sha }}
           path: ${{ runner.temp }}/LunarNX-${{ env.APP_VERSION }}

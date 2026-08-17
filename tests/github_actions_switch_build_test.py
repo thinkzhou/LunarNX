@@ -19,7 +19,7 @@ require(workflow, "CURL_PROVIDER: moonlight", "workflow")
 require(workflow, "tests/switch_nro_bss_test.py", "workflow")
 require(workflow, "actions/checkout@v5", "workflow")
 require(workflow, 'safe.directory "$GITHUB_WORKSPACE"', "workflow")
-require(workflow, "actions/upload-artifact@v4", "workflow")
+require(workflow, "actions/upload-artifact@v7", "workflow")
 assert "actions/create-release" not in workflow
 assert "softprops/action-gh-release" not in workflow
 
