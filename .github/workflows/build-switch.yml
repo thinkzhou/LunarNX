@@ -1,0 +1,81 @@
+name: Build Nintendo Switch application
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: switch-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-switch:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:20251117
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out LunarNX
+        uses: actions/checkout@v4
+
+      - name: Select application version
+        shell: bash
+        run: |
+          version=0.0.0
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Release tags must use vMAJOR.MINOR.PATCH" >&2
+              exit 2
+            fi
+          fi
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Prepare pinned source dependencies
+        run: |
+          ./scripts/setup_dependencies.sh
+          ./scripts/setup_chiaki_dependencies.sh
+
+      - name: Build Chiaki libraries
+        run: ./tools/chiaki_switch/build_in_container.sh
+
+      - name: Build LunarNX
+        env:
+          CURL_PROVIDER: moonlight
+        run: ./scripts/build_switch_in_container.sh
+
+      - name: Run build regressions
+        run: |
+          python3 tests/xbox_stream_session_order_test.py
+          python3 tests/libpeer_sctp_config_test.py
+          python3 tests/libpeer_dtls_read_loop_test.py
+          python3 tests/datachannel_ppid_test.py
+          python3 tests/switch_nro_bss_test.py
+          python3 tests/github_actions_switch_build_test.py
+          git diff --check
+
+      - name: Package build artifact
+        shell: bash
+        run: |
+          artifact_dir="$RUNNER_TEMP/LunarNX-$APP_VERSION"
+          mkdir -p "$artifact_dir/licenses"
+          cp build/switch/LunarNX.nro "$artifact_dir/"
+          cp LICENSE THIRD_PARTY_NOTICES.md "$artifact_dir/"
+          cp LICENSES/AGPL-3.0.txt "$artifact_dir/licenses/"
+          cd "$artifact_dir"
+          sha256sum LunarNX.nro > SHA256SUMS
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LunarNX-${{ env.APP_VERSION }}-${{ github.sha }}
+          path: ${{ runner.temp }}/LunarNX-${{ env.APP_VERSION }}
+          if-no-files-found: error
+          retention-days: 30

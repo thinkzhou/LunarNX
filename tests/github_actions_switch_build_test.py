@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def require(text: str, fragment: str, source: str) -> None:
+    assert fragment in text, f"{source} must contain {fragment!r}"
+
+
+workflow = (ROOT / ".github/workflows/build-switch.yml").read_text()
+require(workflow, "devkitpro/devkita64:20251117", "workflow")
+require(workflow, "./scripts/setup_dependencies.sh", "workflow")
+require(workflow, "./scripts/setup_chiaki_dependencies.sh", "workflow")
+require(workflow, "./tools/chiaki_switch/build_in_container.sh", "workflow")
+require(workflow, "./scripts/build_switch_in_container.sh", "workflow")
+require(workflow, "CURL_PROVIDER: moonlight", "workflow")
+require(workflow, "tests/switch_nro_bss_test.py", "workflow")
+require(workflow, "actions/upload-artifact@v4", "workflow")
+assert "actions/create-release" not in workflow
+assert "softprops/action-gh-release" not in workflow
+
+switch_wrapper = (ROOT / "scripts/docker_build_full.sh").read_text()
+require(switch_wrapper, "build_switch_in_container.sh", "Switch Docker wrapper")
+require(switch_wrapper, 'APP_VERSION="${APP_VERSION:-0.2.0}"', "Switch Docker wrapper")
+require(switch_wrapper, "DEV_BRIDGE_UPLOAD_TOKEN", "Switch Docker wrapper")
+
+chiaki_wrapper = (ROOT / "tools/chiaki_switch/build_in_docker.sh").read_text()
+require(chiaki_wrapper, "build_in_container.sh", "Chiaki Docker wrapper")
+
+chiaki_setup = (ROOT / "scripts/setup_chiaki_dependencies.sh").read_text()
+require(chiaki_setup, "https://github.com/xlanor/chiaki-ng.git", "Chiaki setup")
+require(chiaki_setup, "1597a48514e5d9e67168ca40e6fa40c0171cd379", "Chiaki setup")
+
+chiaki_build = (ROOT / "tools/chiaki_switch/build_in_container.sh").read_text()
+require(chiaki_build, "tools/chiaki_switch/pbgen", "Chiaki container build")
+require(chiaki_build, "lunarnx-chiaki-packetstats-wrap.patch", "Chiaki container build")
+require(chiaki_build, "lunarnx-chiaki-key-position-diagnostics.patch", "Chiaki container build")
+assert "/work/github_repos/chiaki-ng/pbgen" not in chiaki_build
+
+protoc_wrapper = (ROOT / "tools/chiaki_switch/protoc_from_pbgen.sh").read_text()
+require(protoc_wrapper, "LUNARNX_CHIAKI_PBGEN", "Chiaki protoc wrapper")
+assert "/work/github_repos/chiaki-ng/pbgen" not in protoc_wrapper
+
+print("GitHub Actions Switch build regression checks passed")
