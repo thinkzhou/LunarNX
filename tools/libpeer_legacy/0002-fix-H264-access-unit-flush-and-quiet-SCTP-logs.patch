@@ -1,0 +1,61 @@
+From bdc50f0cae13f19a31bb11827daea3a8354b173f Mon Sep 17 00:00:00 2001
+From: zhouyang <zhouyang@leyantech.com>
+Date: Wed, 8 Jul 2026 18:01:58 +0800
+Subject: [PATCH 2/2] fix H264 access unit flush and quiet SCTP logs
+
+---
+ src/rtp.c  | 6 ++++++
+ src/sctp.c | 8 ++++++++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/src/rtp.c b/src/rtp.c
+index 14b5452..ea46c69 100644
+--- a/src/rtp.c
++++ b/src/rtp.c
+@@ -359,6 +359,9 @@ static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
+   int timestamp_changed = rtp_decoder->h264_frame_started &&
+                           timestamp != rtp_decoder->h264_frame_timestamp;
+   if (timestamp_changed) {
++    if (rtp_decoder->h264_fu_started) {
++      rtp_decoder->h264_frame_corrupt = 1;
++    }
+     h264_flush_frame(rtp_decoder);
+   }
+   if (!rtp_decoder->h264_frame_started) {
+@@ -442,6 +445,9 @@ static int rtp_decode_h264(RtpDecoder* rtp_decoder, uint8_t* buf, size_t size) {
+   rtp_decoder->h264_last_seq = seq;
+   rtp_decoder->h264_have_last_seq = 1;
+   if (marker) {
++    if (rtp_decoder->h264_fu_started) {
++      rtp_decoder->h264_frame_corrupt = 1;
++    }
+     h264_flush_frame(rtp_decoder);
+   }
+   return (int)size;
+diff --git a/src/sctp.c b/src/sctp.c
+index 466d0c6..4e1694a 100644
+--- a/src/sctp.c
++++ b/src/sctp.c
+@@ -10,7 +10,12 @@
+ #include <usrsctp.h>
+ #endif
+ 
++#ifndef SCTP_ENABLE_DEBUG_LOGS
++#define SCTP_ENABLE_DEBUG_LOGS 0
++#endif
++
+ static void sctp_debug_log(const char* format, ...) {
++#if SCTP_ENABLE_DEBUG_LOGS
+ #ifdef __SWITCH__
+   const char* path = "sdmc:/switch/LunarNX/lunarnx.log";
+ #else
+@@ -28,6 +33,9 @@ static void sctp_debug_log(const char* format, ...) {
+   va_end(args);
+   fputc('\n', log);
+   fclose(log);
++#else
++  (void)format;
++#endif
+ }
+ 
+ static const uint32_t crc32c_table[256] = {
