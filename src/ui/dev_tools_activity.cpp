@@ -2,6 +2,7 @@
 #include "dev_tools_activity.h"
 
 #include "ui_style.h"
+#include "grid_navigation.h"
 #include "../app/runtime_context.h"
 #include "../diagnostics.h"
 #include "../platform/network_worker.h"
@@ -103,10 +104,14 @@ void DevToolsActivity::refreshVersions() {
 
 void DevToolsActivity::renderVersions(const std::vector<app::DevBuild>& builds) {
     if (!versions_) return;
+    if (versions_->isChildFocused() && refresh_) {
+        brls::Application::giveFocus(refresh_);
+    }
     versions_->clearViews();
     if (status_) status_->setText(brls::getStr("lunarnx/dev/available") + ": " +
         std::to_string(builds.size()));
     const auto& p = uiPalette();
+    std::vector<brls::View*> install_buttons;
     for (const auto& build : builds) {
         auto* card = makeUiCard(brls::Axis::ROW);
         card->setHeight(92);
@@ -137,7 +142,12 @@ void DevToolsActivity::renderVersions(const std::vector<app::DevBuild>& builds) 
         });
         card->addView(install);
         versions_->addView(card);
+        install_buttons.push_back(install);
     }
+
+    std::vector<std::vector<brls::View*>> navigation_rows{{refresh_, upload_}};
+    for (auto* install : install_buttons) navigation_rows.push_back({install});
+    wireVerticalGridNavigation(navigation_rows);
 }
 
 void DevToolsActivity::confirmInstall(app::DevBuild build) {

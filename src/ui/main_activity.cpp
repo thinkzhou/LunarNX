@@ -5,6 +5,9 @@
 #include "about_activity.h"
 #include "ui_style.h"
 #include "poster_loader.h"
+#include "cloud_game_card.h"
+#include "cloud_library_model.h"
+#include "grid_navigation.h"
 #include "recycling_list.hpp"
 #include "../diagnostics.h"
 #include "../platform/network_worker.h"
@@ -13,10 +16,35 @@
 #include <functional>
 #include <algorithm>
 #include <cctype>
+#include <set>
 
 namespace lunar::ui {
 
 namespace {
+
+class CloudPageSentinel : public brls::Button {
+public:
+    explicit CloudPageSentinel(std::function<void()> action)
+        : action_(std::move(action)) {
+        setHeight(1);
+        setWidth(1);
+        setText("");
+    }
+
+    void onFocusGained() override {
+        brls::Button::onFocusGained();
+        if (triggered_) return;
+        triggered_ = true;
+        auto action = action_;
+        brls::sync([action = std::move(action)]() {
+            if (action) action();
+        });
+    }
+
+private:
+    std::function<void()> action_;
+    bool triggered_ = false;
+};
 
 std::string streamStateText(app::StreamState state, const std::string& info) {
     if (!info.empty()) return info;
@@ -52,7 +80,8 @@ MainActivity::MainActivity(std::shared_ptr<app::StreamController> ctrl) : ctrl_(
     ctrl_->setDefaultVideoBackend(video_backend_);
     ctrl_->setRumbleEnabled(vibration_enabled_);
     ctrl_->setRumbleStrengthPercent(rumble_strength_percent_);
-    ctrl_->setPreferredGameLanguage(preferred_game_language_);
+    ctrl_->setPreferredGameLanguage(
+        resolvePreferredGameLanguage(preferred_game_language_));
     if (ctrl_->getForceRegionIp().empty()) {
         ctrl_->setForceRegionIp("4.2.2.2");
     }
@@ -81,12 +110,51 @@ brls::View* MainActivity::createContentView() {
 
     auto* workspace = new brls::Box(brls::Axis::ROW);
     workspace->setBackgroundColor(p.background);
-    workspace->registerAction("Back",
+    workspace->registerAction(brls::getStr("lunarnx/common/back"),
         brls::ControllerButton::BUTTON_B,
-        [](brls::View*) -> bool {
+        [this](brls::View*) -> bool {
+            if (stream_source_ == StreamSource::Cloud &&
+                !cloud_search_query_.empty()) {
+                cloud_search_query_.clear();
+                cloud_visible_limit_ = 20;
+                cloud_page_start_ = 0;
+                updateCloudSearchButtonLabel();
+                rebuildCloudList();
+                return true;
+            }
             brls::Application::popActivity(brls::TransitionAnimation::NONE);
             return true;
         });
+    workspace->registerAction(brls::getStr("lunarnx/main/search_library"),
+        brls::ControllerButton::BUTTON_Y,
+        [this](brls::View*) -> bool {
+            if (stream_source_ != StreamSource::Cloud) return false;
+            promptCloudSearch();
+            return true;
+        }, true, false);
+    workspace->registerAction("", brls::ControllerButton::BUTTON_LT,
+        [this](brls::View*) -> bool {
+            if (stream_source_ != StreamSource::Cloud) return false;
+            stepCloudTab(-1);
+            return true;
+        }, true, false);
+    workspace->registerAction("", brls::ControllerButton::BUTTON_RT,
+        [this](brls::View*) -> bool {
+            if (stream_source_ != StreamSource::Cloud) return false;
+            stepCloudTab(1);
+            return true;
+        }, true, false);
+    workspace->registerAction("", brls::ControllerButton::BUTTON_X,
+        [this](brls::View*) -> bool {
+            if (stream_source_ != StreamSource::Cloud) return false;
+            const auto model = buildCloudLibraryViewModel(
+                ctrl_->getCloudTitles(), ctrl_->getRecentCloudTitles(),
+                ctrl_->getNewCloudTitles(), cloud_search_query_, cloud_filter_,
+                cloud_sort_, cloud_visible_limit_);
+            if (model.total_matches > model.items.size()) loadMoreCloudTitles();
+            else refreshCurrentSource();
+            return true;
+        }, true, false);
 
     auto* sidebar = new brls::Box(brls::Axis::COLUMN);
     sidebar->setWidth(250);
@@ -209,6 +277,36 @@ brls::View* MainActivity::createContentView() {
     content_header->addView(searchBtn);
     root->addView(content_header);
 
+    cloud_toolbar_ = new brls::Box(brls::Axis::ROW);
+    cloud_toolbar_->setHeight(52);
+    cloud_toolbar_->setAlignItems(brls::AlignItems::CENTER);
+
+    auto add_cloud_tab = [this](brls::Button*& tab, CloudLibraryFilter filter) {
+        tab = new brls::Button();
+        tab->setWidth(155);
+        tab->setMarginRight(8);
+        tab->registerClickAction([this, filter](brls::View*) -> bool {
+            selectCloudTab(filter);
+            return true;
+        });
+        cloud_toolbar_->addView(tab);
+    };
+    add_cloud_tab(cloud_recent_tab_, CloudLibraryFilter::Recent);
+    add_cloud_tab(cloud_new_tab_, CloudLibraryFilter::New);
+    add_cloud_tab(cloud_all_tab_, CloudLibraryFilter::All);
+
+    cloud_sort_btn_ = new brls::Button();
+    styleSecondaryButton(cloud_sort_btn_);
+    cloud_sort_btn_->setWidth(210);
+    cloud_sort_btn_->setMarginLeft(24);
+    cloud_sort_btn_->registerClickAction([this](brls::View*) -> bool {
+        cycleCloudSort();
+        return true;
+    });
+    cloud_toolbar_->addView(cloud_sort_btn_);
+    root->addView(cloud_toolbar_);
+    updateCloudToolbar();
+
     console_list_ = new brls::Box(brls::Axis::COLUMN);
     console_list_->setMarginBottom(18);
     root->addView(console_list_);
@@ -290,7 +388,8 @@ void MainActivity::openStreamSettings() {
                 stream_height_ = updated.height;
                 stream_bitrate_kbps_ = updated.bitrate_kbps;
                 preferred_game_language_ = updated.preferred_game_language;
-                ctrl_->setPreferredGameLanguage(preferred_game_language_);
+                ctrl_->setPreferredGameLanguage(
+                    resolvePreferredGameLanguage(preferred_game_language_));
                 video_backend_ = updated.video_backend;
                 post_process_mode_ = updated.post_process_mode;
                 dithering_enabled_ = updated.dithering_enabled;
@@ -517,6 +616,8 @@ void MainActivity::refreshConsoles() {
                                       consoles.size()));
     }
 
+    std::vector<std::vector<brls::View*>> navigation_rows;
+    if (refresh_btn_) navigation_rows.push_back({refresh_btn_});
     for (auto& c : consoles) {
         bool on = c.power_state == "On";
         bool can_connect = on || c.power_state == "ConnectedStandby";
@@ -573,7 +674,9 @@ void MainActivity::refreshConsoles() {
         }
 
         console_list_->addView(item);
+        if (can_connect) navigation_rows.push_back({item});
     }
+    wireVerticalGridNavigation(navigation_rows);
 }
 
 void MainActivity::setConsoleListMessage(const std::string& message) {
@@ -700,6 +803,7 @@ void MainActivity::setStreamSource(StreamSource source) {
     highlightStreamSource();
     updateRefreshButtonLabel();
     updateCloudSearchButtonLabel();
+    updateCloudToolbar();
     if (!console_list_) return;
 
     if (source == StreamSource::Cloud) {
@@ -757,9 +861,10 @@ void MainActivity::updateRefreshButtonLabel() {
             : brls::getStr("lunarnx/main/your_consoles"));
     }
     if (content_subtitle_) {
+        content_subtitle_->setVisibility(stream_source_ == StreamSource::Cloud
+            ? brls::Visibility::GONE : brls::Visibility::VISIBLE);
         content_subtitle_->setText(stream_source_ == StreamSource::Cloud
-            ? brls::getStr("lunarnx/main/cloud_subtitle")
-            : brls::getStr("lunarnx/main/console_subtitle"));
+            ? "" : brls::getStr("lunarnx/main/console_subtitle"));
     }
     updateCloudSearchButtonLabel();
 }
@@ -779,6 +884,142 @@ void MainActivity::updateCloudSearchButtonLabel() {
     }
 }
 
+void MainActivity::updateCloudToolbar() {
+    if (!cloud_toolbar_) return;
+    const bool cloud = stream_source_ == StreamSource::Cloud;
+    cloud_toolbar_->setVisibility(
+        cloud ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+    if (!cloud) return;
+    const auto update_tab = [this](brls::Button* tab, CloudLibraryFilter filter) {
+        if (!tab) return;
+        tab->setText(brls::getStr(cloudLibraryFilterKey(filter)));
+        if (cloud_filter_ == filter) stylePrimaryButton(tab);
+        else styleSecondaryButton(tab);
+    };
+    update_tab(cloud_all_tab_, CloudLibraryFilter::All);
+    update_tab(cloud_recent_tab_, CloudLibraryFilter::Recent);
+    update_tab(cloud_new_tab_, CloudLibraryFilter::New);
+    if (cloud_sort_btn_) {
+        cloud_sort_btn_->setText(brls::getStr(
+            "lunarnx/main/sort_by", brls::getStr(cloudLibrarySortKey(cloud_sort_))));
+    }
+}
+
+void MainActivity::selectCloudTab(CloudLibraryFilter filter, bool focus_tab) {
+    if (stream_source_ != StreamSource::Cloud) return;
+    cloud_filter_ = filter;
+    brls::Button* selected = filter == CloudLibraryFilter::Recent
+        ? cloud_recent_tab_
+        : filter == CloudLibraryFilter::New ? cloud_new_tab_ : cloud_all_tab_;
+    if (focus_tab && selected) brls::Application::giveFocus(selected);
+    cloud_visible_limit_ = 20;
+    cloud_page_start_ = 0;
+    rebuildCloudList();
+}
+
+void MainActivity::stepCloudTab(int direction) {
+    int index = cloud_filter_ == CloudLibraryFilter::Recent
+        ? 0 : cloud_filter_ == CloudLibraryFilter::New ? 1 : 2;
+    index = (index + (direction < 0 ? 2 : 1)) % 3;
+    selectCloudTab(index == 0 ? CloudLibraryFilter::Recent
+                              : index == 1 ? CloudLibraryFilter::New
+                                           : CloudLibraryFilter::All);
+}
+
+void MainActivity::cycleCloudSort() {
+    if (stream_source_ != StreamSource::Cloud) return;
+    if (cloud_sort_btn_) brls::Application::giveFocus(cloud_sort_btn_);
+    cloud_sort_ = nextCloudLibrarySort(cloud_sort_);
+    cloud_visible_limit_ = 20;
+    cloud_page_start_ = 0;
+    rebuildCloudList();
+}
+
+void MainActivity::loadMoreCloudTitles() {
+    if (stream_source_ != StreamSource::Cloud) return;
+    cloud_page_start_ += 20;
+    cloud_visible_limit_ = cloud_page_start_ + 20;
+    lunar::diagnosticLog("ui-main", "cloud next page start=%zu end=%zu",
+                         cloud_page_start_, cloud_visible_limit_);
+    rebuildCloudList();
+    const size_t first_card_row = cloud_prev_sentinel_ ? 3 : 2;
+    if (cloud_navigation_rows_.size() > first_card_row &&
+        !cloud_navigation_rows_[first_card_row].empty()) {
+        brls::Application::giveFocus(cloud_navigation_rows_[first_card_row][0]);
+    }
+}
+
+void MainActivity::loadPreviousCloudTitles() {
+    if (stream_source_ != StreamSource::Cloud || cloud_page_start_ == 0) return;
+    cloud_page_start_ = cloud_page_start_ >= 20 ? cloud_page_start_ - 20 : 0;
+    cloud_visible_limit_ = cloud_page_start_ + 20;
+    lunar::diagnosticLog("ui-main", "cloud previous window start=%zu end=%zu",
+                         cloud_page_start_, cloud_visible_limit_);
+    rebuildCloudList();
+    if (cloud_navigation_rows_.size() > 2) {
+        auto& last_card_row = cloud_navigation_rows_.back();
+        if (!last_card_row.empty()) brls::Application::giveFocus(last_card_row.back());
+    }
+}
+
+brls::View* MainActivity::appendCloudCards(
+    const std::vector<api::CloudTitle>& items, size_t start_index) {
+    if (!console_list_ || start_index >= items.size()) return nullptr;
+
+    std::set<std::string> new_ids;
+    for (const auto& title : ctrl_->getNewCloudTitles()) {
+        new_ids.insert(title.product_id.empty() ? title.title_id : title.product_id);
+    }
+    brls::View* first_new_card = nullptr;
+    for (size_t start = start_index; start < items.size(); start += 4) {
+        auto* row = new brls::Box(brls::Axis::ROW);
+        row->setHeight(380);
+        std::vector<brls::View*> navigation_row;
+        const size_t end = std::min(start + 4, items.size());
+        for (size_t index = start; index < end; ++index) {
+            const auto& title = items[index];
+            const std::string key = title.product_id.empty()
+                ? title.title_id : title.product_id;
+            auto* card = new CloudGameCard(
+                title, new_ids.count(key) != 0, cloud_poster_batch_,
+                [this](const lunar::api::CloudTitle& selected) {
+                    startCloudTitleStream(
+                        selected.title_id,
+                        selected.name.empty() ? selected.title_id : selected.name);
+                });
+            row->addView(card);
+            navigation_row.push_back(card);
+            if (!first_new_card) first_new_card = card;
+        }
+        console_list_->addView(row);
+        cloud_navigation_rows_.push_back(std::move(navigation_row));
+    }
+    cloud_rendered_count_ = items.size();
+    return first_new_card;
+}
+
+void MainActivity::attachCloudMoreButton(size_t remaining) {
+    if (!console_list_ || remaining == 0) return;
+    (void) remaining;
+    cloud_more_btn_ = new CloudPageSentinel([this]() { loadMoreCloudTitles(); });
+    console_list_->addView(cloud_more_btn_);
+    rewireCloudNavigation();
+}
+
+void MainActivity::attachCloudPreviousSentinel() {
+    if (!console_list_ || cloud_page_start_ == 0) return;
+    cloud_prev_sentinel_ = new CloudPageSentinel(
+        [this]() { loadPreviousCloudTitles(); });
+    console_list_->addView(cloud_prev_sentinel_);
+    cloud_navigation_rows_.push_back({cloud_prev_sentinel_});
+}
+
+void MainActivity::rewireCloudNavigation() {
+    auto rows = cloud_navigation_rows_;
+    if (cloud_more_btn_) rows.push_back({cloud_more_btn_});
+    wireVerticalGridNavigation(rows);
+}
+
 void MainActivity::setCloudListVisible(bool visible) {
     if (console_list_) {
         console_list_->setVisibility(brls::Visibility::VISIBLE);
@@ -792,9 +1033,24 @@ void MainActivity::rebuildCloudList() {
         return;
     }
 
-    const auto& palette = uiPalette();
-    const auto poster_batch = PosterLoader::instance().beginBatch();
+    cloud_poster_batch_ = PosterLoader::instance().beginBatch();
+    brls::Button* selected_tab = cloud_filter_ == CloudLibraryFilter::Recent
+        ? cloud_recent_tab_
+        : cloud_filter_ == CloudLibraryFilter::New ? cloud_new_tab_ : cloud_all_tab_;
+    if (console_list_->isChildFocused() && selected_tab) {
+        brls::Application::giveFocus(selected_tab);
+    }
+    if (scroll_frame_) scroll_frame_->setContentOffsetY(0, false);
+    wireVerticalGridNavigation({{refresh_btn_, cloud_search_btn_},
+        {cloud_recent_tab_, cloud_new_tab_, cloud_all_tab_, cloud_sort_btn_}});
     console_list_->clearViews();
+    cloud_more_btn_ = nullptr;
+    cloud_prev_sentinel_ = nullptr;
+    cloud_rendered_count_ = 0;
+    cloud_navigation_rows_.clear();
+    cloud_navigation_rows_.push_back({refresh_btn_, cloud_search_btn_});
+    cloud_navigation_rows_.push_back(
+        {cloud_recent_tab_, cloud_new_tab_, cloud_all_tab_, cloud_sort_btn_});
     console_list_->setVisibility(brls::Visibility::VISIBLE);
 
     auto titles = ctrl_->getCloudTitles();
@@ -828,155 +1084,44 @@ void MainActivity::rebuildCloudList() {
     }
 
 
-    auto lower = [](std::string value) {
-        std::transform(value.begin(), value.end(), value.begin(),
-            [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-        return value;
-    };
-    if (!cloud_search_query_.empty()) {
-        const std::string query = lower(cloud_search_query_);
-        titles.erase(
-            std::remove_if(titles.begin(), titles.end(),
-                [&lower, &query](const lunar::api::CloudTitle& title) {
-                    return lower(title.name + " " + title.publisher).find(query) ==
-                           std::string::npos;
-                }),
-            titles.end());
-        recent.clear();
-        newly.clear();
+    auto view_model = buildCloudLibraryViewModel(
+        titles, recent, newly, cloud_search_query_, cloud_filter_, cloud_sort_,
+        cloud_visible_limit_);
+    if (cloud_page_start_ >= view_model.total_matches) {
+        cloud_page_start_ = 0;
+        cloud_visible_limit_ = 20;
+        view_model = buildCloudLibraryViewModel(
+            titles, recent, newly, cloud_search_query_, cloud_filter_, cloud_sort_,
+            cloud_visible_limit_);
     }
+    if (status_) status_->setText(brls::getStr(
+        cloud_search_query_.empty()
+            ? "lunarnx/main/library_count"
+            : "lunarnx/main/search_count",
+        view_model.total_matches));
+    updateCloudToolbar();
 
-    if (status_) {
-        status_->setText(cloud_search_query_.empty()
-            ? brls::getStr("lunarnx/main/library_count", titles.size())
-            : brls::getStr("lunarnx/main/search_count", titles.size()));
-    }
-
-    if (titles.empty() && recent.empty() && newly.empty()) {
+    if (view_model.items.empty()) {
         setConsoleListMessage(cloud_search_query_.empty()
             ? brls::getStr("lunarnx/main/no_cloud_titles")
             : brls::getStr("lunarnx/main/no_search_matches", cloud_search_query_));
         return;
     }
 
-    // Collect image views for deferred poster load after list is on screen.
-    struct PendingPoster {
-        brls::Image* image = nullptr;
-        std::string url;
-    };
-    auto pending = std::make_shared<std::vector<PendingPoster>>();
+    attachCloudPreviousSentinel();
 
-    auto make_title_card = [this, pending, &palette](
-                               const lunar::api::CloudTitle& title,
-                               bool load_poster) -> brls::Box* {
-        auto* card = makeUiCard(brls::Axis::COLUMN);
-        card->setWidth(240);
-        card->setHeight(250);
-        card->setPadding(12, 12, 12, 12);
-        card->setFocusable(!title.title_id.empty());
-        card->setHighlightCornerRadius(10);
+    const size_t page_end = std::min(view_model.items.size(), cloud_page_start_ + 20);
+    std::vector<api::CloudTitle> page_items(
+        view_model.items.begin() + static_cast<std::ptrdiff_t>(cloud_page_start_),
+        view_model.items.begin() + static_cast<std::ptrdiff_t>(page_end));
+    appendCloudCards(page_items, 0);
 
-        auto* image = new brls::Image();
-        image->setWidth(216);
-        image->setHeight(174);
-        image->setCornerRadius(8);
-        image->setBackgroundColor(palette.surface_alt);
-        image->setScalingType(brls::ImageScalingType::FILL);
-        card->addView(image);
-        if (load_poster && !title.image_url.empty()) {
-            pending->push_back(PendingPoster{image, title.image_url});
-        }
-
-        const std::string title_name = title.name.empty() ? title.title_id : title.name;
-        auto* details = new brls::Box(brls::Axis::COLUMN);
-        details->setGrow(1.0f);
-        details->setHeight(52);
-        details->setPadding(8, 0, 0, 0);
-
-        auto* name = new brls::Label();
-        name->setText(title_name);
-        name->setFontSize(19);
-        name->setTextColor(palette.text);
-        name->setSingleLine(true);
-        details->addView(name);
-
-        const std::string title_id = title.title_id;
-        if (!title_id.empty()) {
-            card->registerClickAction(
-            [this, title_id, title_name](brls::View*) -> bool {
-                startCloudTitleStream(title_id, title_name);
-                return true;
-            });
-        }
-        card->addView(details);
-        return card;
-    };
-
-    auto add_section = [this, &make_title_card](
-                           const std::string& title,
-                           const std::string& subtitle,
-                           const std::vector<lunar::api::CloudTitle>& items,
-                           size_t max_items,
-                           size_t max_posters) {
-        if (items.empty()) return;
-        console_list_->addView(makeSectionHeader(title, subtitle));
-        const size_t shown = std::min(items.size(), max_items);
-        for (size_t index = 0; index < shown; index += 2) {
-            auto* row = new brls::Box(brls::Axis::ROW);
-            row->setHeight(264);
-            row->addView(make_title_card(items[index], index < max_posters));
-            if (index + 1 < shown) {
-                auto* second = make_title_card(
-                    items[index + 1], index + 1 < max_posters);
-                second->setMarginLeft(12);
-                row->addView(second);
-            }
-            console_list_->addView(row);
-        }
-        if (items.size() > shown) {
-            auto* more = makeMutedLabel(
-                brls::getStr("lunarnx/main/more_titles", items.size() - shown),
-                13);
-            more->setHeight(32);
-            more->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
-            console_list_->addView(more);
-        }
-    };
-
-    if (!cloud_search_query_.empty()) {
-        add_section(brls::getStr("lunarnx/main/search_results"),
-                    brls::getStr("lunarnx/main/search_results_subtitle"),
-                    titles, 12, 6);
+    if (view_model.total_matches > page_end) {
+        attachCloudMoreButton(view_model.total_matches - page_end);
     } else {
-        add_section(brls::getStr("lunarnx/main/jump_back_in"),
-                    brls::getStr("lunarnx/main/jump_back_subtitle"),
-                    recent, 6, 6);
-        add_section(brls::getStr("lunarnx/main/new_xcloud"),
-                    brls::getStr("lunarnx/main/new_xcloud_subtitle"),
-                    newly, 4, 4);
-        add_section(brls::getStr("lunarnx/main/all_games"),
-                    brls::getStr("lunarnx/main/all_games_subtitle"),
-                    titles, 12, 4);
+        rewireCloudNavigation();
     }
 
-    lunar::diagnosticLog("ui-main", "rebuildCloudList rows built pending_posters=%zu",
-                         pending->size());
-
-    // Enqueue posters after list is built. PosterLoader runs them one-by-one.
-    auto alive = alive_;
-    brls::delay(50, [alive, pending, poster_batch]() {
-        if (!alive->load()) return;
-        lunar::diagnosticLog("ui-main", "enqueue posters count=%zu", pending->size());
-        for (size_t i = 0; i < pending->size(); ++i) {
-            const auto& poster = (*pending)[i];
-            if (!poster.image || poster.url.empty()) continue;
-            lunar::diagnosticLog("ui-main", "poster enqueue %zu %s", i,
-                                 poster.url.c_str());
-            PosterLoader::instance().load(poster.image, poster.url, poster_batch);
-        }
-    });
-
-    if (status_) status_->setText(brls::getStr("lunarnx/main/library_loaded"));
     lunar::diagnosticLog("ui-main", "rebuildCloudList done");
 }
 
@@ -1012,6 +1157,8 @@ void MainActivity::promptCloudSearch() {
                    std::isspace(static_cast<unsigned char>(cloud_search_query_.back()))) {
                 cloud_search_query_.pop_back();
             }
+            cloud_visible_limit_ = 20;
+            cloud_page_start_ = 0;
             updateCloudSearchButtonLabel();
             if (stream_source_ == StreamSource::Cloud) {
                 refreshCloudTitles();

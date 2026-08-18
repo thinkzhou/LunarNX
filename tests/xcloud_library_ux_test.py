@@ -29,6 +29,9 @@ def main() -> None:
     loading_source = read("src/ui/stream_loading_activity.cpp")
     main_header = read("src/ui/main_activity.h")
     main_source = read("src/ui/main_activity.cpp")
+    cloud_model = read("src/ui/cloud_library_model.cpp")
+    cloud_card = read("src/ui/cloud_game_card.cpp")
+    grid_navigation = read("src/ui/grid_navigation.h")
     controller_header = read("src/app/stream_controller.h")
     controller_source = read("src/app/stream_controller.cpp")
     api_source = read("src/api/xbox_api_client.cpp")
@@ -77,8 +80,57 @@ def main() -> None:
             "recent and new title IDs must be known before catalog hydration")
     require("kMaxCatalogHydrate = 80" in api_source,
             "one catalog request should cover recent, new, and first-screen titles")
-    require("titles, 12, 4" in main_source,
-            "the All Games first row must request poster images")
+    require("start += 4" in main_source and
+            "cloud_visible_limit_ = 20" in main_header,
+            "the cloud library must use a bounded four-column, 20-item grid")
+    require("new CloudGameCard" in main_source and
+            "PosterLoader::instance().load" in cloud_card,
+            "cloud cards must own bounded poster loading")
+    require('setImageFromRes("img/platform/xbox.png")' in cloud_card,
+            "cloud cards must retain an Xbox placeholder when cover loading fails")
+    require("image->setWidth(202)" in cloud_card and
+            "image->setHeight(303)" in cloud_card and
+            "ImageScalingType::FIT" in cloud_card,
+            "portrait store covers must be shown at their full 2:3 aspect ratio")
+    require('setImageFromRes("img/platform/xbox.png");\n    image->setFreeTexture(true)' not in cloud_card,
+            "a card must not claim ownership of the shared Xbox placeholder texture")
+    require("replacePosterTexture" in poster_source and
+            poster_source.find("image->setFreeTexture(false)") <
+            poster_source.find("image->setImageFromMem") <
+            poster_source.find("image->setFreeTexture(true)"),
+            "poster replacement must preserve the shared placeholder before owning the new texture")
+    require("CloudLibraryFilter::Recent" in cloud_model and
+            "CloudLibrarySort::RecentFirst" in cloud_model,
+            "cloud filtering and sorting must remain in the testable model")
+    for tab in ("cloud_all_tab_", "cloud_recent_tab_", "cloud_new_tab_"):
+        require(tab in main_header + main_source,
+                f"cloud category must be a directly focusable tab: {tab}")
+    require("cloud_filter_ = CloudLibraryFilter::Recent" in main_header and
+            main_source.find("add_cloud_tab(cloud_recent_tab_") <
+            main_source.find("add_cloud_tab(cloud_new_tab_") <
+            main_source.find("add_cloud_tab(cloud_all_tab_"),
+            "cloud tabs must default to Recently played and order Recent, New, All")
+    require("stepCloudTab(-1)" in main_source and
+            "stepCloudTab(1)" in main_source,
+            "ZL/ZR must switch directly between cloud category tabs")
+    rebuild_body = method_body(
+        main_source,
+        "void MainActivity::rebuildCloudList()",
+        "void MainActivity::refreshCloudTitles")
+    require("console_list_->isChildFocused()" in rebuild_body and
+            "giveFocus(selected_tab)" in rebuild_body,
+            "rebuilding a cloud tab must hand focus off before deleting cards")
+    require("giveFocus(cloud_search_btn_)" not in rebuild_body,
+            "tab changes must not force focus back to Search")
+    for button in ("BUTTON_Y", "BUTTON_LT", "BUTTON_RT", "BUTTON_X"):
+        require(button in main_source,
+                f"cloud library controller shortcut missing: {button}")
+    for english_hint in ('"Back"', '"Search"', '"Previous tab"',
+                         '"Next tab"', '"More / Refresh"'):
+        require(english_hint not in main_source,
+                f"bottom action hint must not be hard-coded in English: {english_hint}")
+    require(main_source.count("}, true, false);") >= 4,
+            "secondary cloud shortcuts must remain functional without crowding the hint bar")
 
     require("posterThumbnailUrl" in poster_source and
             "store-images.s-microsoft.com" in poster_source,
@@ -89,6 +141,47 @@ def main() -> None:
     require(poster_source.find("posterThumbnailUrl") <
             poster_source.find("http.get("),
             "poster URL must be resized before the HTTP request")
+    require("kPosterMemoryCacheLimit = 8 * 1024 * 1024" in poster_source and
+            "findCachedPosterLocked" in poster_source and
+            "cachePosterLocked" in poster_source,
+            "poster loading must reuse a bounded in-memory cache")
+    require("g_queue.size() >= 32" not in poster_source,
+            "loading more than 32 games must not discard leading poster jobs")
+    require("void runQueueWorker()" in poster_source and
+            "while (true)" in poster_source and
+            "finishAndContinue" not in poster_source,
+            "one persistent worker must drain a poster batch without racing detached thread teardown")
+    require(poster_source.count('startNetworkWorker(\n        "poster-load"') == 1,
+            "poster loading must not create one detached worker per cover")
+    require("kMaximumPosterBytes = 1024 * 1024" in poster_source,
+            "resized covers may use up to one MiB without accepting full-size images")
+    require("kPosterDiskCacheLimit = 128 * 1024 * 1024" in poster_source and
+            "readDiskPoster" in poster_source and
+            "writeDiskPoster" in poster_source and
+            'temporary = path + ".tmp"' in poster_source,
+            "poster loading must use a bounded, atomic SD-card cache")
+    require("cloud_page_start_ += 20" in main_source and
+            "std::vector<api::CloudTitle> page_items" in main_source and
+            "appendCloudCards(page_items, 0)" in main_source,
+            "pagination must keep only one 20-card page mounted at a time")
+    require("setContentOffsetY(0, false)" in main_source and
+            "attachCloudPreviousButton" not in main_source,
+            "forward pagination must reset stale scroll offset without a top previous-page control")
+    require("CloudPageSentinel" in main_source and
+            "loadPreviousCloudTitles" in main_source and
+            "attachCloudPreviousSentinel" in main_source,
+            "the bounded cloud window must navigate continuously in both directions")
+    require("wireVerticalGridNavigation" in grid_navigation and
+            "setCustomNavigationRoute" in grid_navigation and
+            "rewireCloudNavigation" in main_source,
+            "cloud rows must use explicit vertical focus routes")
+    require("cloud_navigation_rows_.push_back" in main_source,
+            "every appended card row must participate in focus routing")
+    require('brls::getStr("lunarnx/main/cloud_grid_hint")' not in main_source and
+            '"lunarnx/main/sort_by"' in main_source,
+            "the grid must avoid duplicate controller hints and distinguish sorting from tabs")
+    require("makeSectionHeader(" not in rebuild_body,
+            "the selected cloud tab must not be repeated as a section heading")
 
     require("using BatchId = uint32_t" in poster_header and
             "beginBatch" in poster_header,
@@ -113,9 +206,9 @@ def main() -> None:
             poster_source.find("isBatchCurrent") <
             poster_source.find("image->setImageFromMem"),
             "stale poster callbacks must not write to replaced image views")
-    require("[alive, pending, poster_batch]" in main_source and
-            "load(poster.image, poster.url, poster_batch)" in main_source,
-            "delayed poster enqueue callbacks must retain the originating batch")
+    require("poster_batch" in main_source and
+            "PosterLoader::BatchId poster_batch" in cloud_card,
+            "cloud cards must retain the originating poster batch")
 
     main_destructor = method_body(
         main_source,

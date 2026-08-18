@@ -5,6 +5,7 @@
 #include "about_activity.h"
 #include "ps_settings_activity.h"
 #include "stream_view.h"
+#include "grid_navigation.h"
 #include "ui_style.h"
 #include "../common.h"
 #include "../diagnostics.h"
@@ -106,7 +107,8 @@ public:
         root->setJustifyContent(brls::JustifyContent::CENTER);
         root->setFocusable(true);
         root->setHideHighlight(true);
-        root->registerAction("Cancel", brls::ControllerButton::BUTTON_B,
+        root->registerAction(brls::getStr("lunarnx/common/cancel"),
+            brls::ControllerButton::BUTTON_B,
             [this](brls::View*) -> bool {
                 cancel();
                 return true;
@@ -313,7 +315,8 @@ brls::View* PsActivity::createContentView() {
     const auto& p = uiPalette();
     auto* workspace = new brls::Box(brls::Axis::ROW);
     workspace->setBackgroundColor(p.background);
-    workspace->registerAction("Back", brls::ControllerButton::BUTTON_B,
+    workspace->registerAction(brls::getStr("lunarnx/common/back"),
+        brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
             const auto now = std::chrono::steady_clock::now();
             if (now < back_navigation_ready_at_) return true;
@@ -678,7 +681,18 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
     hosts_ = hosts;
     appendMockReplayConsole(hosts_);
     if (!console_list_) return;
+    brls::View* header_action = source_ == PsConsoleSource::Local
+        ? static_cast<brls::View*>(lan_button_)
+        : static_cast<brls::View*>(psn_button_);
+    if (console_list_->isChildFocused()) {
+        brls::View* fallback = header_action;
+        if (!fallback) fallback = local_tab_;
+        if (fallback) brls::Application::giveFocus(fallback);
+    }
+    if (header_action) wireVerticalGridNavigation({{header_action}});
     console_list_->clearViews();
+
+    std::vector<brls::View*> console_actions;
 
     if (hosts.empty()) {
         auto* empty = makeUiCard(brls::Axis::COLUMN);
@@ -810,6 +824,7 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         }
         card->addView(action);
         console_list_->addView(card);
+        console_actions.push_back(action);
     }
 
     if (visible_count == 0) {
@@ -832,6 +847,11 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         empty->addView(hint);
         console_list_->addView(empty);
     }
+
+    std::vector<std::vector<brls::View*>> navigation_rows;
+    if (header_action) navigation_rows.push_back({header_action});
+    for (auto* action : console_actions) navigation_rows.push_back({action});
+    wireVerticalGridNavigation(navigation_rows);
 }
 
 bool PsActivity::completePendingWake(const std::vector<ps::PsConsole>& hosts) {
