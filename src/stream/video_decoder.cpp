@@ -129,19 +129,7 @@ VideoDecoder::~VideoDecoder() { shutdown(); }
 bool VideoDecoder::initialize(int width, int height) {
     g_video_decode_logs = 0;
     g_video_transfer_logs = 0;
-    decoder_ready_ = false;
-    seen_vps_ = false;
-    seen_sps_ = false;
-    seen_pps_ = false;
-    parameter_sets_.clear();
-    parameter_sets_pending_ = false;
-    wait_log_count_ = 0;
     error_log_count_ = 0;
-    if (video_path_ == VideoPipelinePath::Xbox &&
-        video_codec_ != VideoCodec::H264) {
-        lunar::diagnosticLog("video", "Xbox decoder path only supports H.264");
-        return false;
-    }
     const AVCodecID codec_id = video_codec_ == VideoCodec::HEVC
         ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
     const char* codec_name = videoCodecName(video_codec_);
@@ -417,142 +405,17 @@ bool VideoDecoder::deliverFrame(AVFrame* frame,
     return true;
 }
 
-bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
-                          const VideoAccessUnitInfo* inspected_access_unit) {
-    if (!initialized_) return false;
+bool VideoDecoder::decodeAccessUnit(const uint8_t* data, size_t len,
+                                    uint64_t timestamp,
+                                    const VideoAccessUnitInfo& au,
+                                    int log_index, bool log) {
     auto* ctx = static_cast<AVCodecContext*>(codec_ctx_);
-    const int log_index = g_video_decode_logs.fetch_add(1);
-    const uint64_t probe_frame_index = static_cast<uint64_t>(log_index) + 1;
-    const bool log = shouldLogVideoDecode(log_index);
-    const bool playstation_path =
-        video_path_ == VideoPipelinePath::PlayStation;
-    VideoAccessUnitInfo parsed_access_unit;
-    if (!inspected_access_unit) {
-        parsed_access_unit = playstation_path
-            ? inspectVideoAccessUnit(video_codec_, data, len)
-            : inspectXboxH264AccessUnit(data, len);
-        inspected_access_unit = &parsed_access_unit;
-    }
-    const auto& au = *inspected_access_unit;
     const char* codec_name = videoCodecName(video_codec_);
-    if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
-        lunar::cloud1080CrashProbeLog(
-            "crash-probe",
-            "DEBUG-c1080 phase=decode-begin au=%llu bytes=%zu pts_ns=%llu "
-            "codec=%s nal=%s vps=%d sps=%d pps=%d random_access=%d ready=%d",
-            static_cast<unsigned long long>(probe_frame_index),
-            len,
-            static_cast<unsigned long long>(timestamp),
-            codec_name,
-            au.nal_types.empty() ? "-" : au.nal_types.c_str(),
-            au.has_vps ? 1 : 0,
-            au.has_sps ? 1 : 0,
-            au.has_pps ? 1 : 0,
-            au.has_random_access ? 1 : 0,
-            decoder_ready_ ? 1 : 0);
-    }
-    if (perf_) {
-        perf_->recordVideoAccessUnit(
-            len,
-            timestamp,
-            perf_->lastVideoAccessUnitQueueAgeUs(),
-            au.has_random_access);
-    }
-    if (log) {
-        lunar::diagnosticLog("video",
-                             "video decode begin index=%d codec=%s len=%zu ts=%llu nal=%s vps=%d sps=%d pps=%d random_access=%d ready=%d",
-                             log_index,
-                             codec_name,
-                             len,
-                             static_cast<unsigned long long>(timestamp),
-                             au.nal_types.empty() ? "-" : au.nal_types.c_str(),
-                             au.has_vps ? 1 : 0,
-                             au.has_sps ? 1 : 0,
-                             au.has_pps ? 1 : 0,
-                             au.has_random_access ? 1 : 0,
-                             decoder_ready_ ? 1 : 0);
-    }
-
-    seen_vps_ = seen_vps_ || au.has_vps;
-    seen_sps_ = seen_sps_ || au.has_sps;
-    seen_pps_ = seen_pps_ || au.has_pps;
-    // Chiaki can report initial parameter sets as a standalone access unit.
-    // NVDEC rejects parameter-set-only packets, so retain them and prepend
-    // them to the next VCL access unit instead of treating this as a decode
-    // failure. The same path handles standalone parameter-set updates.
-    if (playstation_path && !au.has_vcl) {
-        constexpr size_t kMaxParameterSetBytes = 64 * 1024;
-        if (au.has_vps || au.has_sps) parameter_sets_.clear();
-        if (au.hasParameterSets()) {
-            if (len <= kMaxParameterSetBytes &&
-                parameter_sets_.size() <=
-                    kMaxParameterSetBytes - len) {
-                parameter_sets_.insert(parameter_sets_.end(),
-                                            data, data + len);
-                parameter_sets_pending_ = true;
-            } else {
-                parameter_sets_.clear();
-                parameter_sets_pending_ = false;
-                lunar::diagnosticLog(
-                    "video", "discard oversized %s parameter sets len=%zu",
-                    codec_name, len);
-            }
-        }
-        if (log) {
-            lunar::diagnosticLog(
-                "video", "consume %s non-VCL access unit nal=%s len=%zu cached=%zu",
-                codec_name,
-                au.nal_types.empty() ? "-" : au.nal_types.c_str(),
-                len, parameter_sets_.size());
-        }
-        return true;
-    }
-
-    if (!decoder_ready_) {
-        const bool have_parameter_sets = seen_sps_ && seen_pps_ &&
-            (video_codec_ != VideoCodec::HEVC || seen_vps_);
-        if (have_parameter_sets && au.has_random_access) {
-            decoder_ready_ = true;
-            lunar::diagnosticLog("video",
-                                 "%s decoder gate opened nal=%s len=%zu",
-                                 codec_name,
-                                 au.nal_types.empty() ? "-" : au.nal_types.c_str(),
-                                 len);
-        } else if (au.has_vcl) {
-            if (wait_log_count_++ < kVideoWaitLogLimit) {
-                lunar::diagnosticLog("video",
-                                     "drop %s until parameter sets/random access nal=%s len=%zu vps=%d sps=%d pps=%d random_access=%d",
-                                     codec_name,
-                                     au.nal_types.empty() ? "-" : au.nal_types.c_str(),
-                                     len,
-                                     seen_vps_ ? 1 : 0,
-                                     seen_sps_ ? 1 : 0,
-                                     seen_pps_ ? 1 : 0,
-                                     au.has_random_access ? 1 : 0);
-            }
-            return true;
-        }
-    }
-
-    std::vector<uint8_t> startup_access_unit;
-    if (playstation_path && parameter_sets_pending_ &&
-        !parameter_sets_.empty()) {
-        startup_access_unit.reserve(parameter_sets_.size() + len);
-        startup_access_unit.insert(startup_access_unit.end(),
-                                   parameter_sets_.begin(),
-                                   parameter_sets_.end());
-        startup_access_unit.insert(startup_access_unit.end(), data, data + len);
-        data = startup_access_unit.data();
-        len = startup_access_unit.size();
-        parameter_sets_pending_ = false;
-        lunar::diagnosticLog("video",
-                             "prepended cached %s parameter sets bytes=%zu total=%zu",
-                             codec_name,
-                             parameter_sets_.size(), len);
-    }
 
 #ifdef __SWITCH__
     if (usesHardwareDecode(video_backend_)) {
+        const uint64_t probe_frame_index =
+            static_cast<uint64_t>(log_index) + 1;
         AVPacket* pkt = av_packet_alloc();
         if (!pkt) {
             if (perf_) perf_->recordVideoDecodeError();
@@ -820,9 +683,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
     return decode_ok;
 }
 
-void VideoDecoder::setCallback(FrameCallback cb) { on_frame_ = std::move(cb); }
-
-bool VideoDecoder::resetForKeyframe() {
+bool VideoDecoder::reinitializeParser() {
     if (!initialized_ || !codec_ctx_) return false;
 
     auto* ctx = static_cast<AVCodecContext*>(codec_ctx_);
@@ -838,22 +699,14 @@ bool VideoDecoder::resetForKeyframe() {
     if (!parser) {
         lunar::diagnosticLog("video", "%s parser reinit failed during keyframe reset",
                              videoCodecName(video_codec_));
-        decoder_ready_ = false;
         return false;
     }
     parser->flags |= PARSER_FLAG_COMPLETE_FRAMES;
     parser_ = parser;
-    // Chiaki may deliver parameter sets separately, so its next VCL access
-    // unit must carry the cached bytes. Xbox keeps its direct H.264 path.
-    decoder_ready_ = false;
-    parameter_sets_pending_ =
-        video_path_ == VideoPipelinePath::PlayStation &&
-        !parameter_sets_.empty();
-    wait_log_count_ = 0;
-    lunar::diagnosticLog("video", "%s decoder reset; waiting for random access",
-                         videoCodecName(video_codec_));
     return true;
 }
+
+void VideoDecoder::setCallback(FrameCallback cb) { on_frame_ = std::move(cb); }
 
 void VideoDecoder::flush() {
     if (!initialized_) return;
@@ -888,6 +741,188 @@ void VideoDecoder::shutdown() {
     if (codec_ctx_) {
         avcodec_free_context(reinterpret_cast<AVCodecContext**>(&codec_ctx_));
     }
+    initialized_ = false;
+    error_log_count_ = 0;
+}
+
+// =========================================================================
+// Xbox / WebRTC path
+// =========================================================================
+
+VideoAccessUnitInfo XboxVideoDecoder::inspectAccessUnit(const uint8_t* data,
+                                                        size_t len) const {
+    return inspectXboxH264AccessUnit(data, len);
+}
+
+bool XboxVideoDecoder::initialize(int width, int height) {
+    if (video_codec_ != VideoCodec::H264) {
+        lunar::diagnosticLog("video", "Xbox decoder path only supports H.264");
+        return false;
+    }
+    decoder_ready_ = false;
+    seen_sps_ = false;
+    seen_pps_ = false;
+    parameter_sets_.clear();
+    parameter_sets_pending_ = false;
+    wait_log_count_ = 0;
+    return VideoDecoder::initialize(width, height);
+}
+
+bool XboxVideoDecoder::decode(const uint8_t* data, size_t len,
+                              uint64_t timestamp,
+                              const VideoAccessUnitInfo* inspected_access_unit) {
+    if (!initialized_) return false;
+    const int log_index = g_video_decode_logs.fetch_add(1);
+    const uint64_t probe_frame_index = static_cast<uint64_t>(log_index) + 1;
+    const bool log = shouldLogVideoDecode(log_index);
+    VideoAccessUnitInfo parsed_access_unit;
+    if (!inspected_access_unit) {
+        parsed_access_unit = inspectAccessUnit(data, len);
+        inspected_access_unit = &parsed_access_unit;
+    }
+    const auto& au = *inspected_access_unit;
+    const char* codec_name = videoCodecName(video_codec_);
+    if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
+        lunar::cloud1080CrashProbeLog(
+            "crash-probe",
+            "DEBUG-c1080 phase=decode-begin au=%llu bytes=%zu pts_ns=%llu "
+            "codec=%s nal=%s vps=%d sps=%d pps=%d random_access=%d ready=%d",
+            static_cast<unsigned long long>(probe_frame_index),
+            len,
+            static_cast<unsigned long long>(timestamp),
+            codec_name,
+            au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+            au.has_vps ? 1 : 0,
+            au.has_sps ? 1 : 0,
+            au.has_pps ? 1 : 0,
+            au.has_random_access ? 1 : 0,
+            decoder_ready_ ? 1 : 0);
+    }
+    if (perf_) {
+        perf_->recordVideoAccessUnit(
+            len,
+            timestamp,
+            perf_->lastVideoAccessUnitQueueAgeUs(),
+            au.has_random_access);
+    }
+    if (log) {
+        lunar::diagnosticLog("video",
+                             "video decode begin index=%d codec=%s len=%zu ts=%llu nal=%s vps=%d sps=%d pps=%d random_access=%d ready=%d",
+                             log_index,
+                             codec_name,
+                             len,
+                             static_cast<unsigned long long>(timestamp),
+                             au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+                             au.has_vps ? 1 : 0,
+                             au.has_sps ? 1 : 0,
+                             au.has_pps ? 1 : 0,
+                             au.has_random_access ? 1 : 0,
+                             decoder_ready_ ? 1 : 0);
+    }
+
+    seen_sps_ = seen_sps_ || au.has_sps;
+    seen_pps_ = seen_pps_ || au.has_pps;
+    // Xbox WebRTC can deliver standalone SPS/PPS on encoder refresh, bitrate
+    // change, or keyframe request. NVDEC rejects parameter-set-only packets, so
+    // retain them and prepend to the next VCL access unit instead of treating
+    // this as a decode failure.
+    if (!au.has_vcl) {
+        constexpr size_t kMaxParameterSetBytes = 64 * 1024;
+        if (au.has_sps) parameter_sets_.clear();
+        if (au.hasParameterSets()) {
+            if (len <= kMaxParameterSetBytes &&
+                parameter_sets_.size() <=
+                    kMaxParameterSetBytes - len) {
+                parameter_sets_.insert(parameter_sets_.end(),
+                                       data, data + len);
+                parameter_sets_pending_ = true;
+            } else {
+                parameter_sets_.clear();
+                parameter_sets_pending_ = false;
+                lunar::diagnosticLog(
+                    "video", "discard oversized %s parameter sets len=%zu",
+                    codec_name, len);
+            }
+        }
+        if (log) {
+            lunar::diagnosticLog(
+                "video", "consume %s non-VCL access unit nal=%s len=%zu cached=%zu",
+                codec_name,
+                au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+                len, parameter_sets_.size());
+        }
+        return true;
+    }
+
+    if (!decoder_ready_) {
+        const bool have_parameter_sets = seen_sps_ && seen_pps_;
+        if (have_parameter_sets && au.has_random_access) {
+            decoder_ready_ = true;
+            lunar::diagnosticLog("video",
+                                 "%s decoder gate opened nal=%s len=%zu",
+                                 codec_name,
+                                 au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+                                 len);
+        } else if (au.has_vcl) {
+            if (wait_log_count_++ < kVideoWaitLogLimit) {
+                lunar::diagnosticLog("video",
+                                     "drop %s until parameter sets/random access nal=%s len=%zu sps=%d pps=%d random_access=%d",
+                                     codec_name,
+                                     au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+                                     len,
+                                     seen_sps_ ? 1 : 0,
+                                     seen_pps_ ? 1 : 0,
+                                     au.has_random_access ? 1 : 0);
+            }
+            return true;
+        }
+    }
+
+    std::vector<uint8_t> startup_access_unit;
+    if (parameter_sets_pending_ && !parameter_sets_.empty()) {
+        startup_access_unit.reserve(parameter_sets_.size() + len);
+        startup_access_unit.insert(startup_access_unit.end(),
+                                   parameter_sets_.begin(),
+                                   parameter_sets_.end());
+        startup_access_unit.insert(startup_access_unit.end(), data, data + len);
+        data = startup_access_unit.data();
+        len = startup_access_unit.size();
+        parameter_sets_pending_ = false;
+        lunar::diagnosticLog("video",
+                             "prepended cached %s parameter sets bytes=%zu total=%zu",
+                             codec_name,
+                             parameter_sets_.size(), len);
+    }
+
+    return decodeAccessUnit(data, len, timestamp, au, log_index, log);
+}
+
+bool XboxVideoDecoder::resetForKeyframe() {
+    if (!initialized_ || !codec_ctx_) return false;
+    if (!reinitializeParser()) {
+        decoder_ready_ = false;
+        return false;
+    }
+    // Xbox may deliver parameter sets separately, so its next VCL access
+    // unit must carry the cached bytes across the transport-requested reset.
+    decoder_ready_ = false;
+    parameter_sets_pending_ = !parameter_sets_.empty();
+    wait_log_count_ = 0;
+    lunar::diagnosticLog("video", "%s decoder reset; waiting for random access",
+                         videoCodecName(video_codec_));
+    return true;
+}
+
+// =========================================================================
+// PlayStation / Chiaki path
+// =========================================================================
+
+VideoAccessUnitInfo PsVideoDecoder::inspectAccessUnit(const uint8_t* data,
+                                                      size_t len) const {
+    return inspectVideoAccessUnit(video_codec_, data, len);
+}
+
+bool PsVideoDecoder::initialize(int width, int height) {
     decoder_ready_ = false;
     seen_vps_ = false;
     seen_sps_ = false;
@@ -895,8 +930,155 @@ void VideoDecoder::shutdown() {
     parameter_sets_.clear();
     parameter_sets_pending_ = false;
     wait_log_count_ = 0;
-    error_log_count_ = 0;
-    initialized_ = false;
+    return VideoDecoder::initialize(width, height);
+}
+
+bool PsVideoDecoder::decode(const uint8_t* data, size_t len,
+                            uint64_t timestamp,
+                            const VideoAccessUnitInfo* inspected_access_unit) {
+    if (!initialized_) return false;
+    const int log_index = g_video_decode_logs.fetch_add(1);
+    const uint64_t probe_frame_index = static_cast<uint64_t>(log_index) + 1;
+    const bool log = shouldLogVideoDecode(log_index);
+    VideoAccessUnitInfo parsed_access_unit;
+    if (!inspected_access_unit) {
+        parsed_access_unit = inspectAccessUnit(data, len);
+        inspected_access_unit = &parsed_access_unit;
+    }
+    const auto& au = *inspected_access_unit;
+    const char* codec_name = videoCodecName(video_codec_);
+    if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
+        lunar::cloud1080CrashProbeLog(
+            "crash-probe",
+            "DEBUG-c1080 phase=decode-begin au=%llu bytes=%zu pts_ns=%llu "
+            "codec=%s nal=%s vps=%d sps=%d pps=%d random_access=%d ready=%d",
+            static_cast<unsigned long long>(probe_frame_index),
+            len,
+            static_cast<unsigned long long>(timestamp),
+            codec_name,
+            au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+            au.has_vps ? 1 : 0,
+            au.has_sps ? 1 : 0,
+            au.has_pps ? 1 : 0,
+            au.has_random_access ? 1 : 0,
+            decoder_ready_ ? 1 : 0);
+    }
+    if (perf_) {
+        perf_->recordVideoAccessUnit(
+            len,
+            timestamp,
+            perf_->lastVideoAccessUnitQueueAgeUs(),
+            au.has_random_access);
+    }
+    if (log) {
+        lunar::diagnosticLog("video",
+                             "video decode begin index=%d codec=%s len=%zu ts=%llu nal=%s vps=%d sps=%d pps=%d random_access=%d ready=%d",
+                             log_index,
+                             codec_name,
+                             len,
+                             static_cast<unsigned long long>(timestamp),
+                             au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+                             au.has_vps ? 1 : 0,
+                             au.has_sps ? 1 : 0,
+                             au.has_pps ? 1 : 0,
+                             au.has_random_access ? 1 : 0,
+                             decoder_ready_ ? 1 : 0);
+    }
+
+    seen_vps_ = seen_vps_ || au.has_vps;
+    seen_sps_ = seen_sps_ || au.has_sps;
+    seen_pps_ = seen_pps_ || au.has_pps;
+    // Chiaki can report initial parameter sets as a standalone access unit.
+    // NVDEC rejects parameter-set-only packets, so retain them and prepend
+    // them to the next VCL access unit instead of treating this as a decode
+    // failure. The same path handles standalone parameter-set updates.
+    if (!au.has_vcl) {
+        constexpr size_t kMaxParameterSetBytes = 64 * 1024;
+        if (au.has_vps || au.has_sps) parameter_sets_.clear();
+        if (au.hasParameterSets()) {
+            if (len <= kMaxParameterSetBytes &&
+                parameter_sets_.size() <=
+                    kMaxParameterSetBytes - len) {
+                parameter_sets_.insert(parameter_sets_.end(),
+                                       data, data + len);
+                parameter_sets_pending_ = true;
+            } else {
+                parameter_sets_.clear();
+                parameter_sets_pending_ = false;
+                lunar::diagnosticLog(
+                    "video", "discard oversized %s parameter sets len=%zu",
+                    codec_name, len);
+            }
+        }
+        if (log) {
+            lunar::diagnosticLog(
+                "video", "consume %s non-VCL access unit nal=%s len=%zu cached=%zu",
+                codec_name,
+                au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+                len, parameter_sets_.size());
+        }
+        return true;
+    }
+
+    if (!decoder_ready_) {
+        const bool have_parameter_sets = seen_sps_ && seen_pps_ &&
+            (video_codec_ != VideoCodec::HEVC || seen_vps_);
+        if (have_parameter_sets && au.has_random_access) {
+            decoder_ready_ = true;
+            lunar::diagnosticLog("video",
+                                 "%s decoder gate opened nal=%s len=%zu",
+                                 codec_name,
+                                 au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+                                 len);
+        } else if (au.has_vcl) {
+            if (wait_log_count_++ < kVideoWaitLogLimit) {
+                lunar::diagnosticLog("video",
+                                     "drop %s until parameter sets/random access nal=%s len=%zu vps=%d sps=%d pps=%d random_access=%d",
+                                     codec_name,
+                                     au.nal_types.empty() ? "-" : au.nal_types.c_str(),
+                                     len,
+                                     seen_vps_ ? 1 : 0,
+                                     seen_sps_ ? 1 : 0,
+                                     seen_pps_ ? 1 : 0,
+                                     au.has_random_access ? 1 : 0);
+            }
+            return true;
+        }
+    }
+
+    std::vector<uint8_t> startup_access_unit;
+    if (parameter_sets_pending_ && !parameter_sets_.empty()) {
+        startup_access_unit.reserve(parameter_sets_.size() + len);
+        startup_access_unit.insert(startup_access_unit.end(),
+                                   parameter_sets_.begin(),
+                                   parameter_sets_.end());
+        startup_access_unit.insert(startup_access_unit.end(), data, data + len);
+        data = startup_access_unit.data();
+        len = startup_access_unit.size();
+        parameter_sets_pending_ = false;
+        lunar::diagnosticLog("video",
+                             "prepended cached %s parameter sets bytes=%zu total=%zu",
+                             codec_name,
+                             parameter_sets_.size(), len);
+    }
+
+    return decodeAccessUnit(data, len, timestamp, au, log_index, log);
+}
+
+bool PsVideoDecoder::resetForKeyframe() {
+    if (!initialized_ || !codec_ctx_) return false;
+    if (!reinitializeParser()) {
+        decoder_ready_ = false;
+        return false;
+    }
+    // Chiaki may deliver parameter sets separately, so its next VCL access
+    // unit must carry the cached bytes across the transport-requested reset.
+    decoder_ready_ = false;
+    parameter_sets_pending_ = !parameter_sets_.empty();
+    wait_log_count_ = 0;
+    lunar::diagnosticLog("video", "%s decoder reset; waiting for random access",
+                         videoCodecName(video_codec_));
+    return true;
 }
 
 } // namespace lunar::stream

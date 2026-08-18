@@ -185,8 +185,6 @@ private:
     std::unique_ptr<AVSync> av_sync_;
 
     std::atomic<PerfStats*> perf_{nullptr};
-    VideoCodec video_codec_ = VideoCodec::H264;
-    VideoPipelinePath video_path_ = VideoPipelinePath::Xbox;
     std::atomic<VideoSchedulingMode> video_scheduling_{
         VideoSchedulingMode::RealtimeQueued};
     std::atomic<bool> running_{false};

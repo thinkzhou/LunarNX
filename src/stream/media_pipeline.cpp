@@ -69,8 +69,6 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         const uint32_t generation = generation_.fetch_add(1) + 1;
         video_ready_notified_ = false;
         perf_.store(perf, std::memory_order_release);
-        video_codec_ = options.video_codec;
-        video_path_ = options.video_path;
         video_scheduling_.store(options.video_scheduling,
                                 std::memory_order_release);
 
@@ -78,7 +76,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
             lunar::diagnosticLog("media", "create components begin backend=%s",
                                  videoBackendName(options.video_backend));
             lunar::diagnosticLog("media", "create video decoder begin");
-            video_decoder_ = provider_.createVideoDecoder();
+            video_decoder_ = provider_.createVideoDecoder(options.video_path);
             lunar::diagnosticLog("media", "create video decoder done ptr=%p",
                                  video_decoder_.get());
             lunar::diagnosticLog("media", "create video renderer begin");
@@ -119,7 +117,6 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
 
         video_decoder_->setVideoBackend(options.video_backend);
         video_decoder_->setVideoCodec(options.video_codec);
-        video_decoder_->setVideoPath(options.video_path);
         video_decoder_->setPerfStats(perf);
         lunar::diagnosticLog("media", "video decoder init begin");
         if (!video_decoder_->initialize(width, height)) {
@@ -380,9 +377,9 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
     QueuedVideoPacket packet;
     packet.timestamp = timestamp;
     packet.generation = generation_.load();
-    packet.access_unit = video_path_ == VideoPipelinePath::Xbox
-        ? inspectXboxH264AccessUnit(data, len)
-        : inspectVideoAccessUnit(video_codec_, data, len);
+    packet.access_unit = video_decoder_
+        ? video_decoder_->inspectAccessUnit(data, len)
+        : VideoAccessUnitInfo{};
     packet.contains_idr = packet.access_unit.has_random_access;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     packet.enqueued_at = std::chrono::steady_clock::now();
