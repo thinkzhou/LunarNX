@@ -857,7 +857,6 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                                  "rtp_queue_oldest_ms=%u udp_rcvbuf=%u "
                                  "srtp_fail=%u/%u srtp_detail=%u/%u/%u/%u "
                                  "ice_pair=%s:%u(%s)->%s:%u(%s) ice_rtt=%u "
-                                 "jitter_ms=%u hold_ms=%u recovery_hold_ms=%u "
                                  "nacks=%u retries=%u decode_errors=%u "
                                  "avg_decode_ms=%.2f avg_render_ms=%.2f",
                                  perf_window_fps,
@@ -905,9 +904,6 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                                            media_stats.ice_remote_candidate_type)
                                      : "none",
                                  media_stats.ice_rtt_ms,
-                                 media_stats.video_jitter_estimate_ms,
-                                 media_stats.video_jitter_hold_ms,
-                                 media_stats.video_jitter_recovery_hold_ms,
                                  media_stats.video_rtp_nacks,
                                  media_stats.video_rtp_nack_retries,
                                  decode_errors,

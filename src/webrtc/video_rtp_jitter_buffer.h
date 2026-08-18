@@ -35,9 +35,6 @@ struct VideoRtpJitterStats {
     size_t buffered_packets = 0;
     size_t buffered_frames = 0;
     uint32_t highest_sequence = 0;
-    uint32_t estimated_jitter_ms = 0;
-    uint32_t adaptive_hold_ms = 0;
-    uint32_t adaptive_recovery_hold_ms = 0;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     uint32_t last_gap_packets = 0;
     uint32_t ssrc = 0;
@@ -55,15 +52,13 @@ public:
     using NackCallback = std::function<bool(uint16_t, uint16_t)>;
     using RecoveryCallback = std::function<void(bool)>;
 
-    static constexpr uint64_t kMinHoldMs = 8;
-    static constexpr uint64_t kInitialAdaptiveHoldMs = 120;
+    static constexpr uint64_t kMinHoldMs = 60;
     static constexpr uint64_t kDefaultHoldMs = 120;
     // A progressing access unit may legitimately span the ordinary idle
     // deadline when the receiver thread is briefly descheduled. This is only
     // a final memory-safety bound; normal latency is governed by hold_ms.
     static constexpr uint64_t kMaxFrameHoldMs = 1000;
     static constexpr uint64_t kDefaultRecoveryHoldMs = 300;
-    static constexpr uint64_t kMinAdaptiveRecoveryHoldMs = 120;
     static constexpr uint64_t kMaxRecoveryHoldMs = 800;
     static constexpr size_t kMaxBufferedFrames = 32;
     static constexpr size_t kMaxBufferedPackets = 2048;
