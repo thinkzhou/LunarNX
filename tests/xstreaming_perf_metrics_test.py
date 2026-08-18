@@ -70,6 +70,10 @@ def main() -> None:
             "last_decode_total_us_" in overlay_header and
             "decode_total_ns" in perf_stats,
             "bitrate and decode time must use interval deltas instead of lifetime averages")
+    require("stream_started_ns.compare_exchange_strong" in perf_stats and
+            "streamDurationSeconds()" in perf_stats and
+            '"%02llu:%02llu:%02llu"' in overlay,
+            "stream duration must start on the first rendered frame and use HH:MM:SS")
     require("alignas(64) std::atomic<uint64_t> decode_total_us" in perf_stats,
             "decoder counters must not share a cache line with Xbox RTP hot-path stats")
     require("getStreamWidth()" in stream_view and "getStreamHeight()" in stream_view,

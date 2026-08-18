@@ -31,6 +31,7 @@ def main():
     assert "stream_connection->rtt <= 0.0" in rtt_patch
     assert "transportStats()" in controller
     assert "hud_metrics_ps" in overlay
+    assert "streamDurationSeconds()" in overlay
     assert "video_codec" in overlay
     assert "detail_codec" in detail
     assert "getVideoCodec() const override" in runtime
