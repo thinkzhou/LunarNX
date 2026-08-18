@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../input/stream_input_router.h"
 #include <array>
 #include <cstdint>
 
@@ -63,7 +64,7 @@ public:
     virtual stream::VideoCodec getVideoCodec() const = 0;
     virtual StreamPlatform getStreamPlatform() const = 0;
 
-    virtual void setInputSuppressed(bool suppressed) = 0;
+    virtual input::StreamInputRouter& inputRouter() = 0;
     virtual void requestPlatformHomeButton() = 0;
     // Called from a network worker after Switch returns to the foreground.
     // Implementations keep a healthy session alive and rebuild a dead one.

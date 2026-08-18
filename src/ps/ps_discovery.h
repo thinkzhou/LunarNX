@@ -22,7 +22,8 @@ public:
     PsDiscovery(const PsDiscovery&) = delete;
     PsDiscovery& operator=(const PsDiscovery&) = delete;
 
-    bool start(HostFoundCallback cb);
+    bool start(const std::vector<std::string>& manual_hosts,
+               HostFoundCallback cb);
     void stop();
     std::vector<DiscoveredConsole> getDiscoveredHosts() const;
 

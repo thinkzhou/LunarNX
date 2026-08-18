@@ -25,6 +25,7 @@ PsManager::PsManager()
 }
 
 PsManager::~PsManager() {
+    alive_->store(false);
     stopDiscovery();
     cancelRegistration();
 }
@@ -107,29 +108,33 @@ std::optional<RegisteredCredential> PsManager::getCredential(
     return credentials_.findByMac(host_id);
 }
 
-std::string PsManager::getPairingAccountId() const {
+std::string PsManager::getPairingAccountId(const std::string& console_key) const {
     // Local registration has its own identity. Do not silently reuse the PSN
     // account selected for remote play: it may not be the user currently
     // active on the console, which makes an otherwise correct PIN fail.
-    return loadManualPsnAccountId();
+    return loadManualPsnAccountId(console_key);
 }
 
-bool PsManager::saveManualPairingAccountId(const std::string& account_id) {
-    return saveManualPsnAccountId(account_id);
+bool PsManager::saveManualPairingAccountId(const std::string& account_id,
+                                           const std::string& console_key) {
+    return saveManualPsnAccountId(account_id, console_key);
 }
 
 void PsManager::registerHost(const std::string& host_addr, uint32_t pin, int target,
                              const std::string& account_id, RegistrationCallback cb) {
+    const uint64_t generation = registration_generation_.fetch_add(1) + 1;
     if (registration_) {
         registration_->stop();
         registration_.reset();
     }
 
-    std::string account_id_bytes;
-    if (target >= CHIAKI_TARGET_PS4_9 &&
-        (!base64Decode(account_id, account_id_bytes) || account_id_bytes.size() != 8)) {
+    if (target >= CHIAKI_TARGET_PS4_9 && account_id.empty()) {
+        persistentEventLog("ps-registration",
+            "failed stage=missing-account-id target=%d", target);
         auto callback = std::make_shared<RegistrationCallback>(std::move(cb));
-        brls::sync([callback]() {
+        brls::sync([this, callback, alive = alive_, generation]() {
+            if (!alive->load() ||
+                registration_generation_.load() != generation) return;
             if (*callback) {
                 (*callback)(RegistrationResult::Failed,
                     "Local Account ID is required; use phone pairing");
@@ -139,49 +144,78 @@ void PsManager::registerHost(const std::string& host_addr, uint32_t pin, int tar
     }
 
     registration_ = std::make_unique<PsRegistration>(&chiaki_log_);
-    auto* result = new ChiakiRegisteredHost{};
-    auto alive = std::make_shared<std::atomic<bool>>(true);
+    auto result = std::make_shared<ChiakiRegisteredHost>();
 
     auto callback = std::make_shared<RegistrationCallback>(std::move(cb));
-    const bool started = registration_->start(host_addr, pin, target, account_id, result,
-        [this, callback, result, alive, host_addr, pin, target](
+    const ChiakiErrorCode start_error = registration_->start(
+        host_addr, pin, target, account_id, result.get(),
+        [this, callback, result, alive = alive_, host_addr, account_id, target, generation](
             RegistrationResult res, const std::string& err) {
-            if (!alive->load()) { delete result; return; }
+            brls::sync([this, callback, result, alive, host_addr, account_id, target,
+                        generation, res, err]() {
+                if (!alive->load() ||
+                    registration_generation_.load() != generation) return;
 
-            if (res == RegistrationResult::Success) {
-                RegisteredCredential cred;
-                cred.server_mac = macFromBytes(result->server_mac);
-                cred.last_known_addr = host_addr;
-                if (result->server_nickname[0]) {
-                    cred.nickname = result->server_nickname;
+                // Registration has finished on the Chiaki worker. Finalize it
+                // here, from the UI thread, before exposing the result or
+                // starting a stream. Calling fini in the Chiaki callback would
+                // attempt to join the current thread.
+                if (registration_) {
+                    registration_->stop();
+                    registration_.reset();
                 }
-                cred.target = target;
-                std::memcpy(cred.rp_regist_key, result->rp_regist_key, sizeof(cred.rp_regist_key));
-                cred.rp_key_type = result->rp_key_type;
-                std::memcpy(cred.rp_key, result->rp_key, sizeof(cred.rp_key));
 
-                credentials_.add(cred);
-                credentials_.save(get_ps_credentials_path());
-                repository_->setRegisteredCredentials(credentials_.getRegisteredHosts());
-            }
+                RegistrationResult final_result = res;
+                std::string final_error = err;
+                if (res == RegistrationResult::Success) {
+                    RegisteredCredential cred;
+                    cred.server_mac = macFromBytes(result->server_mac);
+                    cred.last_known_addr = host_addr;
+                    if (result->server_nickname[0]) {
+                        cred.nickname = result->server_nickname;
+                    }
+                    cred.target = target;
+                    std::memcpy(cred.rp_regist_key, result->rp_regist_key,
+                                sizeof(cred.rp_regist_key));
+                    cred.rp_key_type = result->rp_key_type;
+                    std::memcpy(cred.rp_key, result->rp_key, sizeof(cred.rp_key));
 
-            delete result;
+                    // Persist the identity only after the console accepted it.
+                    // Keep both the stable MAC and the address used for manual
+                    // pairing so either discovery path resolves the same user.
+                    saveManualPsnAccountId(account_id, cred.server_mac);
+                    saveManualPsnAccountId(account_id, host_addr);
 
-            brls::sync([callback, res, err]() {
-                if (*callback) (*callback)(res, err);
+                    if (!credentials_.addAndSave(cred, get_ps_credentials_path())) {
+                        persistentEventLog("ps-registration",
+                            "failed stage=credential-save target=%d", target);
+                        final_result = RegistrationResult::Failed;
+                        final_error =
+                            "Pairing completed, but credentials could not be saved";
+                    } else {
+                        repository_->setRegisteredCredentials(
+                            credentials_.getRegisteredHosts());
+                        repository_->notePairedLocalHost(cred);
+                    }
+                }
+
+                if (*callback) (*callback)(final_result, final_error);
             });
         });
-    if (!started) {
-        delete result;
+    if (start_error != CHIAKI_ERR_SUCCESS) {
         registration_.reset();
-        brls::sync([callback]() {
-            if (*callback) (*callback)(RegistrationResult::Failed,
-                                       "Could not start local pairing");
+        const std::string error = "Could not start local pairing: " +
+            std::string(chiaki_error_string(start_error));
+        brls::sync([this, callback, alive = alive_, generation, error]() {
+            if (!alive->load() ||
+                registration_generation_.load() != generation) return;
+            if (*callback) (*callback)(RegistrationResult::Failed, error);
         });
     }
 }
 
 void PsManager::cancelRegistration() {
+    registration_generation_.fetch_add(1);
     if (registration_) {
         registration_->stop();
         registration_.reset();

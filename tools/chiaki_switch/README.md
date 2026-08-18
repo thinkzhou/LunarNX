@@ -34,15 +34,17 @@ The receive-allocation patch has a build-time A/B switch. `CHIAKI_RECV_OPT=0`
 keeps the upstream per-datagram shrink `realloc`; the default
 `CHIAKI_RECV_OPT=1` passes the already allocated 1500-byte receive block to the
 packet handler directly. Packet length and ownership are unchanged.
-The transport-diagnostics patch aggregates Takion receive throughput, complete
-per-packet processing time, MAC failures, reorder drops/skips, allocation
-failures, video queue depth, frame flush/FEC work, and LunarNX video callback
-time. It emits only two info records per ten seconds, so 20/30 Mbit hardware
-comparisons do not add per-packet SD-card logging pressure.
-The key-position diagnostic emits one sparse record only when an authenticated
-Takion packet changes the reconstructed high 32-bit epoch. It does not alter
-authentication or decryption and makes the roughly 4 GiB stream-position wrap
-visible during long-running hardware tests.
+The transport-diagnostics patch can aggregate Takion receive throughput,
+complete per-packet processing time, MAC failures, reorder drops/skips,
+allocation failures, video queue depth, frame flush/FEC work, and LunarNX video
+callback time. Release libraries compile all of that hot-path measurement out by
+default. Set `CHIAKI_TRANSPORT_DIAG=1` when invoking `build_in_docker.sh` to make
+a diagnostic SDK; that build emits only two aggregate info records per ten
+seconds.
+The same switch controls the key-position diagnostic, which emits one sparse
+record when an authenticated Takion packet changes the reconstructed high
+32-bit epoch. It does not alter authentication or decryption and makes the
+roughly 4 GiB stream-position wrap visible during long-running hardware tests.
 The fork's native libnx crypto backend is used directly.
 
 The pinned devkitA64 image does not include `protoc` or the Python protobuf

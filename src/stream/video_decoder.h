@@ -40,9 +40,11 @@ public:
     bool initialize(int width = 1280, int height = 720);
     void setVideoBackend(VideoBackend backend) { video_backend_ = backend; }
     void setVideoCodec(VideoCodec codec) { video_codec_ = codec; }
+    void setVideoPath(VideoPipelinePath path) { video_path_ = path; }
 
     /// Decode one complete Annex-B access unit.
-    bool decode(const uint8_t* data, size_t len, uint64_t timestamp);
+    bool decode(const uint8_t* data, size_t len, uint64_t timestamp,
+                const VideoAccessUnitInfo* inspected_access_unit = nullptr);
 
     void setCallback(FrameCallback cb);
     void setPerfStats(struct PerfStats* stats) { perf_ = stats; }
@@ -64,6 +66,7 @@ private:
     VideoBackend video_backend_ = VideoBackend::Software;
 #endif
     VideoCodec video_codec_ = VideoCodec::H264;
+    VideoPipelinePath video_path_ = VideoPipelinePath::Xbox;
     void* codec_ctx_ = nullptr;
     void* parser_ = nullptr;
     AVBufferRef* hw_device_ctx_ = nullptr;

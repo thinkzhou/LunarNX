@@ -26,6 +26,11 @@ def main() -> None:
     for locale in ("en-US", "ja-JP", "ko-KR", "zh-CN", "zh-TW"):
         require(f'{{"{locale}",' in settings,
                 f"game language selector must expose {locale}")
+    require('{"auto", ""}' in settings and
+            'preferred_game_language = "auto"' in settings_header and
+            "setGetSystemLanguage" in settings and
+            "resolvePreferredGameLanguage" in settings + main_activity,
+            "cloud game language must default to and resolve from the Switch system language")
     require("setPreferredGameLanguage" in main_activity,
             "saved language must be applied when the Xbox page opens")
     require("profile.locale = getPreferredGameLanguage()" in controller,

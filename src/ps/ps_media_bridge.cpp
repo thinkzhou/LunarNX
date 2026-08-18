@@ -37,7 +37,6 @@ bool PsMediaBridge::onVideoSample(uint8_t* data, size_t size, int32_t frames_los
     video_sample_bytes_ += size;
     if (frames_lost > 0) {
         video_lost_frames_ += static_cast<uint64_t>(frames_lost);
-        media_.requestVideoRecovery("ps video sample loss");
     }
 
     // Copy data - chiaki reuses the buffer after callback returns

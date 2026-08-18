@@ -69,11 +69,6 @@ bool PsStreamController::setPsnCredentials(std::string access_token,
     return true;
 }
 
-void PsStreamController::setInputSuppressed(bool suppressed) {
-    input_suppressed_ = suppressed;
-    if (suppressed && rumble_) rumble_->stop();
-}
-
 app::TouchpadFeedback PsStreamController::getTouchpadFeedback() const {
     std::lock_guard<std::mutex> lock(touchpad_feedback_mutex_);
     return touchpad_feedback_;
@@ -221,7 +216,7 @@ bool PsStreamController::startStream() {
     });
     bridge_ = std::make_unique<PsMediaBridge>(*media_, mock_replay ? 30 : fps_);
     bridge_->setRumbleForwarder([this](uint8_t left, uint8_t right) {
-        if (!rumble_ || input_suppressed_.load() ||
+        if (!rumble_ || !input_router_.gameHasInput() ||
             state_.load() != app::StreamState::Streaming) return;
         rumble_->setRumble(0,
             static_cast<float>(left) / 255.0f,
@@ -285,9 +280,11 @@ bool PsStreamController::startStream() {
     }
 
     if (!ok) {
-        if (cancel_requested_.load()) return false;
         last_error_ = mock_replay ? mock_session_->lastError()
                                   : session_->lastError();
+        if (mock_session_) mock_session_->stop();
+        else if (session_) session_->stop();
+        if (cancel_requested_.load()) return false;
         setState(app::StreamState::Error, last_error_);
         return false;
     }
@@ -300,11 +297,16 @@ bool PsStreamController::startStream() {
     // Now initialize the media pipeline (NVDEC, audio) while the session
     // thread already runs regist/request on the CTRL channel in parallel.
     stream::MediaPipelineOptions media_opts;
+    media_opts.video_path = stream::VideoPipelinePath::PlayStation;
     media_opts.video_codec = video_codec_;
     media_opts.hold_non_target_startup_frames = true;
     media_opts.video_backend = video_backend_;
+    media_opts.video_scheduling =
+        stream::VideoSchedulingMode::DirectLowLatency;
     if (!media_->initialize(width_, height_, &perf_, media_opts)) {
         last_error_ = "Failed to initialize media pipeline";
+        if (mock_session_) mock_session_->stop();
+        else if (session_) session_->stop();
         setState(app::StreamState::Error, last_error_);
         return false;
     }
@@ -508,7 +510,7 @@ void PsStreamController::update() {
     }
 
     auto state = gamepad_->read();
-    const bool input_suppressed = input_suppressed_.load();
+    const bool input_suppressed = !input_router_.gameHasInput();
     PsTouchpadState touchpad = touchpad_reader_
         ? touchpad_reader_->read(input_suppressed)
         : PsTouchpadState{};
@@ -554,9 +556,8 @@ void PsStreamController::update() {
     } else if (ps_button_release_pending_) {
         state = {};
         ps_button_release_pending_ = false;
-    } else if (input_suppressed) {
-        state = {};
     }
+    state = input_router_.route(state);
 
     const PsMotionState motion = motion_reader_
         ? motion_reader_->read(input_suppressed)

@@ -3,6 +3,7 @@
 #include "i18n.h"
 #include "qr_code.h"
 #include "qr_code_view.h"
+#include "grid_navigation.h"
 #include "ui_style.h"
 #include "../diagnostics.h"
 #include <algorithm>
@@ -12,11 +13,12 @@ namespace lunar::ui {
 PsRegistrationActivity::PsRegistrationActivity(
     std::shared_ptr<ps::PsManager> manager,
     const std::string& host_addr, int target,
-    std::string host_name)
+    std::string host_name, std::string console_key)
     : manager_(std::move(manager))
     , host_addr_(host_addr)
     , target_(target)
-    , host_name_(std::move(host_name)) {}
+    , host_name_(std::move(host_name))
+    , console_key_(std::move(console_key)) {}
 
 PsRegistrationActivity::~PsRegistrationActivity() {
     alive_->store(false);
@@ -29,7 +31,8 @@ brls::View* PsRegistrationActivity::createContentView() {
     auto* scroll = new brls::ScrollingFrame();
     scroll->setBackgroundColor(p.background);
     scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
-    scroll->registerAction("Cancel", brls::ControllerButton::BUTTON_B,
+    scroll->registerAction(brls::getStr("lunarnx/common/cancel"),
+        brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
             if (registering_->load()) {
                 manager_->cancelRegistration();
@@ -135,7 +138,7 @@ brls::View* PsRegistrationActivity::createContentView() {
     details->addView(status_);
     pairing_card->addView(details);
 
-    pairing_account_id_ = manager_->getPairingAccountId();
+    pairing_account_id_ = manager_->getPairingAccountId(console_key_);
     keypad_ = new brls::Box(brls::Axis::COLUMN);
     keypad_->setGrow(1.0f);
     keypad_->setHeight(420);
@@ -143,8 +146,11 @@ brls::View* PsRegistrationActivity::createContentView() {
     keypad_->setJustifyContent(brls::JustifyContent::CENTER);
 
     // Number pad (used when an Account ID is already available).
+    brls::Button* digit_buttons[10]{};
     static const char* kRows[] = {"123", "456", "789", " 0 "};
+    std::vector<std::vector<brls::View*>> navigation_rows;
     for (const auto* row : kRows) {
+        std::vector<brls::View*> digit_buttons;
         auto* row_box = new brls::Box(brls::Axis::ROW);
         row_box->setHeight(64);
         row_box->setJustifyContent(brls::JustifyContent::CENTER);
@@ -169,9 +175,12 @@ brls::View* PsRegistrationActivity::createContentView() {
                 onDigit(digit);
                 return true;
             });
+            digit_buttons[digit - '0'] = btn;
             row_box->addView(btn);
+            digit_buttons.push_back(btn);
         }
         keypad_->addView(row_box);
+        navigation_rows.push_back(std::move(digit_buttons));
     }
 
     // Action row
@@ -204,6 +213,7 @@ brls::View* PsRegistrationActivity::createContentView() {
     });
     action_row->addView(submit_btn);
     keypad_->addView(action_row);
+    navigation_rows.push_back({back_btn, submit_btn});
     auto* change_account = new brls::Button();
     change_account->setText(brls::getStr("lunarnx/ps/reg_change_account"));
     change_account->setWidth(240);
@@ -218,6 +228,55 @@ brls::View* PsRegistrationActivity::createContentView() {
         return true;
     });
     keypad_->addView(change_account);
+    navigation_rows.push_back({change_account});
+    wireVerticalGridNavigation(navigation_rows);
+    // The single 0 key is visually centered below 7/8/9. The generic policy
+    // clamps to the first column, so override its upward route to 8.
+    navigation_rows[3][0]->setCustomNavigationRoute(
+        brls::FocusDirection::UP, navigation_rows[2][1]);
+
+    // Borealis normally navigates nested boxes by tree order, which does not
+    // preserve the keypad column and can escape a row at its edges. Pin every
+    // direction to the visual keypad instead.
+    auto route = [](brls::View* from, brls::FocusDirection direction,
+                    brls::View* to) {
+        from->setCustomNavigationRoute(direction, to);
+    };
+    const int grid[3][3] = {{1, 2, 3}, {4, 5, 6}, {7, 8, 9}};
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+            auto* button = digit_buttons[grid[row][column]];
+            route(button, brls::FocusDirection::LEFT,
+                  digit_buttons[grid[row][column > 0 ? column - 1 : column]]);
+            route(button, brls::FocusDirection::RIGHT,
+                  digit_buttons[grid[row][column < 2 ? column + 1 : column]]);
+            route(button, brls::FocusDirection::UP,
+                  digit_buttons[grid[row > 0 ? row - 1 : row][column]]);
+            if (row < 2) {
+                route(button, brls::FocusDirection::DOWN,
+                      digit_buttons[grid[row + 1][column]]);
+            }
+        }
+    }
+    route(digit_buttons[7], brls::FocusDirection::DOWN, back_btn);
+    route(digit_buttons[8], brls::FocusDirection::DOWN, digit_buttons[0]);
+    route(digit_buttons[9], brls::FocusDirection::DOWN, submit_btn);
+    route(digit_buttons[0], brls::FocusDirection::UP, digit_buttons[8]);
+    route(digit_buttons[0], brls::FocusDirection::LEFT, back_btn);
+    route(digit_buttons[0], brls::FocusDirection::RIGHT, submit_btn);
+    route(digit_buttons[0], brls::FocusDirection::DOWN, change_account);
+    route(back_btn, brls::FocusDirection::UP, digit_buttons[7]);
+    route(back_btn, brls::FocusDirection::LEFT, back_btn);
+    route(back_btn, brls::FocusDirection::RIGHT, digit_buttons[0]);
+    route(back_btn, brls::FocusDirection::DOWN, change_account);
+    route(submit_btn, brls::FocusDirection::UP, digit_buttons[9]);
+    route(submit_btn, brls::FocusDirection::LEFT, digit_buttons[0]);
+    route(submit_btn, brls::FocusDirection::RIGHT, submit_btn);
+    route(submit_btn, brls::FocusDirection::DOWN, change_account);
+    route(change_account, brls::FocusDirection::UP, digit_buttons[0]);
+    route(change_account, brls::FocusDirection::LEFT, change_account);
+    route(change_account, brls::FocusDirection::RIGHT, change_account);
+    route(change_account, brls::FocusDirection::DOWN, change_account);
 
     phone_panel_ = new brls::Box(brls::Axis::COLUMN);
     phone_panel_->setGrow(1.0f);
@@ -344,6 +403,11 @@ void PsRegistrationActivity::onSubmitPin() {
     registering_->store(true);
     if (status_) status_->setText(brls::getStr("lunarnx/ps/reg_pairing"));
 
+    // The phone helper is no longer needed after it has delivered the Account
+    // ID and PIN. Join it before Chiaki creates its registration worker so the
+    // Switch thread limit cannot make chiaki_regist_start() fail spuriously.
+    phone_pairing_server_.stop();
+
     auto alive = alive_;
     auto* status_ptr = status_;
 
@@ -353,7 +417,8 @@ void PsRegistrationActivity::onSubmitPin() {
 
             if (result == ps::RegistrationResult::Success) {
                 if (account_id_changed_ &&
-                    !manager_->saveManualPairingAccountId(pairing_account_id_)) {
+                    !manager_->saveManualPairingAccountId(
+                        pairing_account_id_, console_key_)) {
                     diagnosticLog("ui-ps-pair", "paired but could not save local Account ID");
                 }
                 if (status_ptr) {

@@ -2,6 +2,7 @@
 
 #include "../input/gamepad_reader.h"
 #include "../input/rumble_controller.h"
+#include "../input/stream_input_router.h"
 #include "../input/xinput_encoder.h"
 #include "../stream/media_pipeline.h"
 #include "../stream/perf_stats.h"
@@ -29,7 +30,6 @@ public:
         std::function<void(const std::string&)> on_error;
         std::function<void(const std::string&)> on_session_id;
         std::function<bool()> external_cancel;
-        std::function<bool()> input_suppressed;
         std::function<bool()> consume_guide_button;
         std::function<bool()> refresh_tokens;
     };
@@ -41,6 +41,7 @@ public:
                       input::GamepadReader& gamepad,
                       input::XInputEncoder& xinput,
                       input::RumbleController& rumble,
+                      input::StreamInputRouter& input_router,
                       stream::PerfStats& perf);
     ~XboxStreamSession();
 
@@ -80,6 +81,7 @@ private:
     input::GamepadReader& gamepad_;
     input::XInputEncoder& xinput_;
     input::RumbleController& rumble_;
+    input::StreamInputRouter& input_router_;
     stream::PerfStats& perf_;
 
     std::atomic<bool> streaming_{false};

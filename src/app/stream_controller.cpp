@@ -218,7 +218,7 @@ void StreamController::signOut() {
         last_stream_error_.clear();
         session_id_.clear();
         streaming_ = false;
-        input_suppressed_ = false;
+        input_router_.setOwner(input::StreamInputOwner::Game);
         guide_button_requested_ = false;
     }
     std::remove(lunar::get_token_path());
@@ -802,7 +802,7 @@ void StreamController::cleanupStreamResources(bool set_disconnected) {
     {
         std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
         streaming_ = false;
-        input_suppressed_ = false;
+        input_router_.setOwner(input::StreamInputOwner::Game);
         guide_button_requested_ = false;
         session_id_.clear();
     }
@@ -926,10 +926,13 @@ bool StreamController::startStreamWithProfile(
     const StreamProfile& input_profile,
     const stream::MediaPipelineOptions& options) {
     StreamProfile profile = input_profile;
+    stream::MediaPipelineOptions xbox_options = options;
+    xbox_options.video_scheduling =
+        stream::VideoSchedulingMode::RealtimeQueued;
     {
         std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
         active_profile_ = input_profile;
-        active_media_options_ = options;
+        active_media_options_ = xbox_options;
         has_active_profile_ = true;
     }
     lunar::diagnosticLog(
@@ -949,7 +952,7 @@ bool StreamController::startStreamWithProfile(
     }
     const uint32_t generation = stream_generation_.fetch_add(1) + 1;
     cancel_requested_ = false;
-    input_suppressed_ = false;
+    input_router_.setOwner(input::StreamInputOwner::Game);
     guide_button_requested_ = false;
 
     cleanupStreamResources(false);
@@ -1058,14 +1061,12 @@ bool StreamController::startStreamWithProfile(
         *gamepad_,
         *xinput_,
         *rumble_,
+        input_router_,
         perf_);
 
     XboxStreamSession::RuntimeCallbacks callbacks;
     callbacks.external_cancel = [this, generation]() {
         return isStreamCancelled(generation);
-    };
-    callbacks.input_suppressed = [this]() {
-        return input_suppressed_.load();
     };
     callbacks.consume_guide_button = [this]() {
         return consumeGuideButtonRequest();
@@ -1126,7 +1127,7 @@ bool StreamController::startStreamWithProfile(
         return true;
     };
 
-    return stream_session_->start(profile, options, std::move(callbacks));
+    return stream_session_->start(profile, xbox_options, std::move(callbacks));
 }
 
 void StreamController::stopStream() {

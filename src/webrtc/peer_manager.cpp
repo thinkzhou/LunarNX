@@ -352,6 +352,8 @@ bool PeerManager::initialize() {
     slow_pump_count_ = 0;
     last_pump_phase_log_ = {};
     reliable_send_failed_ = false;
+    data_channel_failed_ = false;
+    consecutive_sctp_send_failures_ = 0;
     outbound_drop_events_ = 0;
     media_clock_start_ = std::chrono::steady_clock::now();
     video_clock_.reset();
@@ -668,6 +670,17 @@ int PeerManager::outboundPriority(OutboundType type) {
 bool PeerManager::selectOutboundCommand(OutboundCommand& command,
                                         bool allow_sctp) const {
     std::lock_guard<std::mutex> lock(outbound_mutex_);
+    if (allow_sctp && prefer_latest_input_once_) {
+        const auto latest_input = std::find_if(
+            outbound_commands_.begin(), outbound_commands_.end(),
+            [](const OutboundCommand& queued) {
+                return queued.type == OutboundType::InputLatest;
+            });
+        if (latest_input != outbound_commands_.end()) {
+            command = *latest_input;
+            return true;
+        }
+    }
     auto selected = outbound_commands_.end();
     int selected_priority = 6;
     for (auto it = outbound_commands_.begin();
@@ -797,12 +810,37 @@ bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
             [&command](const OutboundCommand& candidate) {
                 return candidate.id == command.id;
             });
+        if (command.type == OutboundType::InputLatest) {
+            prefer_latest_input_once_ = false;
+        }
         if (queued != outbound_commands_.end() && !keep_for_retry) {
             outbound_commands_.erase(queued);
-        } else if (queued != outbound_commands_.end() &&
-                   (command.type == OutboundType::Nack ||
-                    command.type == OutboundType::Pli)) {
-            queued->attempts++;
+        } else if (queued != outbound_commands_.end()) {
+            if (command.type == OutboundType::Nack ||
+                command.type == OutboundType::Pli) {
+                queued->attempts++;
+            } else if (transient && isReliableCommand(command.type)) {
+                // A reliable control write that temporarily backpressures must
+                // yield one SCTP send opportunity to the latest controller
+                // state, then resume reliable retries on the following pump.
+                prefer_latest_input_once_ = true;
+            }
+        }
+    }
+    if (isSctpCommand(command.type)) {
+        if (result >= 0) {
+            consecutive_sctp_send_failures_ = 0;
+        } else {
+            const uint32_t failures =
+                consecutive_sctp_send_failures_.fetch_add(1) + 1;
+            if (!transient || failures >= kMaxConsecutiveSctpSendFailures) {
+                if (!data_channel_failed_.exchange(true)) {
+                    lunar::dropDiagnosticLog(
+                        "webrtc-outbound",
+                        "data_channel_failed=1 transient=%d consecutive=%u result=%d",
+                        transient ? 1 : 0, failures, result);
+                }
+            }
         }
     }
     if (result >= 0) return false;
@@ -822,14 +860,16 @@ void PeerManager::clearOutboundCommands() {
     std::lock_guard<std::mutex> lock(outbound_mutex_);
     outbound_commands_.clear();
     next_outbound_command_id_ = 1;
+    prefer_latest_input_once_ = false;
 }
 
 bool PeerManager::isConnected() const {
-    return connected_;
+    return connected_ && !data_channel_failed_;
 }
 
 bool PeerManager::isDataChannelReady() const {
-    return pc_ && peer_connection_is_datachannel_connected(pc_);
+    return pc_ && !data_channel_failed_ &&
+           peer_connection_is_datachannel_connected(pc_);
 }
 
 void PeerManager::setMediaEnabled(bool enabled) {
@@ -857,6 +897,9 @@ PeerMediaStats PeerManager::getMediaStats() const {
     stats.video_h264_overflow_frames = video.overflow_frames;
     stats.video_h264_max_frame_bytes = video.max_frame_bytes;
     stats.video_rtp_highest_seq_ext = video.highest_sequence;
+    stats.video_jitter_estimate_ms = video.estimated_jitter_ms;
+    stats.video_jitter_hold_ms = video.adaptive_hold_ms;
+    stats.video_jitter_recovery_hold_ms = video.adaptive_recovery_hold_ms;
     // Recovery state drives Xbox PLI requests and must not depend on whether
     // diagnostic-only counters are compiled into the release build.
     stats.video_waiting_keyframe = video_jitter_.waitingForKeyframe();
@@ -930,17 +973,7 @@ void PeerManager::processEvents() {
         peer_connection_get_media_stats(pc_, &network_stats);
         if (network_stats.ice_rtt_ms > 0) {
             const uint64_t rtt_ms = network_stats.ice_rtt_ms;
-            const uint64_t hold_ms = std::max<uint64_t>(
-                VideoRtpJitterBuffer::kMinHoldMs,
-                std::min<uint64_t>(180,
-                                   rtt_ms * 2 + 20));
-            video_jitter_.setHoldMs(hold_ms);
             video_jitter_.setNetworkRttMs(rtt_ms);
-            const uint64_t recovery_hold_ms = std::max<uint64_t>(
-                VideoRtpJitterBuffer::kDefaultRecoveryHoldMs,
-                std::min<uint64_t>(VideoRtpJitterBuffer::kMaxRecoveryHoldMs,
-                                   rtt_ms + 150));
-            video_jitter_.setRecoveryHoldMs(recovery_hold_ms);
         }
 
         const auto pump_finished = std::chrono::steady_clock::now();
@@ -1032,6 +1065,8 @@ void PeerManager::disconnect() {
                          static_cast<void*>(pc_),
                          initialized_ ? "true" : "false");
     connected_ = false;
+    data_channel_failed_ = false;
+    consecutive_sctp_send_failures_ = 0;
     clearOutboundCommands();
     if (pc_) {
         lunar::diagnosticLog("webrtc", "disconnect close begin");

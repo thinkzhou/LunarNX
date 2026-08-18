@@ -22,8 +22,11 @@ def main():
             "PS session must select the requested Chiaki codec")
     require("AV_CODEC_ID_HEVC" in decoder and "AV_CODEC_ID_H264" in decoder,
             "shared decoder must initialize both H.264 and HEVC")
-    require("inspectVideoAccessUnit(video_codec_" in pipeline,
-            "queue recovery must detect random access using the active codec")
+    require("inspectVideoAccessUnit(video_codec_" in pipeline and
+            "video_path_ == VideoPipelinePath::Xbox" in pipeline,
+            "queue recovery must select Xbox or PS random-access detection")
+    require("VideoPipelinePath::PlayStation" in controller,
+            "PS media must explicitly select the PlayStation decoder path")
     require('"hevc_mp4toannexb"' in replay,
             "controller replay must convert HEVC MP4 packets to Annex-B")
     require("PS_MEDIA_REPLAY_CODEC" in fixture and "libx265" in fixture,

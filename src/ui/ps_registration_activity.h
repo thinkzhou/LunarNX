@@ -16,7 +16,7 @@ class PsRegistrationActivity : public brls::Activity {
 public:
     PsRegistrationActivity(std::shared_ptr<ps::PsManager> manager,
                            const std::string& host_addr, int target,
-                           std::string host_name);
+                           std::string host_name, std::string console_key);
     ~PsRegistrationActivity() override;
 
     brls::View* createContentView() override;
@@ -26,6 +26,7 @@ private:
     std::string host_addr_;
     int target_;
     std::string host_name_;
+    std::string console_key_;
     std::shared_ptr<std::atomic<bool>> alive_ =
         std::make_shared<std::atomic<bool>>(true);
     std::shared_ptr<std::atomic<bool>> registering_ =

@@ -9,6 +9,15 @@ tools/ps_media_replay/*.mp4
 *.swo
 *~
 
+# Local agent and design tooling
+.agents/
+.mission/
+.stitch/
+skills-lock.json
+
+# Private development build bridge deployment and publishing tools
+tools/dev_bridge/
+
 # macOS
 .DS_Store
 

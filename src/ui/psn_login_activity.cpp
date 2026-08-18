@@ -22,7 +22,8 @@ brls::View* PsnLoginActivity::createContentView() {
     auto* scroll = new brls::ScrollingFrame();
     scroll->setBackgroundColor(p.background);
     scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
-    scroll->registerAction("Cancel", brls::ControllerButton::BUTTON_B,
+    scroll->registerAction(brls::getStr("lunarnx/common/cancel"),
+        brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
             brls::Application::popActivity(brls::TransitionAnimation::NONE);
             return true;

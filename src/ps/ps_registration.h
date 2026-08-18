@@ -22,16 +22,18 @@ public:
     PsRegistration(const PsRegistration&) = delete;
     PsRegistration& operator=(const PsRegistration&) = delete;
 
-    bool start(const std::string& host, uint32_t pin, int target,
-               const std::string& psn_account_id,
-               ChiakiRegisteredHost* result_out, ResultCallback cb);
+    ChiakiErrorCode start(const std::string& host, uint32_t pin, int target,
+                          const std::string& psn_account_id,
+                          ChiakiRegisteredHost* result_out, ResultCallback cb);
     void stop();
 
 private:
     ChiakiLog* log_;
+    ChiakiLogSniffer log_sniffer_{};
     ChiakiRegist regist_{};
     std::atomic<bool> running_{false};
     std::atomic<bool> initialized_{false};
+    std::atomic<bool> log_sniffer_initialized_{false};
     ResultCallback callback_;
     ChiakiRegisteredHost* result_out_ = nullptr;
 

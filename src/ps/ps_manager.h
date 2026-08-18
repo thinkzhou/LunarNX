@@ -44,8 +44,9 @@ public:
     bool hasStoredPsnSession() const { return psn_auth_.hasStoredSession(); }
     std::string getPsnAccessToken() const { return psn_auth_.getAccessToken(); }
     std::string getPsnAccountId() const { return psn_auth_.getAccountId(); }
-    std::string getPairingAccountId() const;
-    bool saveManualPairingAccountId(const std::string& account_id);
+    std::string getPairingAccountId(const std::string& console_key = {}) const;
+    bool saveManualPairingAccountId(const std::string& account_id,
+                                    const std::string& console_key = {});
 
     // PSN device list (requires valid token)
     bool fetchPsnDevices(HostListCallback cb);
@@ -77,6 +78,9 @@ private:
     PsnAuthManager psn_auth_;
     std::unique_ptr<PsConsoleRepository> repository_;
     std::unique_ptr<PsRegistration> registration_;
+    std::atomic<uint64_t> registration_generation_{0};
+    std::shared_ptr<std::atomic<bool>> alive_ =
+        std::make_shared<std::atomic<bool>>(true);
     std::atomic<bool> discovering_{false};
 };
 

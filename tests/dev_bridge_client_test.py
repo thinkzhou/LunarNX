@@ -14,17 +14,27 @@ client_header = (ROOT / "src/app/dev_bridge_client.h").read_text()
 ui = (ROOT / "src/ui/dev_tools_activity.cpp").read_text()
 platform = (ROOT / "src/ui/platform_activity.cpp").read_text()
 makefile = (ROOT / "Makefile.switch").read_text()
-publisher = (ROOT / "tools/dev_bridge/publish_build.sh").read_text()
-pruner = (ROOT / "tools/dev_bridge/prune_builds.sh").read_text()
 
 require("/dev/versions.json" in client and "cJSON_ArrayForEach" in client,
         "development client must parse the version index")
+require("persistentEventLog(" in client and '"dev-index"' in client and
+        "cJSON_GetErrorPtr" in client and
+        "response.body.size()" in client and
+        "responsePreview" in client and
+        "responseHeader" in client,
+        "invalid version indexes must persist response diagnostics in release builds")
 require("25LL * 1024LL * 1024LL" in client,
         "updater must enforce the Workers KV object limit")
 require("mbedtls_sha256" in client and "build.sha256" in client,
         "downloaded NRO must be verified with SHA-256")
 require("CURLOPT_XFERINFOFUNCTION" in client and "ProgressCallback" in client_header,
         "streaming download must report progress")
+require("build.compressed_size" in ui and "build.compressed_download_url.empty()" in ui,
+        "gzip download progress must use the compressed transport size")
+require("showDownloadProgress(build.version)" in ui and
+        "progress_dialog_->setCancelable(false)" in ui and
+        "progress_fill_->setWidth" in ui,
+        "installing a build must show a non-dismissible modal download progress bar")
 require("kDownloadTimeoutSeconds = 30L * 60L" in client and
         "kDownloadLowSpeedBytesPerSecond = 512L" in client and
         "kDownloadLowSpeedSeconds = 3L * 60L" in client,
@@ -64,10 +74,5 @@ require("compressed_download_url" in client_header and
         'jsonString(item, "compressed_download_url")' in client and
         "CURLOPT_ACCEPT_ENCODING" in client,
         "new clients must prefer and transparently decode gzip builds")
-require("compressed_download_url" in publisher and ".nro.gz" in publisher and
-        "/usr/bin/gzip" in publisher,
-        "publishing must upload a gzip transport artifact alongside the raw NRO")
-require('\\\\.nro(\\\\.gz)?$' in pruner and 'sha=${sha%.gz}' in pruner,
-        "build pruning must remove orphaned raw and gzip artifacts")
 
 print("Development bridge client regression checks passed")

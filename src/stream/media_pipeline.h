@@ -42,6 +42,14 @@ enum class VideoBackend {
     Software,
 };
 
+// Selects where complete encoded access units are decoded. The transport
+// remains responsible for choosing a policy; decoder and renderer components
+// stay protocol-neutral.
+enum class VideoSchedulingMode {
+    RealtimeQueued,
+    DirectLowLatency,
+};
+
 inline const char* videoBackendName(VideoBackend backend) {
     switch (backend) {
         case VideoBackend::HardwareZeroCopy: return "hardware_zero_copy";
@@ -70,12 +78,14 @@ inline bool usesZeroCopyRender(VideoBackend backend) {
 }
 
 struct MediaPipelineOptions {
+    VideoPipelinePath video_path = VideoPipelinePath::Xbox;
     VideoCodec video_codec = VideoCodec::H264;
     VideoBackend video_backend = VideoBackend::HardwareZeroCopy;
     PostProcessMode post_process_mode = PostProcessMode::Off;
     bool dithering_enabled = false;
     float dithering_strength = 3.0f;
     bool hold_non_target_startup_frames = false;
+    VideoSchedulingMode video_scheduling = VideoSchedulingMode::RealtimeQueued;
 };
 
 /// Owns the media half of a streaming session.
@@ -124,6 +134,7 @@ private:
         uint32_t generation = 0;
         uint32_t recovery_epoch = 0;
         bool contains_idr = false;
+        VideoAccessUnitInfo access_unit;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         std::chrono::steady_clock::time_point enqueued_at;
         uint64_t queue_age_us = 0;
@@ -137,6 +148,7 @@ private:
     };
 
     bool enqueueVideoPacket(const uint8_t* data, size_t len, uint64_t timestamp);
+    bool decodeVideoDirect(const uint8_t* data, size_t len, uint64_t timestamp);
     bool enqueueAudioPacket(const uint8_t* data,
                             size_t len,
                             uint16_t sequence,
@@ -161,6 +173,9 @@ private:
     void handleAudioFrame(const AudioFrame& frame, uint32_t generation);
     bool submitDecodedAudio(const AudioFrame& frame, uint32_t generation);
     void shutdownUnlocked();
+    PerfStats* perfStats() const {
+        return perf_.load(std::memory_order_relaxed);
+    }
 
     StreamBackendProvider& provider_;
     std::unique_ptr<VideoDecoder> video_decoder_;
@@ -169,11 +184,17 @@ private:
     std::unique_ptr<AudioPlayer> audio_player_;
     std::unique_ptr<AVSync> av_sync_;
 
-    PerfStats* perf_ = nullptr;
+    std::atomic<PerfStats*> perf_{nullptr};
     VideoCodec video_codec_ = VideoCodec::H264;
+    VideoPipelinePath video_path_ = VideoPipelinePath::Xbox;
+    std::atomic<VideoSchedulingMode> video_scheduling_{
+        VideoSchedulingMode::RealtimeQueued};
     std::atomic<bool> running_{false};
     std::atomic<uint32_t> generation_{0};
-    mutable std::mutex lifecycle_mutex_;
+    // DirectLowLatency decoding invokes the frame callback synchronously. A
+    // recursive mutex lets that callback enter handleVideoFrame while keeping
+    // shutdown from destroying decoder/renderer state underneath the callback.
+    mutable std::recursive_mutex lifecycle_mutex_;
     std::mutex video_ready_callback_mutex_;
     std::function<void()> video_ready_callback_;
     std::atomic<bool> video_ready_notified_{false};

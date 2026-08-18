@@ -2,11 +2,13 @@
 #include "dev_tools_activity.h"
 
 #include "ui_style.h"
+#include "grid_navigation.h"
 #include "../app/runtime_context.h"
 #include "../diagnostics.h"
 #include "../platform/network_worker.h"
 
 #include <switch.h>
+#include <algorithm>
 
 namespace lunar::ui {
 
@@ -103,10 +105,14 @@ void DevToolsActivity::refreshVersions() {
 
 void DevToolsActivity::renderVersions(const std::vector<app::DevBuild>& builds) {
     if (!versions_) return;
+    if (versions_->isChildFocused() && refresh_) {
+        brls::Application::giveFocus(refresh_);
+    }
     versions_->clearViews();
     if (status_) status_->setText(brls::getStr("lunarnx/dev/available") + ": " +
         std::to_string(builds.size()));
     const auto& p = uiPalette();
+    std::vector<brls::View*> install_buttons;
     for (const auto& build : builds) {
         auto* card = makeUiCard(brls::Axis::ROW);
         card->setHeight(92);
@@ -137,7 +143,12 @@ void DevToolsActivity::renderVersions(const std::vector<app::DevBuild>& builds) 
         });
         card->addView(install);
         versions_->addView(card);
+        install_buttons.push_back(install);
     }
+
+    std::vector<std::vector<brls::View*>> navigation_rows{{refresh_, upload_}};
+    for (auto* install : install_buttons) navigation_rows.push_back({install});
+    wireVerticalGridNavigation(navigation_rows);
 }
 
 void DevToolsActivity::confirmInstall(app::DevBuild build) {
@@ -154,12 +165,14 @@ void DevToolsActivity::installBuild(app::DevBuild build) {
     if (busy_.exchange(true)) return;
     setBusy(true);
     if (status_) status_->setText(brls::getStr("lunarnx/dev/installing") + " " + build.version);
+    showDownloadProgress(build.version);
     auto alive = alive_;
     const std::string target = app::runningNroPath();
     if (!platform::startNetworkWorker("dev-install", [this, alive, build = std::move(build), target]() {
         app::DevBridgeClient client;
         std::string error;
-        const long long manifest_size = build.size;
+        const long long manifest_size = !build.compressed_download_url.empty() &&
+            build.compressed_size > 0 ? build.compressed_size : build.size;
         const std::string version = build.version;
         const bool ok = client.install(build, target, error,
             [this, alive, manifest_size, version](long long downloaded, long long total) {
@@ -167,28 +180,89 @@ void DevToolsActivity::installBuild(app::DevBuild build) {
                 const int percent = expected > 0
                     ? static_cast<int>((downloaded * 100) / expected) : 0;
                 brls::sync([this, alive, downloaded, expected, percent, version]() {
-                    if (!alive->load() || !status_) return;
-                    status_->setText(brls::getStr("lunarnx/dev/installing") + " " + version +
-                        " — " + std::to_string(percent) + "% (" +
-                        std::to_string(downloaded / (1024 * 1024)) + "/" +
-                        std::to_string(expected / (1024 * 1024)) + " MiB)");
+                    if (!alive->load()) return;
+                    updateDownloadProgress(downloaded, expected, percent, version);
                 });
             });
         brls::sync([this, alive, ok, error = std::move(error), target]() {
             if (!alive->load()) return;
             if (!ok) {
+                closeDownloadProgress();
                 setBusy(false);
                 if (status_) status_->setText(brls::getStr("lunarnx/dev/install_failed") + ": " + error);
                 return;
             }
+            updateDownloadProgress(1, 1, 100, brls::getStr("lunarnx/dev/restarting"));
             if (status_) status_->setText(brls::getStr("lunarnx/dev/restarting"));
             envSetNextLoad(target.c_str(), target.c_str());
             brls::Application::quit();
         });
     })) {
+        closeDownloadProgress();
         setBusy(false);
         if (status_) status_->setText(brls::getStr("lunarnx/dev/worker_failed"));
     }
+}
+
+void DevToolsActivity::showDownloadProgress(const std::string& version) {
+    if (progress_dialog_) return;
+    const auto& p = uiPalette();
+    auto* content = new brls::Box(brls::Axis::COLUMN);
+    content->setWidth(520);
+    content->setPadding(30, 34, 30, 34);
+    content->setAlignItems(brls::AlignItems::CENTER);
+
+    auto* spinner = new brls::ProgressSpinner(brls::ProgressSpinnerSize::LARGE);
+    spinner->setMarginBottom(18);
+    content->addView(spinner);
+
+    auto* title = new brls::Label();
+    title->setText(brls::getStr("lunarnx/dev/installing") + " " + version);
+    title->setFontSize(20);
+    title->setTextColor(p.text);
+    title->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    title->setMarginBottom(14);
+    content->addView(title);
+
+    auto* track = new brls::Box();
+    track->setWidth(440);
+    track->setHeight(12);
+    track->setBackgroundColor(p.surface_alt);
+    track->setAlignItems(brls::AlignItems::FLEX_START);
+    progress_fill_ = new brls::Box();
+    progress_fill_->setWidth(2);
+    progress_fill_->setHeight(12);
+    progress_fill_->setBackgroundColor(p.accent);
+    track->addView(progress_fill_);
+    content->addView(track);
+
+    progress_label_ = makeMutedLabel("0%", 14);
+    progress_label_->setMarginTop(12);
+    progress_label_->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    content->addView(progress_label_);
+
+    progress_dialog_ = new brls::Dialog(content);
+    progress_dialog_->setCancelable(false);
+    progress_dialog_->open();
+}
+
+void DevToolsActivity::updateDownloadProgress(long long downloaded, long long expected,
+                                              int percent, const std::string& version) {
+    const int safe_percent = std::clamp(percent, 0, 100);
+    if (progress_fill_) progress_fill_->setWidth(std::max(2, safe_percent * 440 / 100));
+    const std::string detail = std::to_string(safe_percent) + "% (" +
+        std::to_string(downloaded / (1024 * 1024)) + "/" +
+        std::to_string(expected / (1024 * 1024)) + " MiB)";
+    if (progress_label_) progress_label_->setText(detail);
+    if (status_) status_->setText(brls::getStr("lunarnx/dev/installing") + " " +
+        version + " — " + detail);
+}
+
+void DevToolsActivity::closeDownloadProgress() {
+    if (progress_dialog_) progress_dialog_->close();
+    progress_dialog_ = nullptr;
+    progress_label_ = nullptr;
+    progress_fill_ = nullptr;
 }
 
 void DevToolsActivity::uploadLog() {

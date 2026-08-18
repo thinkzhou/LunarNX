@@ -40,6 +40,9 @@ struct PeerMediaStats : PeerConnectionMediaStats {
     uint32_t video_jitter_buffered_packets = 0;
     uint32_t video_jitter_buffered_frames = 0;
     uint32_t video_jitter_buffered_bytes = 0;
+    uint32_t video_jitter_estimate_ms = 0;
+    uint32_t video_jitter_hold_ms = 0;
+    uint32_t video_jitter_recovery_hold_ms = 0;
     bool video_waiting_keyframe = true;
 };
 
@@ -130,6 +133,7 @@ private:
     static constexpr size_t kMaxOutboundCommands = 64;
     static constexpr size_t kMaxOutboundPayloadBytes = 1024;
     static constexpr uint8_t kMaxPliSendAttempts = 3;
+    static constexpr uint32_t kMaxConsecutiveSctpSendFailures = 64;
     PeerConnection* pc_ = nullptr;
     PeerCallbacks callbacks_;
     std::atomic<bool> connected_{false};
@@ -159,7 +163,10 @@ private:
     mutable std::mutex outbound_mutex_;
     std::deque<OutboundCommand> outbound_commands_;
     uint64_t next_outbound_command_id_ = 1;
+    bool prefer_latest_input_once_ = false;
     std::atomic<bool> reliable_send_failed_{false};
+    std::atomic<bool> data_channel_failed_{false};
+    std::atomic<uint32_t> consecutive_sctp_send_failures_{0};
     std::atomic<uint32_t> outbound_drop_events_{0};
 
     bool enqueueData(OutboundType type,

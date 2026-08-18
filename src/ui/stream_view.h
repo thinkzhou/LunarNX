@@ -47,7 +47,7 @@ private:
 
     void runLoop();
     void setQuickMenuVisible(bool visible);
-    void updateInputSuppression();
+    void updateInputOwnership();
     void updatePerformanceVisibility();
     void handleQuickDisconnect();
     void stopAndReturn();

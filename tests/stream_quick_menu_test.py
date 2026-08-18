@@ -24,8 +24,9 @@ def main():
     require("menu_handle_" not in view and "menu_handle_" not in header,
             "stream view must not permanently cover video with a menu handle")
     require("quick_menu_->setVisibility" in view and
-            "quick_menu_visible_ || child_activity_visible_ || exit_pending_.load()" in view,
-            "open menu must be visible and suppress game input")
+            "input::StreamInputOwner::Ui" in view and
+            "input::StreamInputOwner::Game" in view,
+            "open menu must visibly transfer input ownership away from the game")
     require("giveFocus(content_root_)" in view,
             "closing the menu must restore focus to the stream view")
     require("BUTTON_RSB" not in view and "toggle_stats" not in view,
@@ -48,10 +49,10 @@ def main():
     require("menu_resume" in view and "setQuickMenuVisible(false)" in view,
             "stream menu must expose an explicit Resume action")
     require("child_activity_visible_ = true" in view and
-            "quick_menu_visible_ || child_activity_visible_ || exit_pending_.load()" in view and
+            "updateInputOwnership()" in view and
             "void StreamView::onResume()" in view and
             "child_activity_visible_ = false" in view,
-            "settings and mapping activities must keep remote input suppressed until resume")
+            "settings and mapping activities must keep UI input ownership until resume")
     require("kQuickDisconnectConfirmWindow" in view and
             "menu_disconnect_confirm" in view and
             "std::atomic<bool> disconnect_armed_" in header,

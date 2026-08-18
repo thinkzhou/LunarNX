@@ -143,8 +143,21 @@ void PsConsoleRepository::clearPsnCache() {
 bool PsConsoleRepository::startDiscovery(HostListCallback cb) {
     if (discovering_.load()) return true;
 
+    std::vector<std::string> manual_hosts;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& credential : credentials_) {
+            if (credential.last_known_addr.empty() ||
+                std::find(manual_hosts.begin(), manual_hosts.end(),
+                          credential.last_known_addr) != manual_hosts.end()) {
+                continue;
+            }
+            manual_hosts.push_back(credential.last_known_addr);
+        }
+    }
+
     discovery_ = std::make_unique<PsDiscovery>(log_);
-    bool ok = discovery_->start([this, cb = std::move(cb)](
+    bool ok = discovery_->start(manual_hosts, [this, cb = std::move(cb)](
         std::vector<DiscoveredConsole> discovered) {
         std::vector<PsConsole> consoles;
         consoles.reserve(discovered.size());
@@ -158,9 +171,9 @@ bool PsConsoleRepository::startDiscovery(HostListCallback cb) {
                 c.stable_id = "lan:" + raw.host_id;
             }
             c.nickname = raw.host_name.empty() ? raw.host_addr : raw.host_name;
-            c.target = raw.console_type == PsConsoleType::PS5
-                ? CHIAKI_TARGET_PS5_1 : CHIAKI_TARGET_PS4_10;
-            c.local = PsLocalEndpoint{raw.host_addr, raw.host_request_port, raw.state};
+            c.target = raw.target;
+            c.local = PsLocalEndpoint{
+                raw.host_addr, raw.host_request_port, raw.state, true};
             consoles.push_back(std::move(c));
         }
 
@@ -271,11 +284,23 @@ std::vector<PsConsole> PsConsoleRepository::getUnifiedList() const {
             console.nickname = credential.nickname;
             console.target = credential.target;
             console.credentials = credential;
+            // Keep the historical address visible, but do not claim it is an
+            // online route until discovery (or pairing in this process)
+            // verifies it.
+            if (!credential.last_known_addr.empty()) {
+                console.local = PsLocalEndpoint{
+                    credential.last_known_addr, 0, PsConsoleState::Unknown, false};
+            }
             unified.push_back(std::move(console));
         } else {
             it->credentials = credential;
+            it->target = credential.target;
             if (it->nickname.empty()) it->nickname = credential.nickname;
             if (it->psn_duid.empty()) it->psn_duid = credential.psn_duid;
+            if (!it->local.has_value() && !credential.last_known_addr.empty()) {
+                it->local = PsLocalEndpoint{
+                    credential.last_known_addr, 0, PsConsoleState::Unknown, false};
+            }
         }
     }
 
@@ -304,6 +329,35 @@ void PsConsoleRepository::setRegisteredCredentials(
     std::vector<RegisteredCredential> credentials) {
     std::lock_guard<std::mutex> lock(mutex_);
     credentials_ = std::move(credentials);
+}
+
+void PsConsoleRepository::notePairedLocalHost(
+    const RegisteredCredential& credential) {
+    if (credential.last_known_addr.empty()) return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = std::find_if(lan_consoles_.begin(), lan_consoles_.end(),
+        [&](const PsConsole& console) {
+            return !console.server_mac.empty() &&
+                   console.server_mac == credential.server_mac;
+        });
+    if (it == lan_consoles_.end()) {
+        PsConsole console;
+        console.stable_id = "mac:" + credential.server_mac;
+        console.server_mac = credential.server_mac;
+        console.nickname = credential.nickname.empty()
+            ? credential.last_known_addr : credential.nickname;
+        console.target = credential.target;
+        console.credentials = credential;
+        console.local = PsLocalEndpoint{
+            credential.last_known_addr, 0, PsConsoleState::Ready, true};
+        lan_consoles_.push_back(std::move(console));
+        return;
+    }
+
+    it->target = credential.target;
+    it->credentials = credential;
+    it->local = PsLocalEndpoint{
+        credential.last_known_addr, 0, PsConsoleState::Ready, true};
 }
 
 void PsConsoleRepository::mergeAndNotify(HostListCallback cb) {

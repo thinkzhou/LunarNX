@@ -9,6 +9,7 @@ stage=/tmp/lunarnx-chiaki-switch-stage
 tools_dir=/tmp/lunarnx-chiaki-tools
 expected_commit=1597a48514e5d9e67168ca40e6fa40c0171cd379
 chiaki_recv_opt="${CHIAKI_RECV_OPT:-1}"
+chiaki_transport_diag="${CHIAKI_TRANSPORT_DIAG:-0}"
 build_jobs="${BUILD_JOBS:-$(nproc)}"
 
 export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
@@ -19,6 +20,10 @@ export LUNARNX_CHIAKI_PBGEN="$project_root/tools/chiaki_switch/pbgen"
 case "$chiaki_recv_opt" in
     0|1) ;;
     *) echo "CHIAKI_RECV_OPT must be 0 or 1" >&2; exit 2 ;;
+esac
+case "$chiaki_transport_diag" in
+    0|1) ;;
+    *) echo "CHIAKI_TRANSPORT_DIAG must be 0 or 1" >&2; exit 2 ;;
 esac
 
 actual_commit="$(git -C "$checkout" rev-parse HEAD)"
@@ -46,7 +51,16 @@ for patch in \
     lunarnx-chiaki-transport-diagnostics.patch \
     lunarnx-chiaki-key-position-diagnostics.patch
 do
-    git -C "$src" apply "$project_root/tools/chiaki_switch/$patch"
+    case "$patch" in
+        lunarnx-chiaki-transport-diagnostics.patch|\
+        lunarnx-chiaki-key-position-diagnostics.patch)
+            git -C "$src" apply --recount \
+                "$project_root/tools/chiaki_switch/$patch"
+            ;;
+        *)
+            git -C "$src" apply "$project_root/tools/chiaki_switch/$patch"
+            ;;
+    esac
 done
 
 cp "$project_root/tools/chiaki_switch/protoc_from_pbgen.sh" "$tools_dir/protoc"
@@ -58,7 +72,7 @@ cmake -S "$src" -B "$build" \
     -DCMAKE_TOOLCHAIN_FILE="$src/cmake/switch.cmake" \
     -DPKG_CONFIG_EXECUTABLE="$tools_dir/pkg-config" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-    -DCMAKE_C_FLAGS="-I$project_root/lib/switch/include -include $project_root/lib/switch/include/curl/curl.h -DLUNARNX_CHIAKI_RECV_OPT=$chiaki_recv_opt" \
+    -DCMAKE_C_FLAGS="-I$project_root/lib/switch/include -include $project_root/lib/switch/include/curl/curl.h -DLUNARNX_CHIAKI_RECV_OPT=$chiaki_recv_opt -DLUNARNX_CHIAKI_TRANSPORT_DIAG=$chiaki_transport_diag" \
     -DNSWITCH=TRUE \
     -DCHIAKI_ENABLE_TESTS=OFF \
     -DCHIAKI_ENABLE_CLI=OFF \

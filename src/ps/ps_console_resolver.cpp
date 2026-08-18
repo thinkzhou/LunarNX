@@ -1,4 +1,4 @@
-#ifdef __SWITCH__
+#if defined(__SWITCH__) || defined(LUNARNX_DESKTOP_TEST)
 
 #include "ps_console_resolver.h"
 
@@ -8,7 +8,7 @@ ResolvedRoute PsConsoleResolver::resolve(const PsConsole& console, bool has_psn_
     ResolvedRoute route;
 
     // 1. If fresh LAN result exists, prefer local
-    if (console.local.has_value()) {
+    if (console.local.has_value() && console.local->verified) {
         if (console.local->state == PsConsoleState::Ready) {
             route.type = ResolvedRouteType::Local;
             route.host_addr = console.local->ip;
@@ -32,7 +32,8 @@ ResolvedRoute PsConsoleResolver::resolve(const PsConsole& console, bool has_psn_
 
     // 3. No route available
     route.type = ResolvedRouteType::None;
-    if (!console.local.has_value() && !console.remote.has_value()) {
+    if ((!console.local.has_value() || !console.local->verified) &&
+        !console.remote.has_value()) {
         route.error = "Console not available - not found on LAN or PSN";
     } else if (console.remote.has_value() && !console.remote->remoteplay_enabled) {
         route.error = "Remote play not enabled on this console";

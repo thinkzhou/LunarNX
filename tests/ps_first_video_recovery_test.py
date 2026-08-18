@@ -28,9 +28,10 @@ require("last_recovery_request" in controller and
 require("video_monitor_thread_" in controller_header and
         "stopVideoMonitor();" in controller,
         "PS first-frame monitor must have explicit lifecycle cleanup")
-require("media_.requestVideoRecovery(\"ps video sample loss\")" in bridge and
+require("media_.requestVideoRecovery(\"ps video sample loss\")" not in bridge and
         "1s video samples=" in bridge,
-        "Chiaki video loss must trigger recovery and compact bridge statistics")
+        "successful Chiaki samples must not duplicate FEC recovery requests, "
+        "while compact bridge statistics remain available")
 require("noisy != NoisyLogKind::None) return" in adapter and
         "diagnosticLogMutex()" in adapter and
         "CHIAKI_LOG_DEBUG" not in adapter.split("log.level_mask =", 1)[1],

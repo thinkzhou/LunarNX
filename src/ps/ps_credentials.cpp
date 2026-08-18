@@ -1,4 +1,4 @@
-#ifdef __SWITCH__
+#if defined(__SWITCH__) || defined(LUNARNX_DESKTOP_TEST)
 
 #include "ps_credentials.h"
 #include <algorithm>
@@ -68,6 +68,57 @@ bool validCredentialKeys(const RegisteredCredential& cred) {
     for (uint8_t byte : cred.rp_regist_key) regist_nonzero |= byte != 0;
     for (uint8_t byte : cred.rp_key) rp_nonzero |= byte != 0;
     return regist_nonzero && rp_nonzero;
+}
+
+bool saveHosts(const std::vector<RegisteredCredential>& hosts,
+               const std::string& path) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "version", 2);
+    cJSON* array = cJSON_AddArrayToObject(root, "registered_hosts");
+    for (const auto& cred : hosts) {
+        cJSON* item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "server_mac", cred.server_mac.c_str());
+        cJSON_AddStringToObject(item, "nickname", cred.nickname.c_str());
+        cJSON_AddStringToObject(item, "last_known_addr", cred.last_known_addr.c_str());
+        if (!cred.psn_duid.empty()) {
+            cJSON_AddStringToObject(item, "psn_duid", cred.psn_duid.c_str());
+        }
+        cJSON_AddNumberToObject(item, "target", cred.target);
+        cJSON_AddItemToObject(item, "rp_regist_key",
+                              encodeHex(cred.rp_regist_key, sizeof(cred.rp_regist_key)));
+        cJSON_AddNumberToObject(item, "rp_key_type", cred.rp_key_type);
+        cJSON_AddItemToObject(item, "rp_key",
+                              encodeHex(cred.rp_key, sizeof(cred.rp_key)));
+        if (!cred.console_login_pin.empty()) {
+            cJSON_AddStringToObject(item, "console_login_pin",
+                                    cred.console_login_pin.c_str());
+        }
+        cJSON_AddItemToArray(array, item);
+    }
+
+    char* json = cJSON_Print(root);
+    cJSON_Delete(root);
+    if (!json) return false;
+
+    std::string temp_path = path + ".tmp";
+    FILE* file = std::fopen(temp_path.c_str(), "w");
+    if (!file) {
+        std::free(json);
+        return false;
+    }
+    bool ok = std::fputs(json, file) >= 0;
+    ok = std::fflush(file) == 0 && ok;
+    ok = std::fclose(file) == 0 && ok;
+    std::free(json);
+    if (!ok) {
+        std::remove(temp_path.c_str());
+        return false;
+    }
+    if (std::rename(temp_path.c_str(), path.c_str()) != 0) {
+        std::remove(temp_path.c_str());
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -143,53 +194,7 @@ bool PsCredentials::save(const std::string& path) const {
         hosts = hosts_;
     }
 
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "version", 2);
-    cJSON* array = cJSON_AddArrayToObject(root, "registered_hosts");
-    for (const auto& cred : hosts) {
-        cJSON* item = cJSON_CreateObject();
-        cJSON_AddStringToObject(item, "server_mac", cred.server_mac.c_str());
-        cJSON_AddStringToObject(item, "nickname", cred.nickname.c_str());
-        cJSON_AddStringToObject(item, "last_known_addr", cred.last_known_addr.c_str());
-        if (!cred.psn_duid.empty()) {
-            cJSON_AddStringToObject(item, "psn_duid", cred.psn_duid.c_str());
-        }
-        cJSON_AddNumberToObject(item, "target", cred.target);
-        cJSON_AddItemToObject(item, "rp_regist_key",
-                              encodeHex(cred.rp_regist_key, sizeof(cred.rp_regist_key)));
-        cJSON_AddNumberToObject(item, "rp_key_type", cred.rp_key_type);
-        cJSON_AddItemToObject(item, "rp_key",
-                              encodeHex(cred.rp_key, sizeof(cred.rp_key)));
-        if (!cred.console_login_pin.empty()) {
-            cJSON_AddStringToObject(item, "console_login_pin",
-                                    cred.console_login_pin.c_str());
-        }
-        cJSON_AddItemToArray(array, item);
-    }
-
-    char* json = cJSON_Print(root);
-    cJSON_Delete(root);
-    if (!json) return false;
-
-    std::string temp_path = path + ".tmp";
-    FILE* file = std::fopen(temp_path.c_str(), "w");
-    if (!file) {
-        std::free(json);
-        return false;
-    }
-    bool ok = std::fputs(json, file) >= 0;
-    ok = std::fflush(file) == 0 && ok;
-    ok = std::fclose(file) == 0 && ok;
-    std::free(json);
-    if (!ok) {
-        std::remove(temp_path.c_str());
-        return false;
-    }
-    if (std::rename(temp_path.c_str(), path.c_str()) != 0) {
-        std::remove(temp_path.c_str());
-        return false;
-    }
-    return true;
+    return saveHosts(hosts, path);
 }
 
 void PsCredentials::clear() {
@@ -213,6 +218,22 @@ std::optional<RegisteredCredential> PsCredentials::findByMac(
         });
     if (it == hosts_.end()) return std::nullopt;
     return *it;
+}
+
+bool PsCredentials::addAndSave(const RegisteredCredential& cred,
+                               const std::string& path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto updated = hosts_;
+    auto it = std::find_if(updated.begin(), updated.end(),
+        [&](const RegisteredCredential& value) {
+            return value.server_mac == cred.server_mac;
+        });
+    if (it == updated.end()) updated.push_back(cred);
+    else *it = cred;
+
+    if (!saveHosts(updated, path)) return false;
+    hosts_ = std::move(updated);
+    return true;
 }
 
 void PsCredentials::add(const RegisteredCredential& cred) {

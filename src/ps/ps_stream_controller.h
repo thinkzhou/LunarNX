@@ -51,7 +51,7 @@ public:
     app::StreamPlatform getStreamPlatform() const override {
         return app::StreamPlatform::PlayStation;
     }
-    void setInputSuppressed(bool suppressed) override;
+    input::StreamInputRouter& inputRouter() override { return input_router_; }
     void requestPlatformHomeButton() override { ps_button_requested_ = true; }
     bool resumeAfterForeground() override;
     app::TouchpadFeedback getTouchpadFeedback() const override;
@@ -114,7 +114,7 @@ private:
     // serialize with each other: a slow GPU present would otherwise delay
     // controller packets.
     mutable std::shared_mutex stream_operation_mutex_;
-    std::atomic<bool> input_suppressed_{false};
+    input::StreamInputRouter input_router_;
     mutable std::mutex touchpad_feedback_mutex_;
     app::TouchpadFeedback touchpad_feedback_{};
     std::atomic<bool> rumble_enabled_{true};

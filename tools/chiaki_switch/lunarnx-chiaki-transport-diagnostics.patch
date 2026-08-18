@@ -1,8 +1,8 @@
 diff --git a/lib/include/chiaki/takion.h b/lib/include/chiaki/takion.h
-index 0bbd7345..bcb21111 100644
+index 0bbd7345..24cbd1a2 100644
 --- a/lib/include/chiaki/takion.h
 +++ b/lib/include/chiaki/takion.h
-@@ -181,6 +181,19 @@ typedef struct chiaki_takion_t
+@@ -181,6 +181,23 @@ typedef struct chiaki_takion_t
  
  	ChiakiKeyState key_state;
  
@@ -11,6 +11,10 @@ index 0bbd7345..bcb21111 100644
 +	int64_t diag_window_start_us;
 +	uint64_t diag_recv_packets;
 +	uint64_t diag_recv_bytes;
++	int64_t diag_last_recv_us;
++	uint64_t diag_recv_gap_max_us;
++	uint64_t diag_recv_wait_max_us;
++	uint64_t diag_recv_timeouts;
 +	uint64_t diag_process_total_us;
 +	uint64_t diag_process_max_us;
 +	uint64_t diag_mac_failures;
@@ -44,14 +48,29 @@ index a340b5d5..5545a47f 100644
  } ChiakiVideoReceiver;
  
 diff --git a/lib/src/takion.c b/lib/src/takion.c
-index 767cb3a6..52e5bd32 100644
+index 767cb3a6..54a8d5a1 100644
 --- a/lib/src/takion.c
 +++ b/lib/src/takion.c
+@@ -10,11 +10,14 @@
+ #include <fcntl.h>
+ #include <stdbool.h>
+ #include <stdio.h>
+ #include <errno.h>
+ #include <string.h>
+ #include <assert.h>
++#ifndef LUNARNX_CHIAKI_TRANSPORT_DIAG
++#define LUNARNX_CHIAKI_TRANSPORT_DIAG 0
++#endif
+ 
+ #include <takion.pb.h>
+ #include <pb_decode.h>
 @@ -962,6 +962,7 @@ static void takion_data_drop(uint64_t seq_num, void *elem_user, void *cb_user)
  static void takion_av_drop(uint64_t seq_num, void *elem_user, void *cb_user)
  {
  	ChiakiTakion *takion = cb_user;
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +	takion->diag_av_drops++;
++#endif
  	CHIAKI_LOGD(takion->log, "Takion dropping AV packet with index %#llx", (unsigned long long)seq_num);
  	TakionAVPacketEntry *entry = elem_user;
  	free(entry->buf);
@@ -63,17 +82,24 @@ index 767cb3a6..52e5bd32 100644
 -		queue->count -= skipped;
 +			queue->begin = queue->seq_num_add(queue->begin, skipped);
 +			queue->count -= skipped;
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +			takion->diag_reorder_skipped += skipped;
++#endif
  		*head_wait_start_us = 0;
  		made_progress = true;
  	}
-@@ -1100,6 +1102,16 @@ static void *takion_thread_func(void *user)
+@@ -1100,6 +1102,20 @@ static void *takion_thread_func(void *user)
  	takion->video_queue_initialized = false;
  	takion->video_queue_head_wait_start_us = 0;
  	takion->video_queue_head_wait_seq_num = 0;
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +	takion->diag_window_start_us = chiaki_time_now_monotonic_us();
 +	takion->diag_recv_packets = 0;
 +	takion->diag_recv_bytes = 0;
++	takion->diag_last_recv_us = 0;
++	takion->diag_recv_gap_max_us = 0;
++	takion->diag_recv_wait_max_us = 0;
++	takion->diag_recv_timeouts = 0;
 +	takion->diag_process_total_us = 0;
 +	takion->diag_process_max_us = 0;
 +	takion->diag_mac_failures = 0;
@@ -81,32 +107,62 @@ index 767cb3a6..52e5bd32 100644
 +	takion->diag_reorder_skipped = 0;
 +	takion->diag_alloc_failures = 0;
 +	takion->diag_video_queue_high = 0;
++#endif
  
  	uint32_t seq_num_remote_initial;
  	if(takion_handshake(takion, &seq_num_remote_initial) != CHIAKI_ERR_SUCCESS)
-@@ -1168,7 +1180,10 @@ static void *takion_thread_func(void *user)
+@@ -1168,7 +1184,10 @@ static void *takion_thread_func(void *user)
  		size_t received_size = 1500;
  		uint8_t *buf = malloc(received_size); // TODO: no malloc?
  		if(!buf)
 +		{
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +			takion->diag_alloc_failures++;
++#endif
  			break;
 +		}
  		uint64_t recv_timeout_ms = takion_av_queues_next_timeout_ms(takion);
  		if(recv_timeout_ms == 0)
  		{
-@@ -1187,6 +1202,7 @@ static void *takion_thread_func(void *user)
+@@ -1176,17 +1195,31 @@ static void *takion_thread_func(void *user)
+ 			takion_av_queues_flush_with_timeout(takion);
+ 			continue;
+ 		}
++		int64_t recv_start_us = chiaki_time_now_monotonic_us();
+ 		ChiakiErrorCode err = takion_recv(takion, buf, &received_size, recv_timeout_ms);
++		int64_t recv_end_us = chiaki_time_now_monotonic_us();
++		uint64_t recv_wait_us = (uint64_t)(recv_end_us - recv_start_us);
++		if(recv_wait_us > takion->diag_recv_wait_max_us)
++			takion->diag_recv_wait_max_us = recv_wait_us;
+ 		if(err != CHIAKI_ERR_SUCCESS)
+ 		{
+ 			free(buf);
+ 			if(err == CHIAKI_ERR_TIMEOUT)
+ 			{
++				takion->diag_recv_timeouts++;
+ 				takion_av_queues_flush_with_timeout(takion);
+ 				continue;
  			}
  			break;
  		}
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
++		if(takion->diag_last_recv_us != 0)
++		{
++			uint64_t recv_gap_us = (uint64_t)(recv_end_us - takion->diag_last_recv_us);
++			if(recv_gap_us > takion->diag_recv_gap_max_us)
++				takion->diag_recv_gap_max_us = recv_gap_us;
++		}
++		takion->diag_last_recv_us = recv_end_us;
 +		int64_t process_start_us = chiaki_time_now_monotonic_us();
++#endif
  #if LUNARNX_CHIAKI_RECV_OPT
  		// The packet handler owns the allocation. Keeping its 1500-byte capacity
  		// avoids a second allocator operation on every received UDP datagram.
-@@ -1200,6 +1216,36 @@ static void *takion_thread_func(void *user)
+@@ -1200,6 +1233,41 @@ static void *takion_thread_func(void *user)
  		}
  		takion_handle_packet(takion, resized_buf, received_size);
  #endif
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +		uint64_t process_us = (uint64_t)(chiaki_time_now_monotonic_us() - process_start_us);
 +		takion->diag_recv_packets++;
 +		takion->diag_recv_bytes += received_size;
@@ -119,11 +175,14 @@ index 767cb3a6..52e5bd32 100644
 +			uint64_t process_avg_us = takion->diag_recv_packets
 +				? takion->diag_process_total_us / takion->diag_recv_packets : 0;
 +			CHIAKI_LOGI(takion->log,
-+				"LUNARNX-PSRX packets=%llu bytes=%llu proc_avg_us=%llu proc_max_us=%llu mac_fail=%llu av_drop=%llu reorder_skip=%llu alloc_fail=%llu video_q_high=%llu video_q_now=%llu",
++				"LUNARNX-PSRX packets=%llu bytes=%llu proc_avg_us=%llu proc_max_us=%llu recv_gap_max_us=%llu recv_wait_max_us=%llu recv_timeout=%llu mac_fail=%llu av_drop=%llu reorder_skip=%llu alloc_fail=%llu video_q_high=%llu video_q_now=%llu",
 +				(unsigned long long)takion->diag_recv_packets,
 +				(unsigned long long)takion->diag_recv_bytes,
 +				(unsigned long long)process_avg_us,
 +				(unsigned long long)takion->diag_process_max_us,
++				(unsigned long long)takion->diag_recv_gap_max_us,
++				(unsigned long long)takion->diag_recv_wait_max_us,
++				(unsigned long long)takion->diag_recv_timeouts,
 +				(unsigned long long)takion->diag_mac_failures,
 +				(unsigned long long)takion->diag_av_drops,
 +				(unsigned long long)takion->diag_reorder_skipped,
@@ -133,55 +192,70 @@ index 767cb3a6..52e5bd32 100644
 +			takion->diag_window_start_us = diag_now_us;
 +			takion->diag_recv_packets = takion->diag_recv_bytes = 0;
 +			takion->diag_process_total_us = takion->diag_process_max_us = 0;
++			takion->diag_recv_gap_max_us = takion->diag_recv_wait_max_us = 0;
++			takion->diag_recv_timeouts = 0;
 +			takion->diag_mac_failures = takion->diag_av_drops = 0;
 +			takion->diag_reorder_skipped = takion->diag_alloc_failures = 0;
 +			takion->diag_video_queue_high = 0;
 +		}
++#endif
  	}
  
  	chiaki_takion_send_buffer_fini(&takion->send_buffer);
-@@ -1278,6 +1324,7 @@ static ChiakiErrorCode takion_handle_packet_mac(ChiakiTakion *takion, uint8_t ba
+@@ -1278,6 +1346,7 @@ static ChiakiErrorCode takion_handle_packet_mac(ChiakiTakion *takion, uint8_t ba
  
  	if(memcmp(mac_expected, mac, sizeof(mac)) != 0)
  	{
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +		takion->diag_mac_failures++;
++#endif
  		CHIAKI_LOGE(takion->log, "Takion packet MAC mismatch for packet type %#x with key_pos %#llx", base_type, key_pos);
  		chiaki_log_hexdump(takion->log, CHIAKI_LOG_ERROR, buf, buf_size);
  		CHIAKI_LOGV(takion->log, "GMAC:");
-@@ -1742,6 +1789,7 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
+@@ -1742,6 +1811,7 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
  	TakionAVPacketEntry *entry = malloc(sizeof(TakionAVPacketEntry));
  	if(!entry)
  	{
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +		takion->diag_alloc_failures++;
++#endif
  		free(buf);
  		return;
  	}
-@@ -1751,6 +1799,9 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
+@@ -1751,6 +1821,9 @@ static void takion_handle_packet_av(ChiakiTakion *takion, uint8_t base_type, uin
  	entry->packet = packet;
  
  	chiaki_reorder_queue_push(queue, packet.packet_index, entry);
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +	uint64_t queue_count = chiaki_reorder_queue_count(queue);
 +	if(queue_count > takion->diag_video_queue_high)
 +		takion->diag_video_queue_high = queue_count;
++#endif
  	takion_av_queue_flush_with_timeout(takion, queue, head_wait, head_wait_seq_num);
  }
  
 diff --git a/lib/src/videoreceiver.c b/lib/src/videoreceiver.c
-index ed3cc76f..d6fe52b9 100644
+index ed3cc76f..df15e47e 100644
 --- a/lib/src/videoreceiver.c
 +++ b/lib/src/videoreceiver.c
 @@ -1,6 +1,7 @@
  // SPDX-License-Identifier: LicenseRef-AGPL-3.0-only-OpenSSL
  
  #include <chiaki/videoreceiver.h>
++#ifndef LUNARNX_CHIAKI_TRANSPORT_DIAG
++#define LUNARNX_CHIAKI_TRANSPORT_DIAG 0
++#endif
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +#include <chiaki/time.h>
++#endif
  #include "../include/chiaki/session.h"
  
  #include <string.h>
-@@ -54,6 +54,16 @@ CHIAKI_EXPORT void chiaki_video_receiver_init(ChiakiVideoReceiver *video_receive
+@@ -54,6 +55,16 @@ CHIAKI_EXPORT void chiaki_video_receiver_init(ChiakiVideoReceiver *video_receive
  	chiaki_bitstream_init(&video_receiver->bitstream, video_receiver->log, video_receiver->session->connect_info.video_profile.codec);
  	chiaki_mutex_init(&video_receiver->waiting_for_idr_mutex, false);
  	video_receiver->waiting_for_idr = false;
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +	video_receiver->diag_window_start_us = chiaki_time_now_monotonic_us();
 +	video_receiver->diag_flush_count = 0;
 +	video_receiver->diag_flush_total_us = 0;
@@ -192,17 +266,21 @@ index ed3cc76f..d6fe52b9 100644
 +	video_receiver->diag_callback_total_us = 0;
 +	video_receiver->diag_callback_max_us = 0;
 +	video_receiver->diag_callback_failure = 0;
++#endif
  	chiaki_mutex_init(&video_receiver->frames_lost_mutex, false);
  }
  
-@@ -190,9 +200,19 @@ CHIAKI_EXPORT void chiaki_video_receiver_av_packet(ChiakiVideoReceiver *video_re
+@@ -190,9 +201,19 @@ CHIAKI_EXPORT void chiaki_video_receiver_av_packet(ChiakiVideoReceiver *video_re
  
  static ChiakiErrorCode chiaki_video_receiver_flush_frame(ChiakiVideoReceiver *video_receiver)
  {
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +	int64_t flush_start_us = chiaki_time_now_monotonic_us();
++#endif
  	uint8_t *frame;
  	size_t frame_size;
  	ChiakiFrameProcessorFlushResult flush_result = chiaki_frame_processor_flush(&video_receiver->frame_processor, &frame, &frame_size);
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +	uint64_t flush_us = (uint64_t)(chiaki_time_now_monotonic_us() - flush_start_us);
 +	video_receiver->diag_flush_count++;
 +	video_receiver->diag_flush_total_us += flush_us;
@@ -212,15 +290,19 @@ index ed3cc76f..d6fe52b9 100644
 +		video_receiver->diag_fec_success++;
 +	else if(flush_result == CHIAKI_FRAME_PROCESSOR_FLUSH_RESULT_FEC_FAILED)
 +		video_receiver->diag_fec_failure++;
++#endif
  
  	if(flush_result == CHIAKI_FRAME_PROCESSOR_FLUSH_RESULT_FAILED
  		|| flush_result == CHIAKI_FRAME_PROCESSOR_FLUSH_RESULT_FEC_FAILED)
-@@ -294,7 +314,15 @@ static ChiakiErrorCode chiaki_video_receiver_flush_frame(ChiakiVideoReceiver *vi
+@@ -294,7 +315,15 @@ static ChiakiErrorCode chiaki_video_receiver_flush_frame(ChiakiVideoReceiver *vi
  
  	if(succ && video_receiver->session->video_sample_cb)
  	{
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +		int64_t callback_start_us = chiaki_time_now_monotonic_us();
++#endif
  		bool cb_succ = video_receiver->session->video_sample_cb(frame, frame_size, video_receiver->frames_lost, recovered, video_receiver->session->video_sample_cb_user);
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +		uint64_t callback_us = (uint64_t)(chiaki_time_now_monotonic_us() - callback_start_us);
 +		video_receiver->diag_callback_count++;
 +		video_receiver->diag_callback_total_us += callback_us;
@@ -228,13 +310,15 @@ index ed3cc76f..d6fe52b9 100644
 +			video_receiver->diag_callback_max_us = callback_us;
 +		if(!cb_succ)
 +			video_receiver->diag_callback_failure++;
++#endif
  		chiaki_mutex_lock(&video_receiver->frames_lost_mutex);
  		video_receiver->frames_lost = 0;
  		chiaki_mutex_unlock(&video_receiver->frames_lost_mutex);
-@@ -315,5 +343,32 @@ static ChiakiErrorCode chiaki_video_receiver_flush_frame(ChiakiVideoReceiver *vi
+@@ -315,5 +344,32 @@ static ChiakiErrorCode chiaki_video_receiver_flush_frame(ChiakiVideoReceiver *vi
  	if(succ)
  		video_receiver->frame_index_prev_complete = video_receiver->frame_index_cur;
  
++#if LUNARNX_CHIAKI_TRANSPORT_DIAG
 +	int64_t diag_now_us = chiaki_time_now_monotonic_us();
 +	if(diag_now_us - video_receiver->diag_window_start_us >= 10000000)
 +	{
@@ -261,6 +345,7 @@ index ed3cc76f..d6fe52b9 100644
 +		video_receiver->diag_callback_count = video_receiver->diag_callback_total_us = 0;
 +		video_receiver->diag_callback_max_us = video_receiver->diag_callback_failure = 0;
 +	}
++#endif
 +
  	return CHIAKI_ERR_SUCCESS;
  }

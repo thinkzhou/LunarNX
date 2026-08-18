@@ -59,7 +59,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
 
     uint32_t worker_generation = 0;
     {
-        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
         lunar::diagnosticLog("media", "initialize begin width=%d height=%d codec=%s",
                              width,
                              height,
@@ -68,8 +68,11 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
 
         const uint32_t generation = generation_.fetch_add(1) + 1;
         video_ready_notified_ = false;
-        perf_ = perf;
+        perf_.store(perf, std::memory_order_release);
         video_codec_ = options.video_codec;
+        video_path_ = options.video_path;
+        video_scheduling_.store(options.video_scheduling,
+                                std::memory_order_release);
 
         try {
             lunar::diagnosticLog("media", "create components begin backend=%s",
@@ -116,7 +119,8 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
 
         video_decoder_->setVideoBackend(options.video_backend);
         video_decoder_->setVideoCodec(options.video_codec);
-        video_decoder_->setPerfStats(perf_);
+        video_decoder_->setVideoPath(options.video_path);
+        video_decoder_->setPerfStats(perf);
         lunar::diagnosticLog("media", "video decoder init begin");
         if (!video_decoder_->initialize(width, height)) {
             lunar::diagnosticLog("media", "video decoder init failed");
@@ -130,7 +134,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         lunar::diagnosticLog("media", "video decoder callback set generation=%u",
                              generation);
 
-        audio_decoder_->setPerfStats(perf_);
+        audio_decoder_->setPerfStats(perf);
         lunar::diagnosticLog("media", "audio decoder init begin");
         if (!audio_decoder_->initialize()) {
             lunar::diagnosticLog("media", "audio decoder init failed");
@@ -144,7 +148,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         lunar::diagnosticLog("media", "audio decoder callback set generation=%u",
                              generation);
 
-        audio_player_->setPerfStats(perf_);
+        audio_player_->setPerfStats(perf);
         lunar::diagnosticLog("media", "audio player init begin");
         if (!audio_player_->initialize(48000, 2)) {
             lunar::diagnosticLog("media", "audio player init failed");
@@ -161,7 +165,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
                              videoBackendName(renderer_backend),
                              videoBackendName(options.video_backend));
         video_renderer_->setVideoBackend(renderer_backend);
-        video_renderer_->setPerfStats(perf_);
+        video_renderer_->setPerfStats(perf);
         video_renderer_->setPostProcessMode(options.post_process_mode);
         video_renderer_->setDitheringEnabled(options.dithering_enabled,
                                              options.dithering_strength);
@@ -185,7 +189,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
 
     if (startWorkers(worker_generation)) return true;
 
-    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
     generation_.fetch_add(1);
     shutdownUnlocked();
     return false;
@@ -196,7 +200,7 @@ void MediaPipeline::shutdown() {
     running_ = false;
     stopWorkers();
     lunar::diagnosticLog("media", "shutdown after worker stop");
-    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
     generation_.fetch_add(1);
     shutdownUnlocked();
     lunar::diagnosticLog("media", "shutdown done");
@@ -241,13 +245,39 @@ void MediaPipeline::shutdownUnlocked() {
     audio_decoder_.reset();
     audio_player_.reset();
     av_sync_.reset();
-    perf_ = nullptr;
+    perf_.store(nullptr, std::memory_order_release);
     lunar::diagnosticLog("media", "shutdown reset components done");
 }
 
 bool MediaPipeline::decodeVideoPacket(const uint8_t* data, size_t len,
                                       uint64_t timestamp) {
+    if (video_scheduling_.load(std::memory_order_acquire) ==
+        VideoSchedulingMode::DirectLowLatency) {
+        return decodeVideoDirect(data, len, timestamp);
+    }
     return enqueueVideoPacket(data, len, timestamp);
+}
+
+bool MediaPipeline::decodeVideoDirect(const uint8_t* data,
+                                      size_t len,
+                                      uint64_t timestamp) {
+    if (!data || len == 0 || len > kMaxVideoQueueBytes) return false;
+
+    bool decoded = false;
+    bool reset = true;
+    {
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
+        if (!running_.load() || !video_decoder_) return false;
+        decoded = video_decoder_->decode(data, len, timestamp);
+        if (!decoded) reset = resetVideoDecoderForKeyframe();
+    }
+    if (!decoded) {
+        lunar::diagnosticLog("media",
+                             "direct video decoder recovery reset=%s",
+                             reset ? "true" : "false");
+        requestVideoRecovery("direct video decoder error");
+    }
+    return decoded;
 }
 
 bool MediaPipeline::decodeAudioPacket(const uint8_t* data, size_t len,
@@ -328,9 +358,10 @@ void MediaPipeline::beginHardVideoRecovery(const char* reason,
             dropped_bytes,
             started ? "true" : "already_pending");
     }
-    if (started && dropped_packets > 0 && perf_) {
-        perf_->recordVideoQueueDrops(static_cast<uint32_t>(dropped_packets));
-        perf_->logVideoDropDiagnostic(
+    auto* perf = perfStats();
+    if (started && dropped_packets > 0 && perf) {
+        perf->recordVideoQueueDrops(static_cast<uint32_t>(dropped_packets));
+        perf->logVideoDropDiagnostic(
             "recovery_epoch",
             reason ? reason : "hard_video_recovery",
             0,
@@ -349,8 +380,10 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
     QueuedVideoPacket packet;
     packet.timestamp = timestamp;
     packet.generation = generation_.load();
-    packet.contains_idr = inspectVideoAccessUnit(video_codec_, data, len)
-        .has_random_access;
+    packet.access_unit = video_path_ == VideoPipelinePath::Xbox
+        ? inspectXboxH264AccessUnit(data, len)
+        : inspectVideoAccessUnit(video_codec_, data, len);
+    packet.contains_idr = packet.access_unit.has_random_access;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     packet.enqueued_at = std::chrono::steady_clock::now();
 #endif
@@ -379,10 +412,10 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
                 true,
                 recovery_dropped_packets,
                 recovery_dropped_bytes);
-            if (perf_) {
-                perf_->recordVideoQueueDrops(
+            if (auto* perf = perfStats()) {
+                perf->recordVideoQueueDrops(
                     static_cast<uint32_t>(recovery_dropped_packets));
-                perf_->logVideoDropDiagnostic(
+                perf->logVideoDropDiagnostic(
                     "queue_overflow",
                     "encoded_video_queue_limit",
                     0,
@@ -423,16 +456,17 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
 
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
 void MediaPipeline::recordVideoQueueLocked() {
-    if (!perf_) return;
+    auto* perf = perfStats();
+    if (!perf) return;
     uint32_t oldest_age_ms = 0;
     if (!video_queue_.empty()) {
         const auto age = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - video_queue_.front().enqueued_at).count();
         if (age > 0) oldest_age_ms = static_cast<uint32_t>(age);
     }
-    perf_->recordVideoQueue(static_cast<uint32_t>(video_queue_.size()),
-                            queued_video_bytes_,
-                            oldest_age_ms);
+    perf->recordVideoQueue(static_cast<uint32_t>(video_queue_.size()),
+                           queued_video_bytes_,
+                           oldest_age_ms);
 }
 #endif
 
@@ -441,9 +475,10 @@ bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,
                                        uint16_t sequence,
                                        uint64_t timestamp) {
     if (!running_ || !data || len == 0) return false;
+    auto* perf = perfStats();
     if (len > kMaxAudioQueueBytes) {
         lunar::diagnosticLog("media", "audio packet too large len=%zu", len);
-        if (perf_) perf_->recordAudioDrop();
+        if (perf) perf->recordAudioDrop();
         return false;
     }
 
@@ -455,7 +490,7 @@ bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,
         packet.data.assign(data, data + len);
     } catch (...) {
         lunar::diagnosticLog("media", "audio queue alloc failed len=%zu", len);
-        if (perf_) perf_->recordAudioDrop();
+        if (perf) perf->recordAudioDrop();
         return false;
     }
 
@@ -467,7 +502,7 @@ bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,
                 queued_audio_bytes_ + packet.data.size() > kMaxAudioQueueBytes)) {
             queued_audio_bytes_ -= audio_queue_.front().data.size();
             audio_queue_.pop_front();
-            if (perf_) perf_->recordAudioDrop();
+            if (perf) perf->recordAudioDrop();
             if (shouldLogMediaQueue()) {
                 lunar::diagnosticLog("media",
                                      "audio queue drop packets=%zu bytes=%zu",
@@ -483,12 +518,13 @@ bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,
 }
 
 bool MediaPipeline::playDecodedAudio(const AudioFrame& frame) {
+    auto* perf = perfStats();
     if (!running_.load() || frame.sample_rate != 48000 || frame.channels != 2 ||
         frame.sample_count == 0 || frame.pcm_data.empty() ||
         frame.sample_count > SIZE_MAX / (2 * sizeof(int16_t)) ||
         frame.pcm_data.size() != frame.sample_count * 2 * sizeof(int16_t) ||
         frame.pcm_data.size() > kMaxAudioQueueBytes) {
-        if (perf_) perf_->recordAudioDrop();
+        if (perf) perf->recordAudioDrop();
         return false;
     }
 
@@ -497,7 +533,7 @@ bool MediaPipeline::playDecodedAudio(const AudioFrame& frame) {
     try {
         queued.frame = frame;
     } catch (...) {
-        if (perf_) perf_->recordAudioDrop();
+        if (perf) perf->recordAudioDrop();
         return false;
     }
 
@@ -511,11 +547,11 @@ bool MediaPipeline::playDecodedAudio(const AudioFrame& frame) {
             queued_decoded_audio_bytes_ -=
                 decoded_audio_queue_.front().frame.pcm_data.size();
             decoded_audio_queue_.pop_front();
-            if (perf_) perf_->recordAudioDrop();
+            if (perf) perf->recordAudioDrop();
         }
         if (queued_decoded_audio_bytes_ + queued.frame.pcm_data.size() >
             kMaxAudioQueueBytes) {
-            if (perf_) perf_->recordAudioDrop();
+            if (perf) perf->recordAudioDrop();
             return false;
         }
         queued_decoded_audio_bytes_ += queued.frame.pcm_data.size();
@@ -527,15 +563,17 @@ bool MediaPipeline::playDecodedAudio(const AudioFrame& frame) {
 
 void MediaPipeline::recordIncomingVideoSample(size_t bytes, uint64_t pts_ns,
                                                uint32_t frames_lost) {
-    if (!perf_) return;
-    perf_->recordVideoPacket(bytes, pts_ns);
-    perf_->recordVideoNetworkBytes(bytes);
-    perf_->recordPackets(1, frames_lost);
+    auto* perf = perfStats();
+    if (!perf) return;
+    perf->recordVideoPacket(bytes, pts_ns);
+    perf->recordVideoNetworkBytes(bytes);
+    perf->recordPackets(1, frames_lost);
 }
 
 void MediaPipeline::recordIncomingAudioPacket() {
-    if (!perf_) return;
-    perf_->recordAudioPacket();
+    auto* perf = perfStats();
+    if (!perf) return;
+    perf->recordAudioPacket();
 }
 
 bool MediaPipeline::startWorkers(uint32_t generation) {
@@ -742,7 +780,7 @@ void MediaPipeline::audioWorkerLoop() {
             if (!audio_decoder_ || !isGenerationActive(audio_worker_generation_)) break;
             if (action.type == AudioReorderAction::Type::Missing) {
                 if (last_decoded_audio_end_ns_ == 0) {
-                    if (perf_) perf_->recordAudioDrop();
+                    if (auto* perf = perfStats()) perf->recordAudioDrop();
                     continue;
                 }
                 audio_decoder_->decodeMissing(last_decoded_audio_end_ns_);
@@ -763,10 +801,13 @@ void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet) {
         packet.recovery_epoch != video_recovery_epoch_.load()) {
         return;
     }
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    auto* perf = perfStats();
+#endif
     if (video_waiting_for_keyframe_.load() && !packet.contains_idr) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
-        if (perf_) {
-            perf_->logVideoDropDiagnostic(
+        if (perf) {
+            perf->logVideoDropDiagnostic(
                 "recovery_epoch",
                 "waiting_for_idr",
                 0,
@@ -778,22 +819,23 @@ void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet) {
         return;
     }
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
-    if (perf_) {
-        perf_->recordVideoAccessUnit(packet.data.size(),
-                                     packet.timestamp,
-                                     packet.queue_age_us,
-                                     false);
+    if (perf) {
+        perf->recordVideoAccessUnit(packet.data.size(),
+                                    packet.timestamp,
+                                    packet.queue_age_us,
+                                    false);
     }
 #endif
     if (video_decoder_) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
-        const uint32_t diagnostic_events_before = perf_
-            ? perf_->dropDiagnosticEventCount()
+        const uint32_t diagnostic_events_before = perf
+            ? perf->dropDiagnosticEventCount()
             : 0;
 #endif
         const bool decoded = video_decoder_->decode(packet.data.data(),
                                                     packet.data.size(),
-                                                    packet.timestamp);
+                                                    packet.timestamp,
+                                                    &packet.access_unit);
         if (decoded && packet.contains_idr) {
             std::lock_guard<std::mutex> lock(video_queue_mutex_);
             if (packet.recovery_epoch == video_recovery_epoch_.load()) {
@@ -802,9 +844,9 @@ void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet) {
             }
         } else if (!decoded) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
-            if (perf_ &&
-                perf_->dropDiagnosticEventCount() == diagnostic_events_before) {
-                perf_->logVideoDropDiagnostic(
+            if (perf &&
+                perf->dropDiagnosticEventCount() == diagnostic_events_before) {
+                perf->logVideoDropDiagnostic(
                     "decode_recovery",
                     "decoder_rejected_access_unit",
                     0,
@@ -824,6 +866,7 @@ bool MediaPipeline::isGenerationActive(uint32_t generation) const {
 
 void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
                                      uint32_t generation) {
+    auto* perf = perfStats();
     const uint64_t probe_frame_index =
         g_cloud_1080_render_frames.fetch_add(1) + 1;
     if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
@@ -839,19 +882,19 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
     }
     int64_t delay_ns = 0;
     {
-        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
         if (!isGenerationActive(generation) || !av_sync_ || !video_renderer_) return;
 
         av_sync_->updateVideoPts(frame.timestamp);
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         const auto timing = av_sync_->getVideoTiming(frame.timestamp);
         delay_ns = timing.clamped_delay_ns;
-        if (perf_) {
-            perf_->recordVideoTiming(timing.raw_delay_ns,
-                                     timing.clamped_delay_ns,
-                                     timing.audio_age_ms,
-                                     timing.master_pts_ns,
-                                     timing.using_audio_master);
+        if (perf) {
+            perf->recordVideoTiming(timing.raw_delay_ns,
+                                    timing.clamped_delay_ns,
+                                    timing.audio_age_ms,
+                                    timing.master_pts_ns,
+                                    timing.using_audio_master);
         }
 #else
         delay_ns = av_sync_->getVideoDelayNs(frame.timestamp);
@@ -860,16 +903,16 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
 
     const auto action = videoSyncAction(delay_ns);
     if (action == VideoSyncAction::Drop) {
-        if (perf_) {
-            perf_->recordVideoSyncDrop();
-            perf_->logVideoDropDiagnostic("av_sync",
-                                          "video_late_policy_drop",
-                                          0,
-                                          0,
-                                          frame.timestamp,
-                                          0,
-                                          frame.width,
-                                          frame.height);
+        if (perf) {
+            perf->recordVideoSyncDrop();
+            perf->logVideoDropDiagnostic("av_sync",
+                                         "video_late_policy_drop",
+                                         0,
+                                         0,
+                                         frame.timestamp,
+                                         0,
+                                         frame.width,
+                                         frame.height);
         }
         if (g_video_sync_logs.fetch_add(1) < kVideoSyncLogLimit) {
             lunar::diagnosticLog("media", "video sync drop lag_ns=%lld",
@@ -892,7 +935,7 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
     }
 
     {
-        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
         if (!isGenerationActive(generation) || !video_renderer_) return;
         const bool rendered = video_renderer_->render(frame);
         if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
@@ -902,7 +945,7 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
                 static_cast<unsigned long long>(probe_frame_index),
                 rendered ? 1 : 0);
         }
-        if (rendered && perf_) perf_->recordFrame();
+        if (rendered && perf) perf->recordFrame();
         if (rendered && !video_ready_notified_.exchange(true)) {
             std::lock_guard<std::mutex> lock(video_ready_callback_mutex_);
             if (video_ready_callback_) video_ready_callback_();
@@ -932,7 +975,7 @@ bool MediaPipeline::submitDecodedAudio(const AudioFrame& frame,
                                        uint32_t generation) {
     if (!isGenerationActive(generation) || !audio_player_ || !av_sync_) return false;
     if (!audio_player_->play(frame)) return false;
-    if (perf_) perf_->recordAudioFrame();
+    if (auto* perf = perfStats()) perf->recordAudioFrame();
     const uint64_t playback_ts = estimateAudioPlaybackTimestamp(
         frame.timestamp, frame.sample_count, frame.sample_rate,
         audio_player_->queuedSampleCount());
@@ -941,7 +984,7 @@ bool MediaPipeline::submitDecodedAudio(const AudioFrame& frame,
 }
 
 void MediaPipeline::presentVideoFrame() {
-    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
     if (running_.load() && video_renderer_) {
         video_renderer_->present();
     }

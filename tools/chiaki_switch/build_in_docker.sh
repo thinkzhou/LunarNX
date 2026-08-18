@@ -7,6 +7,7 @@ docker_platform="${DOCKER_PLATFORM:-linux/amd64}"
 
 docker run --rm --platform "$docker_platform" \
     -e CHIAKI_RECV_OPT="${CHIAKI_RECV_OPT:-1}" \
+    -e CHIAKI_TRANSPORT_DIAG="${CHIAKI_TRANSPORT_DIAG:-0}" \
     -e BUILD_JOBS="${BUILD_JOBS:-}" \
     -v "$project_root:/work" -w /work \
     "$docker_image" \

@@ -137,6 +137,11 @@ bool VideoDecoder::initialize(int width, int height) {
     parameter_sets_pending_ = false;
     wait_log_count_ = 0;
     error_log_count_ = 0;
+    if (video_path_ == VideoPipelinePath::Xbox &&
+        video_codec_ != VideoCodec::H264) {
+        lunar::diagnosticLog("video", "Xbox decoder path only supports H.264");
+        return false;
+    }
     const AVCodecID codec_id = video_codec_ == VideoCodec::HEVC
         ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
     const char* codec_name = videoCodecName(video_codec_);
@@ -412,13 +417,23 @@ bool VideoDecoder::deliverFrame(AVFrame* frame,
     return true;
 }
 
-bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
+bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
+                          const VideoAccessUnitInfo* inspected_access_unit) {
     if (!initialized_) return false;
     auto* ctx = static_cast<AVCodecContext*>(codec_ctx_);
     const int log_index = g_video_decode_logs.fetch_add(1);
     const uint64_t probe_frame_index = static_cast<uint64_t>(log_index) + 1;
     const bool log = shouldLogVideoDecode(log_index);
-    const auto au = inspectVideoAccessUnit(video_codec_, data, len);
+    const bool playstation_path =
+        video_path_ == VideoPipelinePath::PlayStation;
+    VideoAccessUnitInfo parsed_access_unit;
+    if (!inspected_access_unit) {
+        parsed_access_unit = playstation_path
+            ? inspectVideoAccessUnit(video_codec_, data, len)
+            : inspectXboxH264AccessUnit(data, len);
+        inspected_access_unit = &parsed_access_unit;
+    }
+    const auto& au = *inspected_access_unit;
     const char* codec_name = videoCodecName(video_codec_);
     if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
         lunar::cloud1080CrashProbeLog(
@@ -465,7 +480,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
     // NVDEC rejects parameter-set-only packets, so retain them and prepend
     // them to the next VCL access unit instead of treating this as a decode
     // failure. The same path handles standalone parameter-set updates.
-    if (!au.has_vcl) {
+    if (playstation_path && !au.has_vcl) {
         constexpr size_t kMaxParameterSetBytes = 64 * 1024;
         if (au.has_vps || au.has_sps) parameter_sets_.clear();
         if (au.hasParameterSets()) {
@@ -520,7 +535,8 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp) {
     }
 
     std::vector<uint8_t> startup_access_unit;
-    if (parameter_sets_pending_ && !parameter_sets_.empty()) {
+    if (playstation_path && parameter_sets_pending_ &&
+        !parameter_sets_.empty()) {
         startup_access_unit.reserve(parameter_sets_.size() + len);
         startup_access_unit.insert(startup_access_unit.end(),
                                    parameter_sets_.begin(),
@@ -827,9 +843,12 @@ bool VideoDecoder::resetForKeyframe() {
     }
     parser->flags |= PARSER_FLAG_COMPLETE_FRAMES;
     parser_ = parser;
-    // Keep parameter-set knowledge across a transport-requested recovery.
+    // Chiaki may deliver parameter sets separately, so its next VCL access
+    // unit must carry the cached bytes. Xbox keeps its direct H.264 path.
     decoder_ready_ = false;
-    parameter_sets_pending_ = !parameter_sets_.empty();
+    parameter_sets_pending_ =
+        video_path_ == VideoPipelinePath::PlayStation &&
+        !parameter_sets_.empty();
     wait_log_count_ = 0;
     lunar::diagnosticLog("video", "%s decoder reset; waiting for random access",
                          videoCodecName(video_codec_));

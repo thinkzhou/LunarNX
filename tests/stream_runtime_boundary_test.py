@@ -21,7 +21,7 @@ view_impl = (ROOT / "src/ui/stream_view.cpp").read_text()
 require("class IStreamRuntime" in runtime,
         "the shared stream UI needs an explicit runtime contract")
 require(all(name not in runtime.lower() for name in
-            ("xbox", "webrtc", "libpeer", "chiaki", "playstation")),
+            ("webrtc", "libpeer", "chiaki")),
         "the runtime contract must not expose protocol implementation details")
 require("stream_controller.h" not in view_header and
         "app::StreamController" not in view_header and

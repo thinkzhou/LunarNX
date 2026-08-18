@@ -13,6 +13,9 @@ namespace {
 constexpr std::chrono::milliseconds kIceStableWindow{800};
 constexpr std::chrono::milliseconds kIceGatherTimeout{5000};
 constexpr std::chrono::milliseconds kNetworkPumpInterval{2};
+// Keep controller updates at the proven 0.2.0 cadence. Input and WebRTC event
+// processing share this session thread, so a faster cadence can increase SCTP
+// pressure on higher-latency cloud connections.
 constexpr std::chrono::milliseconds kInputPollInterval{16};
 constexpr std::chrono::seconds kDataChannelTimeout{45};
 constexpr std::chrono::seconds kStartupKeyframeRetryInterval{1};
@@ -21,6 +24,7 @@ constexpr std::chrono::seconds kReceiverFeedbackInterval{1};
 constexpr int kGuidePulseFrames = 8;
 constexpr uint32_t kRecoveryMissingPacketsThreshold = 12;
 constexpr uint32_t kRecoveryCorruptFramesThreshold = 4;
+constexpr uint32_t kRecoverySrtpFailureThreshold = 12;
 
 const char* iceCandidateTypeName(uint8_t type) {
     switch (type) {
@@ -84,6 +88,7 @@ XboxStreamSession::XboxStreamSession(XboxSessionClient& session_client,
                                      input::GamepadReader& gamepad,
                                      input::XInputEncoder& xinput,
                                      input::RumbleController& rumble,
+                                     input::StreamInputRouter& input_router,
                                      stream::PerfStats& perf)
     : session_client_(session_client),
       transport_(transport),
@@ -92,6 +97,7 @@ XboxStreamSession::XboxStreamSession(XboxSessionClient& session_client,
       gamepad_(gamepad),
       xinput_(xinput),
       rumble_(rumble),
+      input_router_(input_router),
       perf_(perf) {}
 
 XboxStreamSession::~XboxStreamSession() {
@@ -575,9 +581,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             } else if (guide_release_pending) {
                 gamepad_state = {};
                 guide_release_pending = false;
-            } else if (callbacks.input_suppressed && callbacks.input_suppressed()) {
-                gamepad_state = {};
             }
+            gamepad_state = input_router_.route(gamepad_state);
             const auto input_packet = xinput_.encode(gamepad_state);
             if (control_started && !first_input_logged) {
                 lunar::diagnosticLog(
@@ -650,6 +655,10 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                           media_stats.rtp_queue_drops,
                           media_stats.rtp_queue_high_watermark,
                           media_stats.srtp_rtp_decrypt_failures,
+                          media_stats.srtp_rtp_auth_failures,
+                          media_stats.srtp_rtp_replay_failures,
+                          media_stats.srtp_rtp_replay_old_failures,
+                          media_stats.srtp_rtp_other_failures,
                           media_stats.srtp_rtcp_decrypt_failures,
                           media_stats.ice_rtt_ms,
                           media_stats.video_rtp_highest_seq_ext,
@@ -745,6 +754,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             const bool video_damage_increased =
                 missing_delta >= kRecoveryMissingPacketsThreshold ||
                 corrupt_delta >= kRecoveryCorruptFramesThreshold ||
+                srtp_delta >= kRecoverySrtpFailureThreshold ||
                 queue_drop_delta > 0;
             const uint32_t rendered_frames = perf_.video_frames.load();
             const bool awaiting_first_frame = rendered_frames == 0;
@@ -847,6 +857,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                                  "rtp_queue_oldest_ms=%u udp_rcvbuf=%u "
                                  "srtp_fail=%u/%u srtp_detail=%u/%u/%u/%u "
                                  "ice_pair=%s:%u(%s)->%s:%u(%s) ice_rtt=%u "
+                                 "jitter_ms=%u hold_ms=%u recovery_hold_ms=%u "
                                  "nacks=%u retries=%u decode_errors=%u "
                                  "avg_decode_ms=%.2f avg_render_ms=%.2f",
                                  perf_window_fps,
@@ -894,6 +905,9 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                                            media_stats.ice_remote_candidate_type)
                                      : "none",
                                  media_stats.ice_rtt_ms,
+                                 media_stats.video_jitter_estimate_ms,
+                                 media_stats.video_jitter_hold_ms,
+                                 media_stats.video_jitter_recovery_hold_ms,
                                  media_stats.video_rtp_nacks,
                                  media_stats.video_rtp_nack_retries,
                                  decode_errors,

@@ -5,6 +5,7 @@
 #include "about_activity.h"
 #include "ps_settings_activity.h"
 #include "stream_view.h"
+#include "grid_navigation.h"
 #include "ui_style.h"
 #include "../common.h"
 #include "../diagnostics.h"
@@ -30,7 +31,7 @@ void appendMockReplayConsole(std::vector<ps::PsConsole>& hosts) {
     mock.nickname = "LunarNX Mock PS5";
     mock.target = 1000100;
     mock.local = ps::PsLocalEndpoint{
-        "mock-replay", 0, ps::PsConsoleState::Ready};
+        "mock-replay", 0, ps::PsConsoleState::Ready, true};
     mock.credentials = ps::RegisteredCredential{};
     mock.credentials->server_mac = mock.server_mac;
     mock.credentials->nickname = mock.nickname;
@@ -106,7 +107,8 @@ public:
         root->setJustifyContent(brls::JustifyContent::CENTER);
         root->setFocusable(true);
         root->setHideHighlight(true);
-        root->registerAction("Cancel", brls::ControllerButton::BUTTON_B,
+        root->registerAction(brls::getStr("lunarnx/common/cancel"),
+            brls::ControllerButton::BUTTON_B,
             [this](brls::View*) -> bool {
                 cancel();
                 return true;
@@ -313,7 +315,8 @@ brls::View* PsActivity::createContentView() {
     const auto& p = uiPalette();
     auto* workspace = new brls::Box(brls::Axis::ROW);
     workspace->setBackgroundColor(p.background);
-    workspace->registerAction("Back", brls::ControllerButton::BUTTON_B,
+    workspace->registerAction(brls::getStr("lunarnx/common/back"),
+        brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
             const auto now = std::chrono::steady_clock::now();
             if (now < back_navigation_ready_at_) return true;
@@ -350,10 +353,23 @@ brls::View* PsActivity::createContentView() {
     auto* pair_button = makeSidebarButton(brls::getStr("lunarnx/ps/pair_by_ip"),
         false, UiIcon::Link);
     pair_button->registerClickAction([this](brls::View*) -> bool {
-        ps::PsConsole console;
-        console.target = 1000100;
-        console.nickname = "PS5";
-        pairConsole(console);
+        const ps::PsConsole console;
+        auto* dialog = new brls::Dialog(
+            brls::getStr("lunarnx/ps/select_console_type"));
+        dialog->addButton(brls::getStr("lunarnx/ps/ps4_version_9"),
+            [this, console]() {
+                pairConsoleWithTarget(console, CHIAKI_TARGET_PS4_9);
+            });
+        dialog->addButton(brls::getStr("lunarnx/ps/ps4_version_10"),
+            [this, console]() {
+                pairConsoleWithTarget(console, CHIAKI_TARGET_PS4_10);
+            });
+        dialog->addButton(brls::getStr("lunarnx/ps/pair_ps5"),
+            [this, console]() {
+                pairConsoleWithTarget(console, CHIAKI_TARGET_PS5_1);
+            });
+        dialog->addButton(brls::getStr("lunarnx/common/cancel"), []() {});
+        dialog->open();
         return true;
     });
     sidebar->addView(pair_button);
@@ -528,6 +544,14 @@ brls::View* PsActivity::createContentView() {
     return makeAppFrame("PlayStation", workspace);
 }
 
+void PsActivity::onPause() {
+    // A child activity/dialog saves the current list button as a raw focus
+    // pointer. Do not rebuild and delete that button until Borealis restores
+    // focus while popping the child.
+    console_list_refresh_suspended_ = true;
+    console_list_refresh_pending_ = true;
+}
+
 void PsActivity::onResume() {
     // A Back press used to close StreamView can remain held for another UI
     // frame. Consume the repeat instead of immediately popping PsActivity and
@@ -539,9 +563,22 @@ void PsActivity::onResume() {
     ps_manager_->psnAuth().loadToken(lunar::get_psn_token_path());
     const bool has_session = ps_manager_->hasStoredPsnSession();
     updateAccountUi();
-    auto hosts = ps_manager_->getDiscoveredHosts();
-    appendMockReplayConsole(hosts);
-    rebuildConsoleList(hosts);
+    console_list_refresh_suspended_ = false;
+    if (console_list_refresh_pending_) {
+        auto alive = alive_;
+        brls::sync([this, alive]() {
+            // Replacing the connection activity with StreamView briefly
+            // resumes this page before immediately pausing it again. Do not
+            // let that stale resume task steal global focus from the stream.
+            // Keep the refresh pending until this page is genuinely visible.
+            if (!alive->load() || console_list_refresh_suspended_) return;
+            console_list_refresh_pending_ = false;
+            // This runs after popActivity has finished restoring its saved
+            // focus. Move to a persistent control before deleting list rows.
+            if (lan_button_) brls::Application::giveFocus(lan_button_);
+            rebuildConsoleList(ps_manager_->getDiscoveredHosts());
+        });
+    }
 
     // Existing sessions may not have an online_id stored yet; fetch it once so
     // the account name shows without requiring a re-login.
@@ -677,10 +714,25 @@ void PsActivity::updateSourceUi() {
 void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
     hosts_ = hosts;
     appendMockReplayConsole(hosts_);
+    if (console_list_refresh_suspended_) {
+        console_list_refresh_pending_ = true;
+        return;
+    }
     if (!console_list_) return;
+    brls::View* header_action = source_ == PsConsoleSource::Local
+        ? static_cast<brls::View*>(lan_button_)
+        : static_cast<brls::View*>(psn_button_);
+    if (console_list_->isChildFocused()) {
+        brls::View* fallback = header_action;
+        if (!fallback) fallback = local_tab_;
+        if (fallback) brls::Application::giveFocus(fallback);
+    }
+    if (header_action) wireVerticalGridNavigation({{header_action}});
     console_list_->clearViews();
 
-    if (hosts.empty()) {
+    std::vector<brls::View*> console_actions;
+
+    if (hosts_.empty()) {
         auto* empty = makeUiCard(brls::Axis::COLUMN);
         empty->setHeight(148);
         empty->setMarginBottom(18);
@@ -705,7 +757,7 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
 
     const auto& p = uiPalette();
     size_t visible_count = 0;
-    for (const auto& host : hosts) {
+    for (const auto& host : hosts_) {
         const bool visible = source_ == PsConsoleSource::Local
             ? host.local.has_value()
             : host.remote.has_value();
@@ -718,7 +770,8 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         card->setAlignItems(brls::AlignItems::CENTER);
 
         auto* glyph = new ConsoleGlyphView(host.target >= 1000000 ? "PS5" : "PS4",
-            host.local.has_value() || (host.remote.has_value() && host.remote->remoteplay_enabled));
+            (host.local.has_value() && host.local->verified) ||
+            (host.remote.has_value() && host.remote->remoteplay_enabled));
         glyph->setWidth(82);
         glyph->setHeight(72);
         card->addView(glyph);
@@ -738,9 +791,13 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         if (host.credentials.has_value())
             detail += " · " + brls::getStr("lunarnx/ps/detail_paired");
         if (host.local.has_value()) {
-            detail += host.local->state == ps::PsConsoleState::Standby
-                ? " · " + brls::getStr("lunarnx/ps/detail_rest")
-                : " · " + brls::getStr("lunarnx/ps/detail_ready");
+            if (!host.local->verified) {
+                detail += " · " + brls::getStr("lunarnx/ps/detail_last_known");
+            } else {
+                detail += host.local->state == ps::PsConsoleState::Standby
+                    ? " · " + brls::getStr("lunarnx/ps/detail_rest")
+                    : " · " + brls::getStr("lunarnx/ps/detail_ready");
+            }
         }
         if (host.remote.has_value()) {
             detail += host.remote->remoteplay_enabled
@@ -755,8 +812,10 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
 
         const bool paired = host.credentials.has_value();
         const bool local_ready = host.local.has_value() &&
+            host.local->verified &&
             host.local->state == ps::PsConsoleState::Ready;
         const bool local_standby = host.local.has_value() &&
+            host.local->verified &&
             host.local->state == ps::PsConsoleState::Standby;
         const bool remote_enabled = host.remote.has_value() &&
             host.remote->remoteplay_enabled;
@@ -810,6 +869,7 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         }
         card->addView(action);
         console_list_->addView(card);
+        console_actions.push_back(action);
     }
 
     if (visible_count == 0) {
@@ -832,6 +892,11 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         empty->addView(hint);
         console_list_->addView(empty);
     }
+
+    std::vector<std::vector<brls::View*>> navigation_rows;
+    if (header_action) navigation_rows.push_back({header_action});
+    for (auto* action : console_actions) navigation_rows.push_back({action});
+    wireVerticalGridNavigation(navigation_rows);
 }
 
 bool PsActivity::completePendingWake(const std::vector<ps::PsConsole>& hosts) {
@@ -839,6 +904,7 @@ bool PsActivity::completePendingWake(const std::vector<ps::PsConsole>& hosts) {
     const auto ready = std::find_if(hosts.begin(), hosts.end(),
         [this](const ps::PsConsole& host) {
             return host.server_mac == pending_wake_mac_ && host.local.has_value() &&
+                   host.local->verified &&
                    host.local->state == ps::PsConsoleState::Ready;
         });
     if (ready == hosts.end()) return false;
@@ -872,10 +938,17 @@ void PsActivity::pairConsole(const ps::PsConsole& host) {
 }
 
 void PsActivity::pairConsoleWithTarget(const ps::PsConsole& host, int target) {
+    // Chiaki registration owns its own UDP search and worker thread. Stop the
+    // background discovery service before opening the registration flow to
+    // avoid competing searches and preserve a Switch thread slot.
+    stopDiscovery();
     std::string addr = host.local.has_value() ? host.local->ip : "";
+    const std::string console_key = !host.server_mac.empty()
+        ? host.server_mac : addr;
     brls::Application::pushActivity(
         new PsRegistrationActivity(ps_manager_, addr, target,
-            host.nickname.empty() ? brls::getStr("lunarnx/ps/console_default") : host.nickname),
+            host.nickname.empty() ? brls::getStr("lunarnx/ps/console_default") : host.nickname,
+            console_key),
         brls::TransitionAnimation::NONE);
 }
 
@@ -956,6 +1029,11 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
     diagnosticLog("ui-ps", "connect route resolved type=%d", static_cast<int>(route.type));
     const bool requested_remote = route.type == ps::ResolvedRouteType::Remote;
     if (action_status_) action_status_->setText(ps::PsConsoleResolver::routeDescription(route));
+
+    // Discovery owns a UDP socket and worker thread. Streaming no longer
+    // needs it, and leaving it alive competes with Chiaki session sockets in
+    // Applet Mode.
+    stopDiscovery();
 
     const auto settings = loadPsSettings();
     diagnosticLog("ui-ps", "stream profile=%dx%d fps=60 bitrate_kbps=%d codec=%s",

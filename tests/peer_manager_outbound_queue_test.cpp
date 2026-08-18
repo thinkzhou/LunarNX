@@ -167,10 +167,24 @@ int main() {
     assert(scheduler.sendControlData(payload, sizeof(payload)));
     reliable = Access::front(scheduler);
     assert(Access::complete(scheduler, reliable, MBEDTLS_ERR_SSL_WANT_WRITE));
+    assert(scheduler.sendLatestInputData(payload, sizeof(payload)));
+    Access::Command input_after_backpressure;
+    assert(Access::select(scheduler, input_after_backpressure, true));
+    assert(input_after_backpressure.type == Access::Type::InputLatest);
     assert(Access::enqueueNack(scheduler, 77, 0x0003));
     Access::Command selected;
     assert(Access::select(scheduler, selected, false));
     assert(selected.type == Access::Type::Nack);
+
+    PeerManager stalled_data_channel;
+    Access::connect(stalled_data_channel);
+    assert(stalled_data_channel.sendControlData(payload, sizeof(payload)));
+    reliable = Access::front(stalled_data_channel);
+    for (size_t attempt = 0; attempt < 64; ++attempt) {
+        assert(Access::complete(stalled_data_channel, reliable,
+                                MBEDTLS_ERR_SSL_WANT_WRITE));
+    }
+    assert(!stalled_data_channel.isConnected());
 
     PeerManager recovery_nack;
     Access::connect(recovery_nack);
