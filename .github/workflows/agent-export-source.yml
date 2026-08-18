@@ -1,0 +1,32 @@
+name: Agent source export
+
+on:
+  pull_request:
+    branches:
+      - fix/ps-pairing-focus
+
+permissions:
+  contents: read
+
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out LunarNX
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Package source checkout
+        shell: bash
+        run: |
+          tar --exclude=.git -czf "$RUNNER_TEMP/lunarnx-source.tar.gz" .
+
+      - name: Upload source checkout
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-source-${{ github.sha }}
+          path: ${{ runner.temp }}/lunarnx-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
