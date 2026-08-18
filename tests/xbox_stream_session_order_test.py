@@ -59,10 +59,10 @@ def main():
             "Input must be sampled and sent before inbound media processing can consume the loop budget")
     require("kNetworkPumpInterval{2}" in source,
             "WebRTC must use a short pump cadence independent of input polling")
-    require("kInputPollInterval{8}" in source,
-            "Xbox input must poll at 125 Hz to keep sampling latency below 8 ms")
+    require("kInputPollInterval{16}" in source,
+            "Xbox input must use the proven 0.2.0 62.5 Hz cadence")
     require("const bool input_due" in source,
-            "Input sampling must remain gated to its 8 ms cadence")
+            "Input sampling must remain gated to its configured cadence")
     require("next_input_tick += kInputPollInterval" in source,
             "Input polling must use an absolute cadence instead of work time plus a fixed sleep")
     require("next_network_tick += kNetworkPumpInterval" in source,

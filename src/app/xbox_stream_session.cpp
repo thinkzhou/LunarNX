@@ -13,9 +13,10 @@ namespace {
 constexpr std::chrono::milliseconds kIceStableWindow{800};
 constexpr std::chrono::milliseconds kIceGatherTimeout{5000};
 constexpr std::chrono::milliseconds kNetworkPumpInterval{2};
-// Poll input at 125 Hz to halve controller sampling latency while keeping the
-// WebRTC network pump on its independent, faster cadence.
-constexpr std::chrono::milliseconds kInputPollInterval{8};
+// Keep controller updates at the proven 0.2.0 cadence. Input and WebRTC event
+// processing share this session thread, so a faster cadence can increase SCTP
+// pressure on higher-latency cloud connections.
+constexpr std::chrono::milliseconds kInputPollInterval{16};
 constexpr std::chrono::seconds kDataChannelTimeout{45};
 constexpr std::chrono::seconds kStartupKeyframeRetryInterval{1};
 constexpr std::chrono::seconds kRecoveryKeyframeInterval{1};
