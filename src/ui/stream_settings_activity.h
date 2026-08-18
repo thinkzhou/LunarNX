@@ -14,7 +14,7 @@ struct StreamSettingsSnapshot {
     int width = 1280;
     int height = 720;
     int bitrate_kbps = 10000;
-    std::string preferred_game_language = "en-US";
+    std::string preferred_game_language = "auto";
     stream::VideoBackend video_backend = stream::VideoBackend::HardwareZeroCopy;
     stream::PostProcessMode post_process_mode = stream::PostProcessMode::Off;
     bool dithering_enabled = false;
@@ -29,6 +29,7 @@ enum class StreamSettingsScope {
 
 StreamSettingsSnapshot loadStreamSettings();
 bool saveStreamSettings(const StreamSettingsSnapshot& settings);
+std::string resolvePreferredGameLanguage(const std::string& configured_locale);
 
 class StreamSettingsActivity : public brls::Activity {
 public:

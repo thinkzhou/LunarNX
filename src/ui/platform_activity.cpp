@@ -6,6 +6,7 @@
 #include "about_activity.h"
 #include "stream_settings_activity.h"
 #include "dev_tools_activity.h"
+#include "grid_navigation.h"
 #include "ui_style.h"
 #include "../common.h"
 #include "../diagnostics.h"
@@ -182,13 +183,16 @@ brls::View* PlatformActivity::createContentView() {
     ps_card->setMarginLeft(24);
     platforms->addView(ps_card);
     content->addView(platforms);
-    content->addView(makeUtilityTile(
+    auto* dev_tools_tile = makeUtilityTile(
         brls::getStr("lunarnx/dev/title"),
         brls::getStr("lunarnx/dev/entry_desc"),
-        [this]() { openDevTools(); }));
+        [this]() { openDevTools(); });
+    content->addView(dev_tools_tile);
+    wireVerticalGridNavigation({{xbox_card, ps_card}, {dev_tools_tile}});
     workspace->addView(content);
 
-    workspace->registerAction("Exit", brls::ControllerButton::BUTTON_B,
+    workspace->registerAction(brls::getStr("lunarnx/common/exit"),
+        brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
             const auto now = std::chrono::steady_clock::now();
             if (now < exit_navigation_ready_at_) return true;

@@ -3,6 +3,7 @@
 #include "i18n.h"
 #include "qr_code.h"
 #include "qr_code_view.h"
+#include "grid_navigation.h"
 #include "ui_style.h"
 #include "../diagnostics.h"
 #include <algorithm>
@@ -30,7 +31,8 @@ brls::View* PsRegistrationActivity::createContentView() {
     auto* scroll = new brls::ScrollingFrame();
     scroll->setBackgroundColor(p.background);
     scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
-    scroll->registerAction("Cancel", brls::ControllerButton::BUTTON_B,
+    scroll->registerAction(brls::getStr("lunarnx/common/cancel"),
+        brls::ControllerButton::BUTTON_B,
         [this](brls::View*) -> bool {
             if (registering_->load()) {
                 manager_->cancelRegistration();
@@ -146,7 +148,9 @@ brls::View* PsRegistrationActivity::createContentView() {
     // Number pad (used when an Account ID is already available).
     brls::Button* digit_buttons[10]{};
     static const char* kRows[] = {"123", "456", "789", " 0 "};
+    std::vector<std::vector<brls::View*>> navigation_rows;
     for (const auto* row : kRows) {
+        std::vector<brls::View*> digit_buttons;
         auto* row_box = new brls::Box(brls::Axis::ROW);
         row_box->setHeight(64);
         row_box->setJustifyContent(brls::JustifyContent::CENTER);
@@ -173,8 +177,10 @@ brls::View* PsRegistrationActivity::createContentView() {
             });
             digit_buttons[digit - '0'] = btn;
             row_box->addView(btn);
+            digit_buttons.push_back(btn);
         }
         keypad_->addView(row_box);
+        navigation_rows.push_back(std::move(digit_buttons));
     }
 
     // Action row
@@ -207,6 +213,7 @@ brls::View* PsRegistrationActivity::createContentView() {
     });
     action_row->addView(submit_btn);
     keypad_->addView(action_row);
+    navigation_rows.push_back({back_btn, submit_btn});
     auto* change_account = new brls::Button();
     change_account->setText(brls::getStr("lunarnx/ps/reg_change_account"));
     change_account->setWidth(240);
@@ -221,6 +228,12 @@ brls::View* PsRegistrationActivity::createContentView() {
         return true;
     });
     keypad_->addView(change_account);
+    navigation_rows.push_back({change_account});
+    wireVerticalGridNavigation(navigation_rows);
+    // The single 0 key is visually centered below 7/8/9. The generic policy
+    // clamps to the first column, so override its upward route to 8.
+    navigation_rows[3][0]->setCustomNavigationRoute(
+        brls::FocusDirection::UP, navigation_rows[2][1]);
 
     // Borealis normally navigates nested boxes by tree order, which does not
     // preserve the keypad column and can escape a row at its edges. Pin every

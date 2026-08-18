@@ -64,6 +64,7 @@ struct GameLanguageOption {
 };
 
 const GameLanguageOption kGameLanguages[] = {
+    {"auto", ""},
     {"ar-SA", "Arabic (Saudi Arabia)"},
     {"cs-CZ", "Czech"},
     {"da-DK", "Danish"},
@@ -100,7 +101,31 @@ int gameLanguageIndex(const std::string& locale) {
     for (size_t i = 0; i < kGameLanguageCount; ++i) {
         if (locale == kGameLanguages[i].value) return static_cast<int>(i);
     }
-    return 6;
+    return 0;
+}
+
+std::string systemGameLanguage() {
+    uint64_t language_code = 0;
+    if (R_FAILED(setGetSystemLanguage(&language_code))) return "en-US";
+    char name[sizeof(language_code) + 1] = {};
+    std::memcpy(name, &language_code, sizeof(language_code));
+    const std::string language(name);
+
+    if (language == "ja") return "ja-JP";
+    if (language == "en-US" || language == "en-GB") return language;
+    if (language == "fr" || language == "fr-CA") return "fr-FR";
+    if (language == "de") return "de-DE";
+    if (language == "it") return "it-IT";
+    if (language == "es") return "es-ES";
+    if (language == "es-419") return "es-MX";
+    if (language == "zh-CN" || language == "zh-Hans") return "zh-CN";
+    if (language == "zh-TW" || language == "zh-Hant") return "zh-TW";
+    if (language == "ko") return "ko-KR";
+    if (language == "nl") return "nl-NL";
+    if (language == "pt" || language == "pt-PT") return "pt-PT";
+    if (language == "pt-BR") return "pt-BR";
+    if (language == "ru") return "ru-RU";
+    return "en-US";
 }
 
 int regionIndexForIp(const std::string& ip) {
@@ -216,6 +241,11 @@ stream::PostProcessMode parsePostProcess(const char* value) {
 }
 
 } // namespace
+
+std::string resolvePreferredGameLanguage(const std::string& configured_locale) {
+    return configured_locale.empty() || configured_locale == "auto"
+        ? systemGameLanguage() : configured_locale;
+}
 
 StreamSettingsSnapshot loadStreamSettings() {
     StreamSettingsSnapshot settings;
@@ -493,7 +523,9 @@ brls::View* StreamSettingsActivity::createContentView() {
     std::vector<std::string> game_language_labels;
     game_language_labels.reserve(kGameLanguageCount);
     for (const auto& option : kGameLanguages) {
-        game_language_labels.emplace_back(option.label);
+        game_language_labels.emplace_back(std::strcmp(option.value, "auto") == 0
+            ? brls::getStr("lunarnx/settings/game_language_auto")
+            : option.label);
     }
     auto* game_language = new brls::SelectorCell();
     game_language->init(brls::getStr("lunarnx/settings/game_language"),
@@ -505,7 +537,7 @@ brls::View* StreamSettingsActivity::createContentView() {
             settings_.preferred_game_language = kGameLanguages[selected].value;
             if (ctrl_) {
                 ctrl_->setPreferredGameLanguage(
-                    settings_.preferred_game_language);
+                    resolvePreferredGameLanguage(settings_.preferred_game_language));
             }
         });
     cloud_card->addView(game_language);

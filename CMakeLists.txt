@@ -108,6 +108,8 @@ if(PLATFORM_SWITCH)
         src/main.cpp
         src/ui/auth_activity.cpp
         src/ui/main_activity.cpp
+        src/ui/cloud_library_model.cpp
+        src/ui/cloud_game_card.cpp
         src/ui/qr_code_view.cpp
         src/ui/platform_activity.cpp
         src/ui/ps_activity.cpp

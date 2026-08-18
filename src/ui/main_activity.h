@@ -4,6 +4,7 @@
 #include "../app/stream_controller.h"
 #include "recycling_list.hpp"
 #include "poster_loader.h"
+#include "cloud_library_model.h"
 #include <memory>
 #include <atomic>
 #include <chrono>
@@ -34,16 +35,30 @@ private:
     brls::Button* source_cloud_ = nullptr;
     brls::Button* refresh_btn_ = nullptr;
     brls::Button* cloud_search_btn_ = nullptr;
+    brls::Box* cloud_toolbar_ = nullptr;
+    brls::Button* cloud_all_tab_ = nullptr;
+    brls::Button* cloud_recent_tab_ = nullptr;
+    brls::Button* cloud_new_tab_ = nullptr;
+    brls::Button* cloud_sort_btn_ = nullptr;
+    brls::Button* cloud_more_btn_ = nullptr;
+    brls::Button* cloud_prev_sentinel_ = nullptr;
     brls::Label* content_title_ = nullptr;
     brls::Label* content_subtitle_ = nullptr;
     enum class StreamSource { Xbox, Cloud };
     StreamSource stream_source_ = StreamSource::Xbox;
     std::string cloud_search_query_;
+    CloudLibraryFilter cloud_filter_ = CloudLibraryFilter::Recent;
+    CloudLibrarySort cloud_sort_ = CloudLibrarySort::RecentFirst;
+    size_t cloud_visible_limit_ = 20;
+    size_t cloud_page_start_ = 0;
+    size_t cloud_rendered_count_ = 0;
+    PosterLoader::BatchId cloud_poster_batch_ = 0;
+    std::vector<std::vector<brls::View*>> cloud_navigation_rows_;
 
     int stream_width_ = 1280;
     int stream_height_ = 720;
     int stream_bitrate_kbps_ = 10000;
-    std::string preferred_game_language_ = "en-US";
+    std::string preferred_game_language_ = "auto";
     stream::VideoBackend video_backend_ = stream::VideoBackend::HardwareZeroCopy;
     stream::PostProcessMode post_process_mode_ = stream::PostProcessMode::Off;
     bool dithering_enabled_ = false;
@@ -69,6 +84,17 @@ private:
     void updateRefreshButtonLabel();
     void promptCloudSearch();
     void updateCloudSearchButtonLabel();
+    void selectCloudTab(CloudLibraryFilter filter, bool focus_tab = true);
+    void stepCloudTab(int direction);
+    void cycleCloudSort();
+    void loadMoreCloudTitles();
+    void loadPreviousCloudTitles();
+    void updateCloudToolbar();
+    brls::View* appendCloudCards(const std::vector<api::CloudTitle>& items,
+                                 size_t start_index);
+    void attachCloudMoreButton(size_t remaining);
+    void attachCloudPreviousSentinel();
+    void rewireCloudNavigation();
     void confirmSignOut();
     void resetToAuthActivity();
     void refreshCurrentSource();
