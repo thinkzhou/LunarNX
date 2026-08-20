@@ -40,7 +40,7 @@ require("constexpr size_t kMaxVideoQueuePackets = 2048" in pipeline,
         "Xbox access-unit queue must retain its established 2048-packet safety limit")
 require("? video_queue_limits_.max_packets" in pipeline and
         ": kMaxVideoQueuePackets" in pipeline and
-        "video_queue_.size() >= max_packets" in pipeline,
+        "evaluateBoundedVideoAdmission(" in pipeline,
         "queued video ingress must preserve Xbox limits and select bounded limits by mode")
 require("return enqueueVideoPacket(data, len, timestamp);" in pipeline,
         "queued scheduling must preserve asynchronous network/decode isolation")

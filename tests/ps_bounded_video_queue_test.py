@@ -12,6 +12,7 @@ def require(condition: bool, message: str) -> None:
 
 header = (ROOT / "src/stream/media_pipeline.h").read_text()
 impl = (ROOT / "src/stream/media_pipeline.cpp").read_text()
+policy = (ROOT / "src/stream/bounded_video_queue_policy.h").read_text()
 controller = (ROOT / "src/ps/ps_stream_controller.cpp").read_text()
 bridge = (ROOT / "src/ps/ps_media_bridge.cpp").read_text()
 
@@ -26,18 +27,19 @@ require("std::chrono::steady_clock::time_point enqueued_at" in header and
 require("VideoSchedulingMode::BoundedLowLatency" in controller and
         "LUNARNX_PS_DIRECT_VIDEO" in controller,
         "PS must default bounded while retaining a compile-time direct A/B")
-require("now - video_queue_.front().enqueued_at >= video_queue_limits_.max_age" in impl,
+require("evaluateBoundedVideoAdmission(" in impl and
+        "queue.oldest_age >= max_age" in policy,
         "enqueue must enforce a monotonic oldest-AU age budget")
 require("std::chrono::steady_clock::now() - packet.enqueued_at >=\n                video_queue_limits_.max_age" in impl and
         "beginHardVideoRecovery(\"video queue age\", true)" in impl,
         "worker must reject an AU that expires after pop and decoder reset")
-require("video_queue_.size() >= max_packets" in impl and
-        "packet.data.size() > max_bytes" in impl,
+require("queue.packets >= max_packets" in policy and
+        "incoming_bytes > max_bytes" in policy,
         "enqueue must enforce bounded AU count and bytes")
 require("beginHardVideoRecoveryLocked(" in impl and
         "if (!packet.contains_idr) intentional_drop = true" in impl,
         "overflow must enter hard recovery instead of retaining dependent P frames")
-require("video_waiting_for_keyframe_.load() &&\n            !packet.contains_idr" in impl and
+require("BoundedVideoAdmission::DropDependent" in impl and
         "return true;" in impl,
         "waiting P frames must be intentional successful callback drops")
 require("packet.recovery_epoch = video_recovery_epoch_.load()" in impl,

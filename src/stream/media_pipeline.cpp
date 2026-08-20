@@ -418,21 +418,28 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
         if (packet.generation != generation_.load()) return false;
 
         const auto now = std::chrono::steady_clock::now();
-        const bool age_exceeded = bounded && !video_queue_.empty() &&
-            now - video_queue_.front().enqueued_at >= video_queue_limits_.max_age;
+        const auto oldest_age = video_queue_.empty()
+            ? std::chrono::steady_clock::duration::zero()
+            : now - video_queue_.front().enqueued_at;
         const size_t max_packets = bounded
             ? video_queue_limits_.max_packets
             : kMaxVideoQueuePackets;
         const size_t max_bytes = bounded
             ? video_queue_limits_.max_bytes
             : kMaxVideoQueueBytes;
-        const bool capacity_exceeded = !video_queue_.empty() &&
-            (video_queue_.size() >= max_packets ||
-             packet.data.size() > max_bytes -
-                 std::min(queued_video_bytes_, max_bytes));
+        const auto admission = bounded
+            ? evaluateBoundedVideoAdmission(
+                  {video_queue_.size(), std::min(queued_video_bytes_, max_bytes),
+                   oldest_age, video_waiting_for_keyframe_.load()},
+                  packet.data.size(), packet.contains_idr, max_packets, max_bytes,
+                  video_queue_limits_.max_age)
+            : BoundedVideoAdmission::Accept;
+        const bool age_exceeded = admission == BoundedVideoAdmission::RecoverAge;
+        const bool capacity_exceeded =
+            admission == BoundedVideoAdmission::RecoverOverflow ||
+            admission == BoundedVideoAdmission::RejectOversize;
 
-        if (bounded && video_waiting_for_keyframe_.load() &&
-            !packet.contains_idr) {
+        if (admission == BoundedVideoAdmission::DropDependent) {
             intentional_drop = true;
         } else if (age_exceeded || capacity_exceeded) {
             recovery_was_pending = video_recovery_request_.exchange(true);
@@ -815,8 +822,9 @@ void MediaPipeline::videoWorkerLoop() {
                 queued_video_bytes_ -= packet.data.size();
                 have_packet = true;
             }
-            reset_requested = video_decoder_reset_pending_.load() &&
-                (reset_wakeup || (have_packet && packet.contains_idr));
+            reset_requested = boundedVideoResetMustPrecedeDecode(
+                video_decoder_reset_pending_.load(), reset_wakeup,
+                have_packet && packet.contains_idr);
             reset_epoch = video_recovery_epoch_.load();
             if (have_packet) {
                 packet.queue_age_us = static_cast<uint64_t>(
@@ -933,16 +941,19 @@ void MediaPipeline::audioWorkerLoop() {
 }
 
 void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet) {
-    if (!running_ || packet.data.empty() ||
-        packet.generation != video_worker_generation_ ||
-        !isGenerationActive(packet.generation) ||
-        packet.recovery_epoch != video_recovery_epoch_.load()) {
+    if (packet.data.empty() ||
+        !boundedVideoPacketIsCurrent(running_.load(), packet.generation,
+                                     video_worker_generation_,
+                                     packet.recovery_epoch,
+                                     video_recovery_epoch_.load()) ||
+        !isGenerationActive(packet.generation)) {
         return;
     }
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     auto* perf = perfStats();
 #endif
-    if (video_waiting_for_keyframe_.load() && !packet.contains_idr) {
+    if (!boundedVideoMayDecodeWhileRecovering(
+            video_waiting_for_keyframe_.load(), packet.contains_idr)) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         if (perf) {
             perf->logVideoDropDiagnostic(

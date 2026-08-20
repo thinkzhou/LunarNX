@@ -27,6 +27,9 @@ require("chiaki_libnx_get_ghash_mode()" in implementation,
         "Switch startup must verify the active GHASH mode")
 require("GHASH requested=PMULL active=%s" in implementation,
         "Switch startup must persist the requested and active GHASH modes")
+require("chiaki-crypto-warning" in implementation and
+        "PMULL unavailable; continuing with GHASH TABLE fallback" in implementation,
+        "TABLE fallback must emit an explicit persistent warning")
 require(main.index("lunar::ps::initializeChiakiCrypto();") <
         main.index("brls::Application::init()"),
         "PMULL must be selected before UI activities can construct PS sessions")

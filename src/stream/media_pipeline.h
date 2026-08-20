@@ -4,6 +4,7 @@
 #include "../diagnostics.h"
 #include "audio_packet_reorder.h"
 #include "audio_decoder.h"
+#include "bounded_video_queue_policy.h"
 #include "stream_backend_provider.h"
 #include "video_codec.h"
 #include <atomic>

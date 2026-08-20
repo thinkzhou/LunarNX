@@ -121,8 +121,8 @@ def main():
             "Only the video worker may reset the decoder before a recovery IDR")
     process_video = method_body(
         impl, "void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet)")
-    require("packet.recovery_epoch != video_recovery_epoch_.load()" in process_video and
-            "video_waiting_for_keyframe_.load() && !packet.contains_idr" in process_video,
+    require("boundedVideoPacketIsCurrent" in process_video and
+            "boundedVideoMayDecodeWhileRecovering" in process_video,
             "Stale epochs and non-IDR recovery packets must not reach the decoder")
     require("std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns))" not in impl,
             "The video decode worker should not sleep for A/V lead time")

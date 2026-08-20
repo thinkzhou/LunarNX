@@ -17,6 +17,11 @@ void initializeChiakiCrypto() {
     persistentEventLog("chiaki-crypto",
                        "GHASH requested=PMULL active=%s",
                        active_name);
+    if (active != CHIAKI_LIBNX_GHASH_PMULL) {
+        persistentEventLog(
+            "chiaki-crypto-warning",
+            "PMULL unavailable; continuing with GHASH TABLE fallback");
+    }
 #endif
 }
 
