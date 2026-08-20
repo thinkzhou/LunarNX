@@ -79,6 +79,7 @@ private:
                      int& guide_pulse_frames_remaining,
                      bool& guide_release_pending,
                      std::chrono::steady_clock::time_point& next_snapshot,
+                     std::chrono::steady_clock::time_point& next_heartbeat,
                      input::StreamInputOwner& last_input_owner);
     void prepareInputForReconnect();
     void controlLoop(std::string session_id,

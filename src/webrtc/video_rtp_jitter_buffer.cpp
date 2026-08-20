@@ -21,8 +21,8 @@ constexpr size_t kMaxPendingNackRanges = 32;
 constexpr uint8_t kMaxNackRounds = 3;
 constexpr uint64_t kMinNackRetryMs = 20;
 constexpr uint64_t kMaxNackRetryMs = 60;
-constexpr size_t kMaxHeadBlockedFrames = 8;
-constexpr uint64_t kMinHeadBlockedHoldMs = 80;
+constexpr size_t kDefaultMaxHeadBlockedFrames = 8;
+constexpr uint64_t kDefaultMinHeadBlockedHoldMs = 80;
 constexpr uint32_t kTimestampDiscontinuityTicks = 180000;
 constexpr size_t kMaxRtpPayloadBytes = 2048;
 constexpr uint8_t kStartCode[] = {0x00, 0x00, 0x00, 0x01};
@@ -242,6 +242,8 @@ struct VideoRtpJitterBuffer::Impl {
     uint64_t hold_ms = kDefaultHoldMs;
     uint64_t recovery_hold_ms = kDefaultRecoveryHoldMs;
     uint64_t network_rtt_ms = 0;
+    size_t max_head_blocked_frames = kDefaultMaxHeadBlockedFrames;
+    uint64_t min_head_blocked_hold_ms = kDefaultMinHeadBlockedHoldMs;
     size_t buffered_bytes = 0;
     size_t buffered_packets = 0;
 
@@ -968,14 +970,10 @@ struct VideoRtpJitterBuffer::Impl {
                 ? recovery_hold_ms
                 : hold_ms;
             const bool idle_timeout = idle_age_ms >= frame_hold_ms;
-            const uint64_t head_blocked_hold_ms = network_rtt_ms > 0
-                ? std::min<uint64_t>(
-                      frame_hold_ms,
-                      std::max<uint64_t>(kMinHeadBlockedHoldMs,
-                                         network_rtt_ms + 20))
-                : std::min<uint64_t>(frame_hold_ms,
-                                     kMinHeadBlockedHoldMs);
-            const bool backlog_timeout = frames.size() > kMaxHeadBlockedFrames &&
+            const uint64_t head_blocked_hold_ms = std::min<uint64_t>(
+                frame_hold_ms, min_head_blocked_hold_ms);
+            const bool backlog_timeout =
+                frames.size() > max_head_blocked_frames &&
                 idle_age_ms >= head_blocked_hold_ms;
             const bool hard_timeout = frame_age_ms >= kMaxFrameHoldMs;
             if (result == AssembleResult::Invalid ||
@@ -1226,6 +1224,12 @@ void VideoRtpJitterBuffer::setHoldMs(uint64_t hold_ms) {
 
 void VideoRtpJitterBuffer::setNetworkRttMs(uint64_t rtt_ms) {
     impl_->network_rtt_ms = std::min<uint64_t>(rtt_ms, 2000);
+}
+
+void VideoRtpJitterBuffer::setHeadBlockedPolicy(size_t max_frames,
+                                                uint64_t min_hold_ms) {
+    impl_->max_head_blocked_frames = std::max<size_t>(1, max_frames);
+    impl_->min_head_blocked_hold_ms = std::max<uint64_t>(1, min_hold_ms);
 }
 
 void VideoRtpJitterBuffer::setRecoveryHoldMs(uint64_t hold_ms) {

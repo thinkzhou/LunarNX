@@ -16,6 +16,11 @@ namespace {
 constexpr uint32_t kMaxReliableSendAttempts = 128;
 constexpr uint32_t kMaxConsecutiveSctpSendFailures = 128;
 constexpr std::chrono::milliseconds kMaxSctpTransientFailureAge{500};
+constexpr std::chrono::milliseconds kMediaStatsCacheInterval{250};
+constexpr uint64_t kHomeMaxJitterHoldMs = 48;
+constexpr uint64_t kCloudMaxJitterHoldMs = 120;
+constexpr uint64_t kHomeRecoveryHoldMs = 96;
+constexpr uint64_t kCloudRecoveryHoldMs = 180;
 
 uint64_t elapsedNs(std::chrono::steady_clock::time_point start) {
     if (start.time_since_epoch().count() == 0) return 0;
@@ -373,6 +378,10 @@ bool PeerManager::initialize() {
     video_clock_.reset();
     audio_clock_.reset();
     video_jitter_.reset();
+    smoothed_rtt_ms_ = 0;
+    last_rtt_sample_ms_ = 0;
+    invalidateMediaStatsCache();
+    setVideoJitterMode(video_jitter_mode_);
     clearOutboundCommands();
 
     PeerConfiguration config = {};
@@ -966,12 +975,46 @@ void PeerManager::setMediaEnabled(bool enabled) {
     }
 }
 
+void PeerManager::setVideoJitterMode(VideoJitterMode mode) {
+    video_jitter_mode_ = mode;
+    smoothed_rtt_ms_ = 0;
+    last_rtt_sample_ms_ = 0;
+    const bool cloud = mode == VideoJitterMode::Cloud;
+    video_jitter_.setHeadBlockedPolicy(cloud ? 4 : 2,
+                                       cloud ? 60 : 32);
+    video_jitter_.setHoldMs(cloud ? VideoRtpJitterBuffer::kDefaultHoldMs
+                                 : VideoRtpJitterBuffer::kMinHoldMs * 2);
+    video_jitter_.setRecoveryHoldMs(cloud ? kCloudRecoveryHoldMs
+                                          : kHomeRecoveryHoldMs);
+}
+
+PeerConnectionMediaStats PeerManager::networkStatsSnapshot() const {
+    std::lock_guard<std::mutex> lock(media_stats_mutex_);
+    const auto now = std::chrono::steady_clock::now();
+    const bool cache_fresh = media_stats_cache_valid_ &&
+        now - media_stats_cache_at_ < kMediaStatsCacheInterval;
+    if (!cache_fresh) {
+        if (pc_) {
+            peer_connection_get_media_stats(pc_, &media_stats_cache_);
+        } else {
+            media_stats_cache_ = {};
+        }
+        media_stats_cache_at_ = now;
+        media_stats_cache_valid_ = true;
+    }
+    return media_stats_cache_;
+}
+
+void PeerManager::invalidateMediaStatsCache() {
+    std::lock_guard<std::mutex> lock(media_stats_mutex_);
+    media_stats_cache_ = {};
+    media_stats_cache_at_ = {};
+    media_stats_cache_valid_ = false;
+}
+
 PeerMediaStats PeerManager::getMediaStats() const {
     PeerMediaStats stats = {};
-    if (pc_) {
-        peer_connection_get_media_stats(
-            pc_, static_cast<PeerConnectionMediaStats*>(&stats));
-    }
+    static_cast<PeerConnectionMediaStats&>(stats) = networkStatsSnapshot();
     const auto video = video_jitter_.stats();
     stats.video_rtp_packets = video.packets;
     stats.video_rtp_sequence_gaps = video.sequence_gaps;
@@ -1052,20 +1095,45 @@ void PeerManager::processEvents() {
         const auto outbound_started = std::chrono::steady_clock::now();
         drainOutboundCommands(outbound_started + std::chrono::milliseconds(1));
         const auto outbound_finished = std::chrono::steady_clock::now();
-        PeerConnectionMediaStats network_stats = {};
-        peer_connection_get_media_stats(pc_, &network_stats);
-        if (network_stats.ice_rtt_ms > 0) {
-            const uint64_t rtt_ms = network_stats.ice_rtt_ms;
+        const PeerMediaStats network_stats = getMediaStats();
+        if (network_stats.ice_rtt_ms > 0 &&
+            network_stats.ice_rtt_ms != last_rtt_sample_ms_) {
+            last_rtt_sample_ms_ = network_stats.ice_rtt_ms;
+            const uint64_t sample_ms = std::min<uint64_t>(
+                std::max<uint64_t>(1, network_stats.ice_rtt_ms), 1000);
+            if (smoothed_rtt_ms_ == 0) {
+                smoothed_rtt_ms_ = sample_ms;
+            } else {
+                // Limit a single ICE spike before applying the EWMA. The
+                // instantaneous RTT must not turn into a 100-200 ms video
+                // hold on the very next frame.
+                const uint64_t bounded_sample = sample_ms > smoothed_rtt_ms_
+                    ? std::min<uint64_t>(sample_ms, smoothed_rtt_ms_ + 32)
+                    : std::max<uint64_t>(sample_ms,
+                                         smoothed_rtt_ms_ > 32
+                                             ? smoothed_rtt_ms_ - 32
+                                             : 1);
+                smoothed_rtt_ms_ = (smoothed_rtt_ms_ * 7 + bounded_sample) / 8;
+            }
+            const bool cloud = video_jitter_mode_ == VideoJitterMode::Cloud;
+            const uint64_t min_hold_ms = cloud ? 32
+                                               : VideoRtpJitterBuffer::kMinHoldMs;
+            const uint64_t max_hold_ms = cloud ? kCloudMaxJitterHoldMs
+                                               : kHomeMaxJitterHoldMs;
+            const uint64_t rtt_component = cloud
+                ? smoothed_rtt_ms_ / 2
+                : smoothed_rtt_ms_ / 4;
             const uint64_t hold_ms = std::max<uint64_t>(
-                VideoRtpJitterBuffer::kMinHoldMs,
-                std::min<uint64_t>(180,
-                                   rtt_ms * 2 + 20));
+                min_hold_ms,
+                std::min<uint64_t>(max_hold_ms,
+                                   (cloud ? 32 : 16) + rtt_component));
             video_jitter_.setHoldMs(hold_ms);
-            video_jitter_.setNetworkRttMs(rtt_ms);
-            const uint64_t recovery_hold_ms = std::max<uint64_t>(
-                VideoRtpJitterBuffer::kDefaultRecoveryHoldMs,
-                std::min<uint64_t>(VideoRtpJitterBuffer::kMaxRecoveryHoldMs,
-                                   rtt_ms + 150));
+            video_jitter_.setNetworkRttMs(smoothed_rtt_ms_);
+            const uint64_t recovery_hold_ms = cloud
+                ? std::min<uint64_t>(VideoRtpJitterBuffer::kMaxRecoveryHoldMs,
+                                     kCloudRecoveryHoldMs + smoothed_rtt_ms_ / 2)
+                : std::min<uint64_t>(VideoRtpJitterBuffer::kMaxRecoveryHoldMs,
+                                     kHomeRecoveryHoldMs + smoothed_rtt_ms_ / 2);
             video_jitter_.setRecoveryHoldMs(recovery_hold_ms);
         }
 
@@ -1170,6 +1238,9 @@ void PeerManager::disconnect() {
         pc_ = nullptr;
     }
     data_channels_created_ = false;
+    smoothed_rtt_ms_ = 0;
+    last_rtt_sample_ms_ = 0;
+    invalidateMediaStatsCache();
     video_jitter_.reset();
     nack_logs_ = 0;
     if (initialized_) {

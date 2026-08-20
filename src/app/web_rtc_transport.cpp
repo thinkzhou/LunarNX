@@ -251,6 +251,12 @@ void WebRtcTransport::setMediaEnabled(bool enabled) {
     }
 }
 
+void WebRtcTransport::setVideoJitterMode(webrtc::VideoJitterMode mode) {
+    if (peer_) {
+        peer_->setVideoJitterMode(mode);
+    }
+}
+
 webrtc::PeerMediaStats WebRtcTransport::getMediaStats() const {
     return peer_ ? peer_->getMediaStats() : webrtc::PeerMediaStats{};
 }

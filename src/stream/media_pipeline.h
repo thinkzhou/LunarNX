@@ -256,6 +256,10 @@ private:
     std::atomic<uint64_t> last_decoded_video_ns_{0};
     std::atomic<uint32_t> decoded_video_frames_{0};
     std::atomic<uint32_t> render_fault_count_{0};
+    // Published by the UI/present thread so the WebRTC owner loop can inspect
+    // liveness without taking the renderer/lifecycle mutex.
+    std::atomic<uint64_t> last_presented_video_ns_{0};
+    std::atomic<uint32_t> consecutive_render_faults_{0};
 
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;

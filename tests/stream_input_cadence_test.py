@@ -40,11 +40,16 @@ require("input_accumulator_.peekBatch()" in run_loop and
         "input_accumulator_.commitBatch(*input_batch)" in run_loop and
         "input_batch->reliable" not in run_loop and
         "input-transition-overflow" in run_loop,
-        "Xbox input must use transactional batching without a reliable input path")
-require("{\"input\", \"1.0\", 0, false, 0}" in DATA_CHANNELS and
-        "DATA_CHANNEL_PARTIAL_RELIABLE_REXMIT_UNORDERED" in PEER_MANAGER and
+        "Xbox input must use transactional batching without per-frame application retries")
+require("{\"input\", \"1.0\", 0, true, -1}" in DATA_CHANNELS and
+        "ch.ordered ? DATA_CHANNEL_RELIABLE" in PEER_MANAGER and
         "sendLatestInputData(data, len)" in XBOX_CHANNEL,
-        "Xbox gamepad input must use an unordered zero-retransmit realtime channel")
+        "Xbox gamepad input must use a reliable ordered channel with app-level latest-state coalescing")
+require("kInputHeartbeatInterval{250}" in XBOX_SESSION and
+        "heartbeat_due" in XBOX_SESSION and
+        "sameEncodedState(last_sampled_state_, state)" in
+            (ROOT / "src/input/xbox_input_accumulator.cpp").read_text(),
+        "unchanged reliable input must be suppressed with a 250 ms heartbeat")
 require("kPsInputInterval{8}" in PS_CONTROLLER and
         "input_thread_ = std::thread" in PS_CONTROLLER and
         "update();" in PS_CONTROLLER,
