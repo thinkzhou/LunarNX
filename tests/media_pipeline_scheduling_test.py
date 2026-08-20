@@ -19,20 +19,29 @@ audio = (ROOT / "src/stream/audio_player.cpp").read_text()
 
 require("enum class VideoSchedulingMode" in header,
         "media pipeline must expose a protocol-neutral scheduling mode")
-require("RealtimeQueued" in header and "DirectLowLatency" in header,
-        "scheduling contract must describe queued realtime and direct low-latency behavior")
+require("RealtimeQueued" in header and "DirectLowLatency" in header and
+        "BoundedLowLatency" in header,
+        "scheduling contract must describe queued, direct, and bounded behavior")
 require("VideoSchedulingMode video_scheduling" in header,
         "media options must carry the selected video scheduling mode")
 require("VideoSchedulingMode::RealtimeQueued" in xbox,
         "Xbox controller must explicitly select isolated realtime queue scheduling")
-require("VideoSchedulingMode::DirectLowLatency" in ps,
-        "PlayStation controller must explicitly select direct low-latency scheduling")
+require("VideoSchedulingMode::BoundedLowLatency" in ps,
+        "PlayStation controller must default to bounded low-latency scheduling")
+require("LUNARNX_PS_DIRECT_VIDEO" in ps and
+        "VideoSchedulingMode::DirectLowLatency" in ps,
+        "PlayStation direct scheduling must remain available for development A/B")
+require("max_packets = 3" in ps and "8 * 1024 * 1024" in ps and
+        "std::chrono::milliseconds(50)" in ps,
+        "PlayStation bounded scheduling must select the 3 AU/8 MiB/50 ms budget")
 require("#include <chiaki/" not in header and "libpeer/" not in header,
         "shared scheduling contract must not expose transport-library types")
 require("constexpr size_t kMaxVideoQueuePackets = 2048" in pipeline,
         "Xbox access-unit queue must retain its established 2048-packet safety limit")
-require("video_queue_.size() >= kMaxVideoQueuePackets" in pipeline,
-        "queued video ingress must enforce the established safety limit")
+require("? video_queue_limits_.max_packets" in pipeline and
+        ": kMaxVideoQueuePackets" in pipeline and
+        "video_queue_.size() >= max_packets" in pipeline,
+        "queued video ingress must preserve Xbox limits and select bounded limits by mode")
 require("return enqueueVideoPacket(data, len, timestamp);" in pipeline,
         "queued scheduling must preserve asynchronous network/decode isolation")
 require("video_scheduling_.load(std::memory_order_acquire) ==" in pipeline and

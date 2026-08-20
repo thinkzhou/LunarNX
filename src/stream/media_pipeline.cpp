@@ -73,6 +73,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         video_path_ = options.video_path;
         video_scheduling_.store(options.video_scheduling,
                                 std::memory_order_release);
+        video_queue_limits_ = options.video_queue_limits;
 
         try {
             lunar::diagnosticLog("media", "create components begin backend=%s",
@@ -377,6 +378,9 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
                                        uint64_t timestamp) {
     if (!running_ || !data || len == 0 || len > kMaxVideoQueueBytes) return false;
 
+    const bool bounded = video_scheduling_.load(std::memory_order_acquire) ==
+        VideoSchedulingMode::BoundedLowLatency;
+
     QueuedVideoPacket packet;
     packet.timestamp = timestamp;
     packet.generation = generation_.load();
@@ -384,9 +388,7 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
         ? inspectXboxH264AccessUnit(data, len)
         : inspectVideoAccessUnit(video_codec_, data, len);
     packet.contains_idr = packet.access_unit.has_random_access;
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
     packet.enqueued_at = std::chrono::steady_clock::now();
-#endif
     try {
         packet.data.assign(data, data + len);
     } catch (...) {
@@ -398,12 +400,31 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
     bool recovery_was_pending = false;
     size_t recovery_dropped_packets = 0;
     size_t recovery_dropped_bytes = 0;
+    bool intentional_drop = false;
     {
         std::lock_guard<std::mutex> lock(video_queue_mutex_);
         if (video_worker_stop_ || !running_) return false;
-        if (!video_queue_.empty() &&
-            (video_queue_.size() >= kMaxVideoQueuePackets ||
-             queued_video_bytes_ + packet.data.size() > kMaxVideoQueueBytes)) {
+
+        if (packet.generation != generation_.load()) return false;
+
+        const auto now = std::chrono::steady_clock::now();
+        const bool age_exceeded = bounded && !video_queue_.empty() &&
+            now - video_queue_.front().enqueued_at >= video_queue_limits_.max_age;
+        const size_t max_packets = bounded
+            ? video_queue_limits_.max_packets
+            : kMaxVideoQueuePackets;
+        const size_t max_bytes = bounded
+            ? video_queue_limits_.max_bytes
+            : kMaxVideoQueueBytes;
+        const bool capacity_exceeded = !video_queue_.empty() &&
+            (video_queue_.size() >= max_packets ||
+             packet.data.size() > max_bytes -
+                 std::min(queued_video_bytes_, max_bytes));
+
+        if (bounded && video_waiting_for_keyframe_.load() &&
+            !packet.contains_idr) {
+            intentional_drop = true;
+        } else if (age_exceeded || capacity_exceeded) {
             recovery_was_pending = video_recovery_request_.exchange(true);
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
             recordVideoQueueLocked();
@@ -430,14 +451,17 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
                                      recovery_dropped_packets,
                                      recovery_dropped_bytes);
             }
+            if (!packet.contains_idr) intentional_drop = true;
         }
-        packet.recovery_epoch = video_recovery_epoch_.load();
-        video_queue_.push_back(std::move(packet));
-        queued_video_bytes_ += video_queue_.back().data.size();
+        if (!intentional_drop) {
+            packet.recovery_epoch = video_recovery_epoch_.load();
+            video_queue_.push_back(std::move(packet));
+            queued_video_bytes_ += video_queue_.back().data.size();
+        }
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         recordVideoQueueLocked();
 #endif
-        if (shouldLogMediaQueue()) {
+        if (!intentional_drop && shouldLogMediaQueue()) {
             lunar::diagnosticLog("media",
                                  "video queue push len=%zu packets=%zu bytes=%zu",
                                  len,
@@ -450,7 +474,9 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
                              "video hard recovery reason=video queue overflow epoch=%u",
                              video_recovery_epoch_.load());
     }
-    video_queue_cv_.notify_one();
+    if (!intentional_drop) video_queue_cv_.notify_one();
+    // A bounded drop is an intentional client scheduling decision, not a
+    // Chiaki transport callback failure. Recovery state already owns the IDR.
     return true;
 }
 
@@ -685,6 +711,19 @@ void MediaPipeline::videoWorkerLoop() {
                        video_decoder_reset_wakeup_;
             });
             if (video_worker_stop_) break;
+            const auto now = std::chrono::steady_clock::now();
+            if (video_scheduling_.load(std::memory_order_acquire) ==
+                    VideoSchedulingMode::BoundedLowLatency &&
+                !video_queue_.empty() &&
+                now - video_queue_.front().enqueued_at >=
+                    video_queue_limits_.max_age) {
+                size_t dropped_packets = 0;
+                size_t dropped_bytes = 0;
+                beginHardVideoRecoveryLocked(true,
+                                             dropped_packets,
+                                             dropped_bytes);
+                continue;
+            }
             const bool reset_wakeup = video_decoder_reset_wakeup_;
             video_decoder_reset_wakeup_ = false;
             if (!video_queue_.empty()) {
@@ -696,12 +735,12 @@ void MediaPipeline::videoWorkerLoop() {
             reset_requested = video_decoder_reset_pending_.load() &&
                 (reset_wakeup || (have_packet && packet.contains_idr));
             reset_epoch = video_recovery_epoch_.load();
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
             if (have_packet) {
                 packet.queue_age_us = static_cast<uint64_t>(
                     std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - packet.enqueued_at).count());
             }
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
             recordVideoQueueLocked();
 #endif
         }
@@ -719,6 +758,13 @@ void MediaPipeline::videoWorkerLoop() {
             }
         }
         if (!have_packet) continue;
+        if (video_scheduling_.load(std::memory_order_acquire) ==
+                VideoSchedulingMode::BoundedLowLatency &&
+            std::chrono::steady_clock::now() - packet.enqueued_at >=
+                video_queue_limits_.max_age) {
+            beginHardVideoRecovery("video queue age", true);
+            continue;
+        }
         if (shouldLogMediaWorker()) {
             lunar::diagnosticLog("media", "video worker pop len=%zu", packet.data.size());
         }

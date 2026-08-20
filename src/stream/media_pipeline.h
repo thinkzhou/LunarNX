@@ -8,9 +8,7 @@
 #include "video_codec.h"
 #include <atomic>
 #include <functional>
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
 #include <chrono>
-#endif
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +46,13 @@ enum class VideoBackend {
 enum class VideoSchedulingMode {
     RealtimeQueued,
     DirectLowLatency,
+    BoundedLowLatency,
+};
+
+struct VideoQueueLimits {
+    size_t max_packets = 3;
+    size_t max_bytes = 8 * 1024 * 1024;
+    std::chrono::milliseconds max_age{50};
 };
 
 inline const char* videoBackendName(VideoBackend backend) {
@@ -86,6 +91,7 @@ struct MediaPipelineOptions {
     float dithering_strength = 3.0f;
     bool hold_non_target_startup_frames = false;
     VideoSchedulingMode video_scheduling = VideoSchedulingMode::RealtimeQueued;
+    VideoQueueLimits video_queue_limits{};
 };
 
 /// Owns the media half of a streaming session.
@@ -135,10 +141,8 @@ private:
         uint32_t recovery_epoch = 0;
         bool contains_idr = false;
         VideoAccessUnitInfo access_unit;
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
         std::chrono::steady_clock::time_point enqueued_at;
         uint64_t queue_age_us = 0;
-#endif
         std::vector<uint8_t> data;
     };
 
@@ -189,6 +193,7 @@ private:
     VideoPipelinePath video_path_ = VideoPipelinePath::Xbox;
     std::atomic<VideoSchedulingMode> video_scheduling_{
         VideoSchedulingMode::RealtimeQueued};
+    VideoQueueLimits video_queue_limits_{};
     std::atomic<bool> running_{false};
     std::atomic<uint32_t> generation_{0};
     // DirectLowLatency decoding invokes the frame callback synchronously. A

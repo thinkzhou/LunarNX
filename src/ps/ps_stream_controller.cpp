@@ -12,6 +12,10 @@
 #include <cstring>
 #include <thread>
 
+#ifndef LUNARNX_PS_DIRECT_VIDEO
+#define LUNARNX_PS_DIRECT_VIDEO 0
+#endif
+
 namespace lunar::ps {
 
 namespace {
@@ -301,8 +305,16 @@ bool PsStreamController::startStream() {
     media_opts.video_codec = video_codec_;
     media_opts.hold_non_target_startup_frames = true;
     media_opts.video_backend = video_backend_;
+#if LUNARNX_PS_DIRECT_VIDEO
     media_opts.video_scheduling =
         stream::VideoSchedulingMode::DirectLowLatency;
+#else
+    media_opts.video_scheduling =
+        stream::VideoSchedulingMode::BoundedLowLatency;
+    media_opts.video_queue_limits.max_packets = 3;
+    media_opts.video_queue_limits.max_bytes = 8 * 1024 * 1024;
+    media_opts.video_queue_limits.max_age = std::chrono::milliseconds(50);
+#endif
     if (!media_->initialize(width_, height_, &perf_, media_opts)) {
         last_error_ = "Failed to initialize media pipeline";
         if (mock_session_) mock_session_->stop();
