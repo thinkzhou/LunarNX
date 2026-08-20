@@ -13,14 +13,14 @@ void XboxInputAccumulator::reset() {
     latest_generation_ = 0;
     latest_dirty_ = false;
     has_sampled_state_ = false;
-    force_reliable_snapshot_ = false;
+    force_snapshot_ = false;
     overflow_fault_ = false;
 }
 
 void XboxInputAccumulator::publish(const GamepadState& state,
                                    bool delivery_ready,
                                    bool mark_latest,
-                                   bool force_reliable) {
+                                   bool force_snapshot) {
     std::lock_guard<std::mutex> lock(mutex_);
     const bool transition = has_sampled_state_ &&
                             hasDigitalTransition(last_sampled_state_, state);
@@ -34,24 +34,23 @@ void XboxInputAccumulator::publish(const GamepadState& state,
     latest_state_ = state;
     last_sampled_state_ = state;
     has_sampled_state_ = true;
-    if (transition || mark_latest || force_reliable) {
+    if (transition || mark_latest || force_snapshot) {
         latest_dirty_ = true;
         ++latest_generation_;
     }
-    if (force_reliable) {
-        force_reliable_snapshot_ = true;
+    if (force_snapshot) {
+        force_snapshot_ = true;
     }
 }
 
 std::optional<XboxInputAccumulator::Batch> XboxInputAccumulator::peekBatch() const {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!has_sampled_state_ ||
-        (transitions_.empty() && !latest_dirty_ && !force_reliable_snapshot_)) {
+        (transitions_.empty() && !latest_dirty_ && !force_snapshot_)) {
         return std::nullopt;
     }
 
     Batch batch;
-    batch.reliable = !transitions_.empty() || force_reliable_snapshot_;
     const size_t transition_count = std::min(
         transitions_.size(), XInputEncoder::kMaxGamepadFrames);
     batch.frames.reserve(XInputEncoder::kMaxGamepadFrames);
@@ -63,7 +62,7 @@ std::optional<XboxInputAccumulator::Batch> XboxInputAccumulator::peekBatch() con
     const bool included_all_transitions = transition_count == transitions_.size();
     if (included_all_transitions &&
         batch.frames.size() < XInputEncoder::kMaxGamepadFrames &&
-        (latest_dirty_ || force_reliable_snapshot_)) {
+        (latest_dirty_ || force_snapshot_)) {
         if (batch.frames.empty() ||
             !sameEncodedState(batch.frames.back(), latest_state_)) {
             batch.frames.push_back(latest_state_);
@@ -84,7 +83,7 @@ void XboxInputAccumulator::commitBatch(const Batch& batch) {
     if (batch.includes_latest &&
         latest_generation_ == batch.latest_generation) {
         latest_dirty_ = false;
-        force_reliable_snapshot_ = false;
+        force_snapshot_ = false;
     }
 }
 
@@ -94,7 +93,7 @@ void XboxInputAccumulator::prepareForReconnect() {
     if (has_sampled_state_) {
         latest_dirty_ = true;
         ++latest_generation_;
-        force_reliable_snapshot_ = true;
+        force_snapshot_ = true;
     }
     overflow_fault_ = false;
 }

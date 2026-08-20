@@ -211,11 +211,10 @@ bool XboxChannelManager::startProtocol(const StreamProfile& profile,
     return flushed;
 }
 
-bool XboxChannelManager::sendInputPacket(const uint8_t* data,
-                                         size_t len,
-                                         bool reliable) {
-    return reliable ? transport_.sendInputData(data, len)
-                    : transport_.sendLatestInputData(data, len);
+bool XboxChannelManager::sendInputPacket(const uint8_t* data, size_t len) {
+    // Gamepad packets contain a complete state. Never put a stale transition
+    // on the reliable retry path; the next snapshot supersedes it.
+    return transport_.sendLatestInputData(data, len);
 }
 
 bool XboxChannelManager::sendControlMessage(std::string_view json) {

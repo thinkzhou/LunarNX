@@ -5,6 +5,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VIEW = (ROOT / "src/ui/stream_view.cpp").read_text()
 XBOX_SESSION = (ROOT / "src/app/xbox_stream_session.cpp").read_text()
+XBOX_CHANNEL = (ROOT / "src/app/xbox_channel_manager.cpp").read_text()
+DATA_CHANNELS = (ROOT / "src/webrtc/xstreaming_data_channels.h").read_text()
+PEER_MANAGER = (ROOT / "src/webrtc/peer_manager.cpp").read_text()
 PS_CONTROLLER = (ROOT / "src/ps/ps_stream_controller.cpp").read_text()
 RENDERER = (ROOT / "src/stream/video_renderer.cpp").read_text()
 
@@ -35,8 +38,13 @@ require("transport_.processEvents()" in run_loop and
         "the Xbox WebRTC owner loop must encode and send sampled frames")
 require("input_accumulator_.peekBatch()" in run_loop and
         "input_accumulator_.commitBatch(*input_batch)" in run_loop and
+        "input_batch->reliable" not in run_loop and
         "input-transition-overflow" in run_loop,
-        "Xbox transitions must use transactional batching and reconnect on overflow")
+        "Xbox input must use transactional batching without a reliable input path")
+require("{\"input\", \"1.0\", 0, false, 0}" in DATA_CHANNELS and
+        "DATA_CHANNEL_PARTIAL_RELIABLE_REXMIT_UNORDERED" in PEER_MANAGER and
+        "sendLatestInputData(data, len)" in XBOX_CHANNEL,
+        "Xbox gamepad input must use an unordered zero-retransmit realtime channel")
 require("kPsInputInterval{8}" in PS_CONTROLLER and
         "input_thread_ = std::thread" in PS_CONTROLLER and
         "update();" in PS_CONTROLLER,

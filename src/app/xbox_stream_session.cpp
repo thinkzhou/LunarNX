@@ -802,8 +802,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                     first_input_logged = true;
                 }
                 if (channels_.sendInputPacket(input_packet.data(),
-                                              input_packet.size(),
-                                              input_batch->reliable)) {
+                                              input_packet.size())) {
                     input_accumulator_.commitBatch(*input_batch);
                     perf_.recordInputPacket();
                 } else if (input_send_failure_logs < 8) {

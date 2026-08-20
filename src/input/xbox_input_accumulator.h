@@ -15,7 +15,6 @@ class XboxInputAccumulator {
 public:
     struct Batch {
         std::vector<GamepadState> frames;
-        bool reliable = false;
         uint64_t last_transition_id = 0;
         uint64_t latest_generation = 0;
         bool includes_latest = false;
@@ -27,7 +26,7 @@ public:
     void publish(const GamepadState& state,
                  bool delivery_ready,
                  bool mark_latest,
-                 bool force_reliable = false);
+                 bool force_snapshot = false);
     std::optional<Batch> peekBatch() const;
     void commitBatch(const Batch& batch);
     void prepareForReconnect();
@@ -53,7 +52,7 @@ private:
     uint64_t latest_generation_ = 0;
     bool latest_dirty_ = false;
     bool has_sampled_state_ = false;
-    bool force_reliable_snapshot_ = false;
+    bool force_snapshot_ = false;
     bool overflow_fault_ = false;
 };
 
