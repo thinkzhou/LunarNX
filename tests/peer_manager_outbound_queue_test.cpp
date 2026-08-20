@@ -44,6 +44,17 @@ struct PeerManagerQueueTestAccess {
     static bool enqueueNack(PeerManager& peer, uint16_t pid, uint16_t blp) {
         return peer.enqueueNack(pid, blp);
     }
+    static uint32_t nextInputSequence(const PeerManager& peer) {
+        return peer.next_input_sequence_;
+    }
+    static bool prepareInput(const PeerManager& peer,
+                             const Command& command,
+                             std::vector<uint8_t>& packet) {
+        return peer.prepareSequencedInputPayload(command, packet);
+    }
+    static void commitInput(PeerManager& peer, int result) {
+        peer.commitSequencedInputResult(result);
+    }
     static bool waitingForKeyframe(const PeerManager& peer) {
         return peer.video_jitter_.waitingForKeyframe();
     }
@@ -91,6 +102,13 @@ std::vector<uint8_t> rtp(uint16_t sequence,
     return packet;
 }
 
+uint32_t readU32(const std::vector<uint8_t>& packet, size_t offset) {
+    return static_cast<uint32_t>(packet[offset]) |
+           (static_cast<uint32_t>(packet[offset + 1]) << 8) |
+           (static_cast<uint32_t>(packet[offset + 2]) << 16) |
+           (static_cast<uint32_t>(packet[offset + 3]) << 24);
+}
+
 } // namespace
 
 int main() {
@@ -108,6 +126,58 @@ int main() {
     assert(!peer.consumeReliableSendFailure());
     assert(!Access::complete(peer, reliable, static_cast<int>(sizeof(payload))));
     assert(Access::size(peer) == 0);
+
+    assert(peer.sendControlData(payload, sizeof(payload)));
+    reliable = Access::front(peer);
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        Access::complete(peer, reliable, MBEDTLS_ERR_SSL_WANT_WRITE);
+        if (attempt < 7) {
+            reliable = Access::front(peer);
+        }
+    }
+    assert(Access::size(peer) == 0);
+    assert(peer.consumeReliableSendFailure());
+
+    const uint8_t input_draft_a[] = {2, 0, 0, 0, 0, 0, 0, 0};
+    const uint8_t input_draft_b[] = {2, 0, 0, 0, 0, 0, 1, 0};
+    PeerManager sequenced;
+    Access::connect(sequenced);
+    assert(sequenced.sendLatestInputData(input_draft_a, sizeof(input_draft_a)));
+    assert(sequenced.sendLatestInputData(input_draft_b, sizeof(input_draft_b)));
+    assert(Access::nextInputSequence(sequenced) == 0);
+    auto sequenced_command = Access::front(sequenced);
+    std::vector<uint8_t> wire_packet;
+    assert(Access::prepareInput(sequenced, sequenced_command, wire_packet));
+    assert(readU32(wire_packet, 2) == 0);
+    Access::commitInput(sequenced, MBEDTLS_ERR_SSL_WANT_WRITE);
+    assert(Access::nextInputSequence(sequenced) == 0);
+    assert(!Access::complete(
+        sequenced, sequenced_command, MBEDTLS_ERR_SSL_WANT_WRITE));
+
+    assert(sequenced.sendLatestInputData(input_draft_a, sizeof(input_draft_a)));
+    sequenced_command = Access::front(sequenced);
+    assert(Access::prepareInput(sequenced, sequenced_command, wire_packet));
+    assert(readU32(wire_packet, 2) == 0);
+    Access::commitInput(sequenced, static_cast<int>(wire_packet.size()));
+    assert(Access::nextInputSequence(sequenced) == 1);
+    assert(!Access::complete(
+        sequenced, sequenced_command, static_cast<int>(wire_packet.size())));
+
+    assert(sequenced.sendInputData(input_draft_a, sizeof(input_draft_a)));
+    sequenced_command = Access::front(sequenced);
+    assert(Access::prepareInput(sequenced, sequenced_command, wire_packet));
+    assert(readU32(wire_packet, 2) == 1);
+    Access::commitInput(sequenced, MBEDTLS_ERR_SSL_WANT_WRITE);
+    assert(Access::nextInputSequence(sequenced) == 1);
+    assert(Access::complete(
+        sequenced, sequenced_command, MBEDTLS_ERR_SSL_WANT_WRITE));
+    sequenced_command = Access::front(sequenced);
+    assert(Access::prepareInput(sequenced, sequenced_command, wire_packet));
+    assert(readU32(wire_packet, 2) == 1);
+    Access::commitInput(sequenced, static_cast<int>(wire_packet.size()));
+    assert(Access::nextInputSequence(sequenced) == 2);
+    assert(!Access::complete(
+        sequenced, sequenced_command, static_cast<int>(wire_packet.size())));
 
     assert(peer.sendMessageData(payload, sizeof(payload)));
     reliable = Access::front(peer);
@@ -155,12 +225,12 @@ int main() {
     const auto ordered = Access::types(peer);
     assert(ordered.size() == 3);
     assert(ordered[0] == Access::Type::Pli);
-    assert(ordered[1] == Access::Type::Control);
-    assert(ordered[2] == Access::Type::InputLatest);
+    assert(ordered[1] == Access::Type::InputLatest);
+    assert(ordered[2] == Access::Type::Control);
 
     pli = Access::front(peer);
     assert(!Access::complete(peer, pli, 12));
-    assert(Access::front(peer).type == Access::Type::Control);
+    assert(Access::front(peer).type == Access::Type::InputLatest);
 
     PeerManager scheduler;
     Access::connect(scheduler);
@@ -201,6 +271,7 @@ int main() {
     std::thread producer([&]() {
         for (uint32_t value = 0; value < 10000; ++value) {
             const uint8_t bytes[] = {
+                2, 0, 0, 0,
                 static_cast<uint8_t>(value),
                 static_cast<uint8_t>(value >> 8),
                 static_cast<uint8_t>(value >> 16),
@@ -213,6 +284,11 @@ int main() {
     while (!producer_done.load() || Access::size(concurrent) > 0) {
         if (Access::size(concurrent) > 0) {
             const auto snapshot = Access::front(concurrent);
+            std::vector<uint8_t> packet;
+            assert(Access::prepareInput(concurrent, snapshot, packet));
+            assert(readU32(packet, 2) ==
+                   Access::nextInputSequence(concurrent));
+            Access::commitInput(concurrent, static_cast<int>(packet.size()));
             Access::complete(concurrent, snapshot,
                              static_cast<int>(snapshot.payload.size()));
         } else {
@@ -221,6 +297,7 @@ int main() {
     }
     producer.join();
     assert(Access::size(concurrent) == 0);
+    assert(Access::nextInputSequence(concurrent) > 0);
 
     return 0;
 }

@@ -87,6 +87,7 @@ XCLOUD_HANDSHAKE_PROBE_OBJS = $(BUILD)/src/platform/desktop_xcloud_handshake_pro
                     $(BUILD)/src/app/xbox_session_client.o \
                     $(BUILD)/src/app/ice_candidate_processor.o \
                     $(BUILD)/src/webrtc/peer_manager.o \
+	                    $(BUILD)/src/input/xinput_encoder.o \
 	                    $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
                     $(BUILD)/src/webrtc/xbox_input_feedback.o \
                     $(BUILD)/src/platform/network_worker.o \
@@ -135,12 +136,14 @@ VIDEO_JITTER_TEST_OBJS = $(BUILD)/tests/video_rtp_jitter_buffer_test.o \
 
 OUTBOUND_QUEUE_TEST_OBJS = $(BUILD)/tests/peer_manager_outbound_queue_test.o \
 	                          $(BUILD)/src/webrtc/peer_manager.o \
+	                          $(BUILD)/src/input/xinput_encoder.o \
 	                          $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
 	                          $(BUILD)/src/webrtc/xbox_input_feedback.o \
 	                          $(C_OBJS)
 
 STREAM_RESILIENCE_TEST_OBJS = $(BUILD)/tests/stream_resilience_scenarios_test.o \
 	                             $(BUILD)/src/webrtc/peer_manager.o \
+	                             $(BUILD)/src/input/xinput_encoder.o \
 	                             $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
 	                             $(BUILD)/src/webrtc/xbox_input_feedback.o \
 	                             $(C_OBJS)
@@ -183,6 +186,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 	                 $(BUILD)/src/api/xbox_api_client.o $(BUILD)/src/api/http_client.o \
 	                 $(BUILD)/src/app/ice_candidate_processor.o \
 	                 $(BUILD)/src/webrtc/peer_manager.o \
+	                 $(BUILD)/src/input/xinput_encoder.o \
 	                 $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
 	                 $(BUILD)/src/webrtc/xbox_input_feedback.o \
                  $(C_OBJS)

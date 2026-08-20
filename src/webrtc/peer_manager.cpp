@@ -2,6 +2,7 @@
 #include "xbox_input_feedback.h"
 #include "xstreaming_data_channels.h"
 #include "../diagnostics.h"
+#include "../input/xinput_encoder.h"
 #include <cJSON.h>
 #include <peer.h>
 #include <algorithm>
@@ -12,6 +13,7 @@
 namespace lunar::webrtc {
 
 namespace {
+constexpr uint8_t kMaxReliableSendAttempts = 8;
 
 uint64_t elapsedNs(std::chrono::steady_clock::time_point start) {
     if (start.time_since_epoch().count() == 0) return 0;
@@ -353,6 +355,7 @@ bool PeerManager::initialize() {
     last_pump_phase_log_ = {};
     reliable_send_failed_ = false;
     outbound_drop_events_ = 0;
+    next_input_sequence_ = 0;
     media_clock_start_ = std::chrono::steady_clock::now();
     video_clock_.reset();
     audio_clock_.reset();
@@ -657,10 +660,13 @@ int PeerManager::outboundPriority(OutboundType type) {
         case OutboundType::Pli: return 0;
         case OutboundType::Nack: return 1;
         case OutboundType::ReceiverFeedback: return 2;
+        // The latest controller state is a realtime stream.  It must not be
+        // blocked indefinitely by a reliable SCTP command that is being
+        // retried after a transient send failure.
+        case OutboundType::InputLatest: return 3;
         case OutboundType::InputReliable:
         case OutboundType::Control:
-        case OutboundType::Message: return 3;
-        case OutboundType::InputLatest: return 4;
+        case OutboundType::Message: return 4;
     }
     return 5;
 }
@@ -723,11 +729,7 @@ int PeerManager::sendOutboundCommand(const OutboundCommand& command) {
     switch (command.type) {
         case OutboundType::InputReliable:
         case OutboundType::InputLatest:
-            return peer_connection_datachannel_send_sid_binary(
-                pc_,
-                reinterpret_cast<char*>(const_cast<uint8_t*>(command.payload.data())),
-                command.payload.size(),
-                xstreamingDataChannelSid("input"));
+            return sendInputCommand(command);
         case OutboundType::Control:
             return peer_connection_datachannel_send_sid(
                 pc_,
@@ -750,6 +752,38 @@ int PeerManager::sendOutboundCommand(const OutboundCommand& command) {
                 command.highest_sequence, 0, command.bitrate_bps);
     }
     return -1;
+}
+
+bool PeerManager::prepareSequencedInputPayload(
+    const OutboundCommand& command,
+    std::vector<uint8_t>& packet) const {
+    if (command.payload.size() < 6 ||
+        command.payload.size() > kMaxOutboundPayloadBytes) {
+        return false;
+    }
+    packet = command.payload;
+    return input::XInputEncoder::stampSequence(
+        packet.data(), packet.size(), next_input_sequence_);
+}
+
+void PeerManager::commitSequencedInputResult(int result) {
+    if (result >= 0) {
+        ++next_input_sequence_;
+    }
+}
+
+int PeerManager::sendInputCommand(const OutboundCommand& command) {
+    if (!pc_) return -1;
+    std::vector<uint8_t> packet;
+    if (!prepareSequencedInputPayload(command, packet)) return -1;
+
+    const int result = peer_connection_datachannel_send_sid_binary(
+        pc_,
+        reinterpret_cast<char*>(packet.data()),
+        packet.size(),
+        xstreamingDataChannelSid("input"));
+    commitSequencedInputResult(result);
+    return result;
 }
 
 void PeerManager::drainOutboundCommands(
@@ -785,7 +819,8 @@ bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
     const bool transient =
         result < 0 && peer_connection_is_transient_send_error(result);
     const bool keep_for_retry =
-        (transient && isReliableCommand(command.type)) ||
+        (transient && isReliableCommand(command.type) &&
+         command.attempts + 1 < kMaxReliableSendAttempts) ||
         (result < 0 && command.type == OutboundType::Nack &&
          command.attempts == 0) ||
         (result < 0 && command.type == OutboundType::Pli &&
@@ -800,7 +835,8 @@ bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
         if (queued != outbound_commands_.end() && !keep_for_retry) {
             outbound_commands_.erase(queued);
         } else if (queued != outbound_commands_.end() &&
-                   (command.type == OutboundType::Nack ||
+                   (isReliableCommand(command.type) ||
+                    command.type == OutboundType::Nack ||
                     command.type == OutboundType::Pli)) {
             queued->attempts++;
         }
@@ -812,7 +848,22 @@ bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
     }
     logOutboundDrop(transient ? "transient_drop" : "send_failed",
                     command.type, result);
-    if (!transient && isReliableCommand(command.type)) {
+    if (isReliableCommand(command.type) &&
+        (!transient || command.attempts + 1 >= kMaxReliableSendAttempts)) {
+        const char* type_name = "input-reliable";
+        if (command.type == OutboundType::Control) {
+            type_name = "control";
+        } else if (command.type == OutboundType::Message) {
+            type_name = "message";
+        }
+        lunar::persistentEventLog(
+            "webrtc-outbound",
+            "reliable SCTP send failed type=%s result=%d attempts=%u "
+            "transient=%s action=reconnect",
+            type_name,
+            result,
+            static_cast<unsigned>(command.attempts + 1),
+            transient ? "true" : "false");
         reliable_send_failed_ = true;
     }
     return false;

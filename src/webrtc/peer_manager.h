@@ -159,6 +159,7 @@ private:
     mutable std::mutex outbound_mutex_;
     std::deque<OutboundCommand> outbound_commands_;
     uint64_t next_outbound_command_id_ = 1;
+    uint32_t next_input_sequence_ = 0;
     std::atomic<bool> reliable_send_failed_{false};
     std::atomic<uint32_t> outbound_drop_events_{0};
 
@@ -171,6 +172,10 @@ private:
     void drainOutboundCommands(std::chrono::steady_clock::time_point deadline);
     bool completeOutboundCommand(const OutboundCommand& command, int result);
     int sendOutboundCommand(const OutboundCommand& command);
+    int sendInputCommand(const OutboundCommand& command);
+    bool prepareSequencedInputPayload(const OutboundCommand& command,
+                                      std::vector<uint8_t>& packet) const;
+    void commitSequencedInputResult(int result);
     void clearOutboundCommands();
     static bool isReliableCommand(OutboundType type);
     static bool isSctpCommand(OutboundType type);

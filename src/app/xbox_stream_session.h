@@ -14,10 +14,12 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace lunar::app {
 
@@ -67,6 +69,18 @@ private:
                  std::string session_id,
                  int keep_alive_seconds,
                  RuntimeCallbacks callbacks);
+    void startInputLoop(RuntimeCallbacks callbacks);
+    void stopInputLoop();
+    void sampleInput(const RuntimeCallbacks& callbacks,
+                     int& guide_pulse_frames_remaining,
+                     bool& guide_release_pending,
+                     std::chrono::steady_clock::time_point& next_snapshot);
+    std::vector<input::GamepadState> takeInputFrames();
+    void discardPendingInputTransitions();
+    static bool hasButtonTransition(const input::GamepadState& previous,
+                                    const input::GamepadState& current);
+    static bool sameEncodedGamepadState(const input::GamepadState& left,
+                                        const input::GamepadState& right);
     void controlLoop(std::string session_id,
                      int keep_alive_seconds,
                      RuntimeCallbacks callbacks);
@@ -86,12 +100,21 @@ private:
 
     std::atomic<bool> streaming_{false};
     std::atomic<bool> stop_requested_{false};
+    std::atomic<bool> input_loop_stop_{true};
+    std::atomic<bool> input_delivery_ready_{false};
     mutable std::mutex state_mutex_;
     std::mutex session_api_mutex_;
     std::mutex control_mutex_;
+    std::mutex input_mutex_;
     std::condition_variable control_cv_;
     std::thread stream_thread_;
     std::thread control_thread_;
+    std::thread input_thread_;
+    std::deque<input::GamepadState> input_transitions_;
+    input::GamepadState latest_input_state_{};
+    input::GamepadState last_sampled_input_state_{};
+    bool latest_input_dirty_ = false;
+    bool has_sampled_input_ = false;
     std::string session_id_;
 };
 
