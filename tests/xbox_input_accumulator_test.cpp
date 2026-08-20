@@ -10,7 +10,7 @@ int main() {
     GamepadState neutral{};
     input.publish(neutral, true, true);
     auto latest = input.peekBatch();
-    assert(latest && !latest->reliable);
+    assert(latest && latest->frames.size() == 1);
     input.commitBatch(*latest);
 
     GamepadState down{};
@@ -18,7 +18,7 @@ int main() {
     input.publish(down, true, false);
     input.publish(neutral, true, true);
     auto transitions = input.peekBatch();
-    assert(transitions && transitions->reliable);
+    assert(transitions);
     assert(transitions->frames.size() == 2);
     assert(transitions->frames[0].a);
     assert(!transitions->frames[1].a);
@@ -30,7 +30,7 @@ int main() {
     input.publish(down, true, false);
     input.commitBatch(*transitions);
     auto newer = input.peekBatch();
-    assert(newer && newer->reliable);
+    assert(newer);
     assert(newer->frames.front().a);
 
     input.reset();
@@ -41,12 +41,12 @@ int main() {
         input.publish(state, true, false);
     }
     auto first = input.peekBatch();
-    assert(first && first->reliable);
+    assert(first);
     assert(first->frames.size() == 29);
     assert(!first->includes_latest);
     input.commitBatch(*first);
     auto second = input.peekBatch();
-    assert(second && second->reliable);
+    assert(second);
     assert(second->frames.size() == 6);
 
     input.reset();
@@ -58,25 +58,25 @@ int main() {
     }
     input.publish(last_transition, true, false, true);
     auto full_transition_batch = input.peekBatch();
-    assert(full_transition_batch && full_transition_batch->reliable);
+    assert(full_transition_batch);
     assert(full_transition_batch->frames.size() == 29);
     assert(!full_transition_batch->includes_latest);
     input.commitBatch(*full_transition_batch);
     auto forced_after_full_batch = input.peekBatch();
-    assert(forced_after_full_batch && forced_after_full_batch->reliable);
+    assert(forced_after_full_batch);
     assert(forced_after_full_batch->includes_latest);
 
     input.reset();
     input.publish(neutral, true, false);
     input.publish(down, true, false);
     auto old_reliable_batch = input.peekBatch();
-    assert(old_reliable_batch && old_reliable_batch->reliable);
+    assert(old_reliable_batch);
     GamepadState forced_new_generation = down;
     forced_new_generation.left_stick_x = 9000;
     input.publish(forced_new_generation, true, false, true);
     input.commitBatch(*old_reliable_batch);
     auto forced_after_old_commit = input.peekBatch();
-    assert(forced_after_old_commit && forced_after_old_commit->reliable);
+    assert(forced_after_old_commit);
     assert(forced_after_old_commit->includes_latest);
 
     input.reset();
@@ -86,17 +86,17 @@ int main() {
     stick.left_stick_x = 1234;
     input.publish(stick, true, true);
     auto analog = input.peekBatch();
-    assert(analog && !analog->reliable);
+    assert(analog);
 
     input.commitBatch(*analog);
     input.publish(neutral, true, false, true);
     auto ui_neutral = input.peekBatch();
-    assert(ui_neutral && ui_neutral->reliable);
+    assert(ui_neutral);
     input.commitBatch(*ui_neutral);
 
     input.prepareForReconnect();
     auto resync = input.peekBatch();
-    assert(resync && resync->reliable && resync->includes_latest);
+    assert(resync && resync->includes_latest);
 
     input.reset();
     input.publish(neutral, true, false);

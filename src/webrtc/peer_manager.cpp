@@ -463,8 +463,17 @@ bool PeerManager::createDataChannels() {
         if (peer_connection_lookup_sid(pc_, ch.label, &existing_sid) == 0) {
             continue;
         }
+        const DecpChannelType channel_type =
+            ch.max_retransmits == 0
+                ? (ch.ordered ? DATA_CHANNEL_PARTIAL_RELIABLE_REXMIT
+                              : DATA_CHANNEL_PARTIAL_RELIABLE_REXMIT_UNORDERED)
+                : (ch.ordered ? DATA_CHANNEL_RELIABLE
+                              : DATA_CHANNEL_RELIABLE_UNORDERED);
+        const uint32_t reliability = ch.max_retransmits < 0
+            ? 0
+            : static_cast<uint32_t>(ch.max_retransmits);
         int ret = peer_connection_create_datachannel_sid(pc_,
-            DATA_CHANNEL_RELIABLE, 0, 0,
+            channel_type, 0, reliability,
             const_cast<char*>(ch.label),
             const_cast<char*>(ch.protocol),
             ch.sid);
@@ -673,8 +682,10 @@ int PeerManager::outboundPriority(OutboundType type) {
         case OutboundType::Pli: return 0;
         case OutboundType::Nack: return 1;
         case OutboundType::ReceiverFeedback: return 2;
-        case OutboundType::InputReliable: return 3;
-        case OutboundType::InputLatest: return 4;
+        // The newest complete controller state must always beat a stale
+        // bootstrap/control retry. Gameplay input is a realtime stream.
+        case OutboundType::InputLatest: return 3;
+        case OutboundType::InputReliable: return 4;
         case OutboundType::Control:
         case OutboundType::Message: return 5;
     }

@@ -287,9 +287,21 @@ int main() {
     pli = selected_order;
     assert(!Access::complete(peer, pli, 12));
     assert(Access::select(peer, selected_order, true));
-    assert(selected_order.type == Access::Type::InputReliable);
+    assert(selected_order.type == Access::Type::InputLatest);
     assert(!Access::complete(peer, selected_order, 12));
     assert(Access::select(peer, selected_order, true));
+    assert(selected_order.type == Access::Type::InputReliable);
+
+    // A transient failure in a reliable command must not starve the newest
+    // controller snapshot. Realtime input is allowed to skip the stale retry.
+    PeerManager transient_latest;
+    Access::connect(transient_latest);
+    assert(transient_latest.sendInputData(payload, sizeof(payload)));
+    auto blocked_reliable = Access::front(transient_latest);
+    assert(Access::complete(transient_latest, blocked_reliable, kWantWrite));
+    assert(transient_latest.sendLatestInputData(latest_input,
+                                                sizeof(latest_input)));
+    assert(Access::select(transient_latest, selected_order, true));
     assert(selected_order.type == Access::Type::InputLatest);
 
     PeerManager scheduler;

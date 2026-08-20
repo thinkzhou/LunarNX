@@ -21,7 +21,7 @@ public:
                        const uint8_t* metadata,
                        size_t metadata_len,
                        const CancelCallback& cancel);
-    bool sendInputPacket(const uint8_t* data, size_t len, bool reliable);
+    bool sendInputPacket(const uint8_t* data, size_t len);
     bool sendControlMessage(std::string_view json);
     bool sendMessageHandshake();
     bool requestVideoKeyframe(bool ifr_requested);
