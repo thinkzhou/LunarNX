@@ -39,7 +39,7 @@ public:
     bool requestVideoKeyframe();
     bool sendReceiverFeedback(uint32_t bitrate_bps);
     bool hasPendingReliableData() const;
-    bool consumeReliableSendFailure();
+    bool consumeDataChannelFailure();
     bool isDataChannelReady() const;
     void setMediaEnabled(bool enabled);
     webrtc::PeerMediaStats getMediaStats() const;

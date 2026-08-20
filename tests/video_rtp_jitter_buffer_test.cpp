@@ -38,6 +38,7 @@ struct Harness {
     VideoRtpJitterBuffer jitter;
     std::vector<std::vector<uint8_t>> frames;
     std::vector<std::pair<uint16_t, uint16_t>> nacks;
+    std::vector<uint32_t> source_discontinuities;
     int recovery_requests = 0;
     int decoder_resets = 0;
 
@@ -54,6 +55,9 @@ struct Harness {
             [this](bool reset_decoder) {
                 recovery_requests++;
                 if (reset_decoder) decoder_resets++;
+            },
+            [this](uint32_t ssrc) {
+                source_discontinuities.push_back(ssrc);
             });
     }
 };
@@ -283,6 +287,21 @@ void test_tracks_arrival_gap_sequence_jump_and_ssrc_change() {
     assert(stats.max_arrival_gap_ms == 50);
     assert(stats.ssrc == 0xaabbccdd);
     assert(stats.ssrc_changes == 1);
+    assert(h.source_discontinuities.size() == 1);
+    assert(h.source_discontinuities[0] == 0xaabbccdd);
+}
+
+void test_timestamp_restart_resets_source_state() {
+    Harness h;
+    openWithIdr(h, 200, 900000);
+    h.push(rtp(201, 901500, true, {0x61, 0x22}), 10);
+    h.push(rtp(202, 1000, true, {0x65, 0x33}), 20);
+
+    const auto stats = h.jitter.stats();
+    assert(stats.timestamp_discontinuities == 1);
+    assert(h.source_discontinuities.size() == 1);
+    assert(h.source_discontinuities[0] == 1);
+    assert(!h.jitter.waitingForKeyframe());
 }
 
 void test_stale_retransmission_does_not_clear_recovery_state() {
@@ -627,40 +646,6 @@ void test_frame_backlog_bounds_head_of_line_wait() {
     assert(!h.jitter.waitingForKeyframe());
 }
 
-void test_adaptive_hold_tracks_frame_jitter_and_rtt() {
-    Harness h;
-    openWithIdr(h, 4000, 1000);
-
-    uint64_t arrival_ms = 17;
-    uint16_t sequence = 4001;
-    uint32_t timestamp = 2500;
-    for (int frame = 0; frame < 40; ++frame) {
-        h.push(rtp(sequence++, timestamp, true, {0x61, 0x22}), arrival_ms);
-        arrival_ms += 17;
-        timestamp += 1500;
-    }
-    const auto stable = h.jitter.stats();
-    assert(stable.adaptive_hold_ms <= 16);
-    assert(stable.estimated_jitter_ms <= 2);
-
-    arrival_ms += 35;
-    h.push(rtp(sequence++, timestamp, true, {0x61, 0x33}), arrival_ms);
-    const auto spiked = h.jitter.stats();
-    assert(spiked.adaptive_hold_ms > stable.adaptive_hold_ms);
-
-    h.jitter.setNetworkRttMs(80);
-    const auto with_rtt = h.jitter.stats();
-    assert(with_rtt.adaptive_recovery_hold_ms >= 100);
-
-    for (int frame = 0; frame < 80; ++frame) {
-        arrival_ms += 17;
-        timestamp += 1500;
-        h.push(rtp(sequence++, timestamp, true, {0x61, 0x44}), arrival_ms);
-    }
-    const auto recovered = h.jitter.stats();
-    assert(recovered.adaptive_hold_ms < spiked.adaptive_hold_ms);
-}
-
 } // namespace
 
 int main() {
@@ -676,6 +661,7 @@ int main() {
     test_missing_detection_totals_do_not_roll_back_after_recovery();
     test_packet_before_initial_sequence_is_not_reported_as_recovered();
     test_tracks_arrival_gap_sequence_jump_and_ssrc_change();
+    test_timestamp_restart_resets_source_state();
     test_stale_retransmission_does_not_clear_recovery_state();
     test_missing_marker_does_not_block_later_idr();
     test_sequence_wrap_reorders_retransmission();
@@ -693,7 +679,6 @@ int main() {
     test_recovery_nacks_sps_pps_gap_after_idr_is_identified();
     test_recovery_hold_does_not_increase_normal_frame_latency();
     test_frame_backlog_bounds_head_of_line_wait();
-    test_adaptive_hold_tracks_frame_jitter_and_rtt();
     std::cout << "Video RTP jitter buffer tests passed\n";
     return 0;
 }

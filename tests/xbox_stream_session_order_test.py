@@ -53,24 +53,41 @@ def main():
     require("transport_.setRemoteAnswer(answer, remote_candidates)" not in source,
             "Remote ICE candidates should not be appended into the SDP answer")
 
-    input_pos = source.index("gamepad_state = gamepad_.read()")
-    loop_process_pos = source.index("transport_.processEvents();", source.index("while (streaming_"))
-    require(input_pos < loop_process_pos,
-            "Input must be sampled and sent before inbound media processing can consume the loop budget")
+    input_start = source.index("void XboxStreamSession::startInputLoop(")
+    input_end = source.index(
+        "void XboxStreamSession::prepareInputForReconnect(", input_start)
+    input_loop = source[input_start:input_end]
+    run_loop_start = source.index("void XboxStreamSession::runLoop(")
+    run_loop_end = source.index("void XboxStreamSession::controlLoop(")
+    run_loop = source[run_loop_start:run_loop_end]
+    require("gamepad_state = gamepad_.read()" in input_loop and
+            "input_router_.route(gamepad_state)" in input_loop,
+            "the input producer must own physical gamepad sampling and routing")
+    require("transport_" not in input_loop,
+            "the input producer must not call into libpeer/WebRTC")
+    require("xinput_.encodeFrames(input_batch->frames)" in run_loop and
+            "channels_.sendInputPacket" in run_loop,
+            "the WebRTC owner loop must encode and send queued input frames")
+    require("xinput_.reset()" not in source,
+            "input sequence must reset with a new WebRTC association, not encoder state")
+    loop_process_pos = run_loop.index("transport_.processEvents();")
+    input_send_pos = run_loop.index("xinput_.encodeFrames(input_batch->frames)")
+    require(input_send_pos < loop_process_pos,
+            "Queued input must be sent before inbound media processing consumes the loop budget")
     require("kNetworkPumpInterval{2}" in source,
             "WebRTC must use a short pump cadence independent of input polling")
-    require("kInputPollInterval{16}" in source,
-            "Xbox input must use the proven 0.2.0 62.5 Hz cadence")
-    require("const bool input_due" in source,
-            "Input sampling must remain gated to its configured cadence")
-    require("next_input_tick += kInputPollInterval" in source,
-            "Input polling must use an absolute cadence instead of work time plus a fixed sleep")
+    require("kInputSampleInterval{8}" in source,
+            "Xbox input must use an 8 ms producer cadence")
+    require("kInputSnapshotInterval{16}" in source,
+            "Xbox must retain the 62.5 Hz latest-state refresh cadence")
     require("next_network_tick += kNetworkPumpInterval" in source,
             "The WebRTC pump must maintain its own absolute cadence")
-    require("std::min(next_network_tick, next_input_tick)" in source,
-            "The stream loop must wake for networking before the next input deadline")
-    require("sleepUntilCancelled(next_input_tick" not in source,
-            "The WebRTC pump must not sleep until the next 8 ms input deadline")
+    require("next_input_tick" not in run_loop,
+            "The WebRTC pump must not wait for the input producer cadence")
+    metadata_pos = run_loop.index("xinput_.encodeMetadata(0)")
+    control_started_pos = run_loop.index("control_started = true", metadata_pos)
+    require(metadata_pos < control_started_pos,
+            "metadata must be flushed before gamepad drafts can be enqueued")
 
     print("Xbox stream session order tests passed")
 

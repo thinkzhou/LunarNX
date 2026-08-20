@@ -41,9 +41,6 @@ struct PerfStats {
     std::atomic<float> ps_packet_loss_fraction{0.0f};
     std::atomic<uint32_t> ps_frames_lost{0};
     std::atomic<uint32_t> video_decode_errors{0};
-    // Monotonic timestamp of the first frame successfully submitted for this
-    // stream session. Zero means that playback has not started yet.
-    std::atomic<uint64_t> stream_started_ns{0};
 
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     // Sparse drop-diagnostic context. These are cheap rolling samples; file
@@ -169,7 +166,6 @@ struct PerfStats {
         video_frame_drops = 0; video_sync_drops = 0; video_queue_drops = 0;
         video_jitter_us = 0; network_rtt_ms = 0;
         video_decode_errors = 0;
-        stream_started_ns = 0;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         video_queue_packets = 0; video_queue_bytes = 0;
         video_queue_oldest_age_ms = 0; video_queue_high_watermark_packets = 0;
@@ -273,14 +269,6 @@ struct PerfStats {
     }
 
     void recordFrame() {
-        if (stream_started_ns.load(std::memory_order_relaxed) == 0) {
-            const uint64_t now_ns = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count());
-            uint64_t not_started = 0;
-            stream_started_ns.compare_exchange_strong(
-                not_started, now_ns, std::memory_order_relaxed);
-        }
         video_frames++;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         if (recovery_display_pending.exchange(false)) {
@@ -290,14 +278,6 @@ struct PerfStats {
             recovery_pli_logged = false;
         }
 #endif
-    }
-    uint64_t streamDurationSeconds() const {
-        const uint64_t started_ns = stream_started_ns.load();
-        if (started_ns == 0) return 0;
-        const uint64_t now_ns = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count());
-        return now_ns >= started_ns ? (now_ns - started_ns) / 1000000000ULL : 0;
     }
     void recordAudioFrame() { audio_frames++; }
     void recordAudioDrop() { audio_drops++; }

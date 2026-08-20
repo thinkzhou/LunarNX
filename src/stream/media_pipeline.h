@@ -29,6 +29,15 @@ struct VideoFrame;
 class VideoDecoder;
 class VideoRenderer;
 
+struct MediaHealthStats {
+    bool has_decoded_video = false;
+    bool has_presented_video = false;
+    uint64_t decoded_video_age_ms = 0;
+    uint64_t presented_video_age_ms = 0;
+    uint32_t render_fault_count = 0;
+    uint32_t consecutive_render_faults = 0;
+};
+
 enum class PostProcessMode {
     Off,
     Upscale,
@@ -131,7 +140,12 @@ public:
     // decoder; only invalid H.264 or a bounded-buffer failure requests a
     // decoder reset on the video worker.
     void requestVideoRecovery(const char* reason, bool reset_decoder = false);
+    // Treat a new WebRTC/RTP association as a new encoded video source. This
+    // drains GPU-owned frames, flushes decoder/parser state, and re-anchors
+    // AV sync before accepting the next IDR.
+    void prepareForNewVideoSource(const char* reason);
     void presentVideoFrame();
+    MediaHealthStats getHealthStats() const;
 
     bool isRunning() const { return running_.load(); }
 
@@ -182,7 +196,7 @@ private:
     void videoWorkerLoop();
     void audioWorkerLoop();
     void processVideoPacket(const QueuedVideoPacket& packet);
-    bool resetVideoDecoderForKeyframe();
+    bool resetVideoDecoderForKeyframe(bool new_source = false);
     void beginHardVideoRecovery(const char* reason,
                                 bool force_new_epoch = false);
     bool beginHardVideoRecoveryLocked(bool force_new_epoch,
@@ -211,8 +225,6 @@ private:
     std::unique_ptr<AVSync> av_sync_;
 
     std::atomic<PerfStats*> perf_{nullptr};
-    VideoCodec video_codec_ = VideoCodec::H264;
-    VideoPipelinePath video_path_ = VideoPipelinePath::Xbox;
     std::atomic<VideoSchedulingMode> video_scheduling_{
         VideoSchedulingMode::RealtimeQueued};
     VideoQueueLimits video_queue_limits_{};
@@ -235,10 +247,15 @@ private:
     uint32_t video_worker_generation_ = 0;
     std::atomic<bool> video_recovery_request_{false};
     std::atomic<bool> video_decoder_reset_pending_{false};
+    std::atomic<bool> video_new_source_pending_{false};
     std::atomic<bool> video_waiting_for_keyframe_{false};
     std::atomic<uint32_t> video_recovery_epoch_{0};
     bool video_decoder_reset_wakeup_ = false;
     BoundedVideoStats bounded_video_stats_{};
+
+    std::atomic<uint64_t> last_decoded_video_ns_{0};
+    std::atomic<uint32_t> decoded_video_frames_{0};
+    std::atomic<uint32_t> render_fault_count_{0};
 
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;

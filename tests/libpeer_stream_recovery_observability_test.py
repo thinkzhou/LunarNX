@@ -78,8 +78,10 @@ def main() -> None:
     require("ice_pair=" in session and "srtp_detail=" in session and
             "rtp_queue_depth=" in session,
             "Session performance logs must include route, SRTP cause, and current queue pressure")
-    require("srtp_delta >= kRecoverySrtpFailureThreshold" in session,
-            "A burst of undecryptable Xbox RTP must request keyframe recovery")
+    require("srtp_delta" in session and "srtp=%u(+%u)" in session,
+            "Session logs must still surface the SRTP decrypt delta for observability")
+    require("kRecoverySrtpFailureThreshold" not in session,
+            "SRTP decrypt bursts must not gate keyframe recovery (0.2.0 behavior)")
 
     print("libpeer stream recovery observability tests passed")
 

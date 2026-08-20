@@ -20,5 +20,10 @@ int main() {
 
     video.reset();
     assert(video.map(1234, 4'000'000'000ULL) == 4'000'000'000ULL);
+    // A sender restart can retain its SSRC while resetting RTP timestamps.
+    // The mapper must re-anchor instead of returning timestamps several
+    // seconds behind the current arrival time.
+    assert(video.map(100, 7'000'000'000ULL) == 7'000'000'000ULL);
+    assert(video.map(9100, 7'100'000'000ULL) == 7'100'000'000ULL);
     return 0;
 }

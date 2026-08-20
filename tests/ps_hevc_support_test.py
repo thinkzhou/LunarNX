@@ -7,6 +7,22 @@ def require(condition, message):
         raise SystemExit(f"FAIL: {message}")
 
 
+def method_body(source, signature):
+    start = source.find(signature)
+    require(start >= 0, f"Missing method: {signature}")
+    brace = source.find("{", start)
+    require(brace >= 0, f"Missing method body: {signature}")
+    depth = 0
+    for index in range(brace, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[brace + 1:index]
+    raise SystemExit(f"FAIL: Unterminated method body: {signature}")
+
+
 def main():
     controller = Path("src/ps/ps_stream_controller.cpp").read_text()
     session = Path("src/ps/ps_stream_session.cpp").read_text()
@@ -21,10 +37,13 @@ def main():
     require("CHIAKI_CODEC_H265" in session and "CHIAKI_CODEC_H264" in session,
             "PS session must select the requested Chiaki codec")
     require("AV_CODEC_ID_HEVC" in decoder and "AV_CODEC_ID_H264" in decoder,
-            "shared decoder must initialize both H.264 and HEVC")
-    require("inspectVideoAccessUnit(video_codec_" in pipeline and
-            "video_path_ == VideoPipelinePath::Xbox" in pipeline,
-            "queue recovery must select Xbox or PS random-access detection")
+            "shared decoder base must initialize both H.264 and HEVC")
+    ps_inspect = method_body(
+        decoder, "VideoAccessUnitInfo PsVideoDecoder::inspectAccessUnit(")
+    require("inspectVideoAccessUnit(video_codec_" in ps_inspect,
+            "PS decoder must inspect both H.264 and HEVC access units")
+    require("inspectAccessUnit(data, len)" in pipeline,
+            "queue recovery must delegate random-access detection to the path decoder")
     require("VideoPipelinePath::PlayStation" in controller,
             "PS media must explicitly select the PlayStation decoder path")
     require('"hevc_mp4toannexb"' in replay,

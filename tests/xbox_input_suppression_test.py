@@ -11,13 +11,14 @@ def require(condition: bool, message: str) -> None:
         raise SystemExit(f"FAIL: {message}")
 
 
-ownership = re.search(
-    r"(?P<route>gamepad_state = input_router_\.route\(gamepad_state\);)\s*"
-    r"const auto input_packet",
-    source,
-    re.DOTALL,
-)
-require(ownership is not None,
+send_block_start = source.index(
+    "if (control_started && connected_before_pump) {")
+send_block_end = source.index(
+    "if (loop_started >= next_rumble_tick)", send_block_start)
+send_block = source[send_block_start:send_block_end]
+route_offset = send_block.find("input_router_.route")
+encode_offset = send_block.find("xinput_.encodeFrames")
+require(route_offset >= 0 and encode_offset > route_offset,
         "Xbox must apply input ownership immediately before packet encoding")
 require("input_suppressed" not in source,
         "Xbox must not retain a second boolean suppression path")

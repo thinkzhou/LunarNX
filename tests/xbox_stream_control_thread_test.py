@@ -22,6 +22,9 @@ def main() -> None:
 
     require("std::thread control_thread_;" in header,
             "XboxStreamSession must own a joinable control-plane thread")
+    require("std::thread input_thread_;" in header and
+            "std::atomic<bool> input_loop_stop_" in header,
+            "XboxStreamSession must own a cancellable input producer thread")
     require("std::condition_variable control_cv_;" in header,
             "the control-plane wait must be interruptible during shutdown")
     require("std::mutex session_api_mutex_;" in header,
@@ -75,23 +78,38 @@ def main() -> None:
     notify_pos = stop.index("control_cv_.notify_all()")
     stream_join_pos = stop.index("stream_thread_to_join.join()")
     control_join_pos = stop.index("control_thread_to_join.join()")
+    input_join_pos = stop.index("input_thread_to_join.join()")
     cleanup_pos = stop.index("cleanupResources(delete_session)")
     require(notify_pos < stream_join_pos < cleanup_pos,
             "shutdown must wake and join the media thread before cleanup")
     require(notify_pos < control_join_pos < cleanup_pos,
             "shutdown must wake and join the control thread before cleanup")
+    require(notify_pos < input_join_pos < cleanup_pos,
+            "shutdown must join the input producer before input resources are cleaned up")
     require(".detach()" not in stop,
             "owned stream threads must never outlive XboxStreamSession")
 
     require(start.index("callbacks.on_streaming()") <
             start.index("stream_thread_ = std::thread"),
             "preserve the original on_streaming-before-worker-start ordering")
+    require(start.index("startInputLoop(callbacks)") <
+            start.index("stream_thread_ = std::thread"),
+            "the input producer must start before the WebRTC owner loop")
 
-    reconnect_pos = run_loop.index("bool renegotiated = false;")
-    reconnect_wait_pos = run_loop.index("transport_.waitDataChannels", reconnect_pos)
-    reconnect_section = run_loop[reconnect_pos:reconnect_wait_pos]
+    require("reconnectWithFreshSession" in run_loop,
+            "media failure should rebuild a fresh Xbox session")
+    require("media_.getHealthStats()" in run_loop and
+            "video watchdog" in run_loop,
+            "the owner loop must monitor RTP, decode, and present liveness")
+    reconnect_section = function_body(
+        source,
+        "bool XboxStreamSession::reconnectWithFreshSession(",
+        "webrtc::PeerCallbacks XboxStreamSession::createPeerCallbacks(",
+    )
     require("api_lock(session_api_mutex_)" in reconnect_section,
             "reconnect signaling must exclude control-plane API operations")
+    require("media_.prepareForNewVideoSource" in reconnect_section,
+            "a fresh WebRTC association must reset the media source epoch")
 
     print("Xbox stream control thread tests passed")
 

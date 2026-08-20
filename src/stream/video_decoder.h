@@ -28,51 +28,107 @@ struct VideoFrame {
     uint64_t timestamp = 0;
 };
 
+/// Shared FFmpeg/NVDEC plumbing. Owns no path-specific policy; Xbox and
+/// PlayStation decode strategies live in XboxVideoDecoder / PsVideoDecoder.
 class VideoDecoder {
 public:
     using FrameCallback = std::function<void(const VideoFrame& frame)>;
 
     VideoDecoder();
-    ~VideoDecoder();
+    virtual ~VideoDecoder();
 
     /// Initialize decoder. On Switch uses NVDEC hardware acceleration.
     /// On desktop uses the selected standard FFmpeg software decoder.
-    bool initialize(int width = 1280, int height = 720);
+    /// Subclasses reset their own policy state before delegating here.
+    virtual bool initialize(int width = 1280, int height = 720);
     void setVideoBackend(VideoBackend backend) { video_backend_ = backend; }
     void setVideoCodec(VideoCodec codec) { video_codec_ = codec; }
-    void setVideoPath(VideoPipelinePath path) { video_path_ = path; }
+
+    /// Inspect one complete Annex-B access unit for queue-time metadata.
+    /// Each path owns its parser choice.
+    virtual VideoAccessUnitInfo inspectAccessUnit(const uint8_t* data,
+                                                  size_t len) const = 0;
 
     /// Decode one complete Annex-B access unit.
-    bool decode(const uint8_t* data, size_t len, uint64_t timestamp,
-                const VideoAccessUnitInfo* inspected_access_unit = nullptr);
+    virtual bool decode(const uint8_t* data, size_t len, uint64_t timestamp,
+                        const VideoAccessUnitInfo* inspected_access_unit = nullptr) = 0;
 
     void setCallback(FrameCallback cb);
     void setPerfStats(struct PerfStats* stats) { perf_ = stats; }
     /// Discard decoder reference state and wait for the next IDR.  This is
     /// used after RTP queue loss or a hardware decode error.
-    bool resetForKeyframe();
+    virtual bool resetForKeyframe() = 0;
+    /// Reset all source-specific parser and parameter-set state. Unlike a
+    /// normal keyframe recovery this must not carry SPS/PPS across a new RTP
+    /// SSRC or WebRTC association.
+    virtual bool resetForNewSource() = 0;
     void flush();
     void shutdown();
 
-private:
+protected:
+    /// FFmpeg send/receive loop shared by both paths (hardware NVDEC on
+    /// Switch, software parser/decoder on desktop). No path policy here.
+    bool decodeAccessUnit(const uint8_t* data, size_t len, uint64_t timestamp,
+                          const VideoAccessUnitInfo& au, int log_index, bool log);
+    /// avcodec_flush_buffers + parser rebuild, shared by resetForKeyframe().
+    bool reinitializeParser();
+    /// Hand a decoded frame to the frame callback (or drop corrupt frames).
     bool deliverFrame(struct AVFrame* frame,
                       uint64_t timestamp,
                       int log_index,
                       bool log);
 
+    VideoBackend video_backend_ =
 #ifdef __SWITCH__
-    VideoBackend video_backend_ = VideoBackend::HardwareZeroCopy;
+        VideoBackend::HardwareZeroCopy;
 #else
-    VideoBackend video_backend_ = VideoBackend::Software;
+        VideoBackend::Software;
 #endif
     VideoCodec video_codec_ = VideoCodec::H264;
-    VideoPipelinePath video_path_ = VideoPipelinePath::Xbox;
     void* codec_ctx_ = nullptr;
     void* parser_ = nullptr;
     AVBufferRef* hw_device_ctx_ = nullptr;
     FrameCallback on_frame_;
     struct PerfStats* perf_ = nullptr;
     bool initialized_ = false;
+    int error_log_count_ = 0;
+};
+
+/// Xbox / WebRTC path: H.264 only, allocation-free access-unit inspection, and
+/// standalone SPS/PPS handling restored to the pre-0.2 unified behavior so an
+/// encoder refresh does not desynchronize the decoder.
+class XboxVideoDecoder : public VideoDecoder {
+public:
+    VideoAccessUnitInfo inspectAccessUnit(const uint8_t* data,
+                                          size_t len) const override;
+    bool initialize(int width = 1280, int height = 720) override;
+    bool decode(const uint8_t* data, size_t len, uint64_t timestamp,
+                const VideoAccessUnitInfo* inspected_access_unit = nullptr) override;
+    bool resetForKeyframe() override;
+    bool resetForNewSource() override;
+
+private:
+    bool decoder_ready_ = false;
+    bool seen_sps_ = false;
+    bool seen_pps_ = false;
+    std::vector<uint8_t> parameter_sets_;
+    bool parameter_sets_pending_ = false;
+    int wait_log_count_ = 0;
+};
+
+/// PlayStation / Chiaki path: H.264 + HEVC, richer inspection, and standalone
+/// parameter-set handling owned entirely by this class.
+class PsVideoDecoder : public VideoDecoder {
+public:
+    VideoAccessUnitInfo inspectAccessUnit(const uint8_t* data,
+                                          size_t len) const override;
+    bool initialize(int width = 1280, int height = 720) override;
+    bool decode(const uint8_t* data, size_t len, uint64_t timestamp,
+                const VideoAccessUnitInfo* inspected_access_unit = nullptr) override;
+    bool resetForKeyframe() override;
+    bool resetForNewSource() override;
+
+private:
     bool decoder_ready_ = false;
     bool seen_vps_ = false;
     bool seen_sps_ = false;
@@ -80,7 +136,6 @@ private:
     std::vector<uint8_t> parameter_sets_;
     bool parameter_sets_pending_ = false;
     int wait_log_count_ = 0;
-    int error_log_count_ = 0;
 };
 
 } // namespace lunar::stream

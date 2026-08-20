@@ -15,6 +15,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  host-input-tests:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out LunarNX
+        uses: actions/checkout@v5
+
+      - name: Prepare legacy libpeer source
+        run: ./scripts/setup_dependencies.sh
+
+      - name: Build host WebRTC test libraries
+        run: |
+          cmake -S lib/libpeer/third_party/mbedtls \
+            -B lib/libpeer/third_party/mbedtls/build_host \
+            -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build lib/libpeer/third_party/mbedtls/build_host -j3
+          cmake -S lib/libpeer/third_party/libsrtp \
+            -B lib/libpeer/third_party/libsrtp/build_host \
+            -DBUILD_SHARED_LIBS=OFF -DENABLE_OPENSSL=OFF \
+            -DENABLE_MBEDTLS=OFF -DTEST_APPS=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build lib/libpeer/third_party/libsrtp/build_host -j3
+
+      - name: Run Xbox input state-machine tests
+        run: |
+          make -f Makefile.desktop input_tests
+          make -f Makefile.desktop xbox_input_accumulator_tests
+          make -f Makefile.desktop outbound_queue_tests
+          make -f Makefile.desktop stream_resilience_tests
+
   build-switch:
     runs-on: ubuntu-latest
     container:

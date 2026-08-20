@@ -1,7 +1,6 @@
 #ifdef __SWITCH__
 #include "stream_overlay.h"
 #include "ui_style.h"
-#include <cstdio>
 
 namespace lunar::ui {
 
@@ -114,21 +113,12 @@ void StreamOverlay::update(float fps, const std::string& resolution,
     if (has_ps_transport) packet_loss_pct = ps_loss * 100.0f;
     const uint32_t displayed_frame_drops = has_ps_transport
         ? ps_frames_lost : frame_drops;
-    const uint64_t duration_seconds = perf_->streamDurationSeconds();
-    const uint64_t duration_hours = duration_seconds / 3600;
-    const uint64_t duration_minutes = (duration_seconds / 60) % 60;
-    const uint64_t duration_remainder = duration_seconds % 60;
-    char duration[32] = {};
-    std::snprintf(duration, sizeof(duration), "%02llu:%02llu:%02llu",
-                  static_cast<unsigned long long>(duration_hours),
-                  static_cast<unsigned long long>(duration_minutes),
-                  static_cast<unsigned long long>(duration_remainder));
 
     if (has_ps_transport) {
         metrics_label_->setText(brls::getStr(
             "lunarnx/perf/hud_metrics_ps",
             resolution, rtt_ms, bitrate_mbps_, packet_loss_pct, fps,
-            decode_ms_, ps_frames_lost, video_codec, duration));
+            decode_ms_, ps_frames_lost, video_codec));
         return;
     }
 
@@ -143,8 +133,7 @@ void StreamOverlay::update(float fps, const std::string& resolution,
         lost,
         packet_loss_pct,
         bitrate_mbps_,
-        decode_ms_,
-        duration));
+        decode_ms_));
 }
 
 } // namespace lunar::ui

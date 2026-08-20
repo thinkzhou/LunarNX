@@ -31,6 +31,7 @@ struct PeerMediaStats : PeerConnectionMediaStats {
     uint32_t video_rtp_nacks = 0;
     uint32_t video_rtp_nack_retries = 0;
     uint32_t video_rtp_resyncs = 0;
+    uint32_t video_rtp_timestamp_discontinuities = 0;
     uint32_t video_rtp_last_gap_packets = 0;
     uint32_t video_rtp_ssrc = 0;
     uint32_t video_rtp_ssrc_changes = 0;
@@ -40,9 +41,6 @@ struct PeerMediaStats : PeerConnectionMediaStats {
     uint32_t video_jitter_buffered_packets = 0;
     uint32_t video_jitter_buffered_frames = 0;
     uint32_t video_jitter_buffered_bytes = 0;
-    uint32_t video_jitter_estimate_ms = 0;
-    uint32_t video_jitter_hold_ms = 0;
-    uint32_t video_jitter_recovery_hold_ms = 0;
     bool video_waiting_keyframe = true;
 };
 
@@ -59,6 +57,9 @@ struct PeerCallbacks {
     // keeps fenced/displayed frames alive and asks the sender for a fresh IDR;
     // decoder flushes remain reserved for actual decoder/queue failures.
     std::function<void(bool reset_decoder)> on_video_recovery;
+    // Called before the first access unit from a new SSRC/timestamp source is
+    // mapped onto the media clock.
+    std::function<void(uint32_t ssrc)> on_video_source_discontinuity;
 
     // Xbox 4-motor rumble. Called when Xbox sends vibration data.
     // Parameters match XStreaming: {leftMotor, rightMotor, leftTrigger, rightTrigger} 0.0-1.0
@@ -94,7 +95,7 @@ public:
     bool requestVideoKeyframe();
     bool sendReceiverFeedback(uint32_t bitrate_bps);
     bool hasPendingReliableData() const;
-    bool consumeReliableSendFailure();
+    bool consumeDataChannelFailure();
     bool isDataChannelReady() const;
     void setMediaEnabled(bool enabled);
     PeerMediaStats getMediaStats() const;
@@ -126,14 +127,14 @@ private:
         uint32_t highest_sequence = 0;
         uint32_t bitrate_bps = 0;
         uint64_t id = 0;
-        uint8_t attempts = 0;
+        uint32_t attempts = 0;
+        std::chrono::steady_clock::time_point first_attempt_at{};
         std::chrono::steady_clock::time_point expires_at{};
     };
 
     static constexpr size_t kMaxOutboundCommands = 64;
     static constexpr size_t kMaxOutboundPayloadBytes = 1024;
     static constexpr uint8_t kMaxPliSendAttempts = 3;
-    static constexpr uint32_t kMaxConsecutiveSctpSendFailures = 64;
     PeerConnection* pc_ = nullptr;
     PeerCallbacks callbacks_;
     std::atomic<bool> connected_{false};
@@ -163,10 +164,11 @@ private:
     mutable std::mutex outbound_mutex_;
     std::deque<OutboundCommand> outbound_commands_;
     uint64_t next_outbound_command_id_ = 1;
-    bool prefer_latest_input_once_ = false;
-    std::atomic<bool> reliable_send_failed_{false};
+    uint32_t next_input_sequence_ = 0;
     std::atomic<bool> data_channel_failed_{false};
-    std::atomic<uint32_t> consecutive_sctp_send_failures_{0};
+    std::atomic<bool> data_channel_failure_event_{false};
+    uint32_t consecutive_sctp_send_failures_ = 0;
+    std::chrono::steady_clock::time_point first_sctp_send_failure_{};
     std::atomic<uint32_t> outbound_drop_events_{0};
 
     bool enqueueData(OutboundType type,
@@ -178,6 +180,18 @@ private:
     void drainOutboundCommands(std::chrono::steady_clock::time_point deadline);
     bool completeOutboundCommand(const OutboundCommand& command, int result);
     int sendOutboundCommand(const OutboundCommand& command);
+    int sendInputCommand(const OutboundCommand& command);
+    bool prepareSequencedInputPayload(const OutboundCommand& command,
+                                      std::vector<uint8_t>& packet) const;
+    void commitSequencedInputResult(int result);
+    void observeSctpSendResult(OutboundType type,
+                               int result,
+                               uint32_t attempts);
+    void markDataChannelFailed(const char* reason,
+                               OutboundType type,
+                               int result,
+                               uint32_t attempts);
+    void resetDataChannelHealth();
     void clearOutboundCommands();
     static bool isReliableCommand(OutboundType type);
     static bool isSctpCommand(OutboundType type);
