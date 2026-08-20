@@ -45,6 +45,14 @@ require("beginHardVideoRecoveryLocked(" in impl and
 require("BoundedVideoAdmission::DropDependent" in impl and
         "return true;" in impl,
         "waiting P frames must be intentional successful callback drops")
+require("pre_copy_admission" in impl and
+        impl.index("pre_copy_admission") <
+        impl.index("packet.data.assign(data, data + len);"),
+        "waiting P frames and oversize AUs must be rejected before copying")
+require("BoundedVideoAdmission::RejectOversize" in impl and
+        "recovery_started_before_copy" in impl and
+        "beginHardVideoRecoveryLocked" in impl,
+        "oversize AUs must start hard recovery without entering the queue")
 require("packet.recovery_epoch = video_recovery_epoch_.load()" in impl,
         "random-access recovery candidates must join the current epoch")
 require("decodeVideoPacket(data, size, pts)" in bridge,

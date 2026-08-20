@@ -28,6 +28,24 @@ int main() {
     assert(!boundedVideoResetMustPrecedeDecode(false, false, true));
     assert(!boundedVideoMayDecodeWhileRecovering(true, false));
     assert(boundedVideoMayDecodeWhileRecovering(true, true));
+
+    BoundedVideoRecoveryState recovery;
+    recovery.epoch = 12;
+    recovery.reset_pending = false;
+    recovery.waiting_for_keyframe = true;
+    recovery.recovery_request = true;
+    assert(!applyBoundedVideoRecovery(recovery, true, false, false));
+    assert(recovery.epoch == 12);
+    assert(!recovery.reset_pending);
+    assert(recovery.waiting_for_keyframe);
+    assert(recovery.recovery_request);
+    assert(applyBoundedVideoRecovery(recovery, true, false, true));
+    assert(recovery.epoch == 13);
+    assert(recovery.reset_pending);
+    assert(recovery.waiting_for_keyframe);
+    assert(recovery.recovery_request);
+    assert(recovery.reset_wakeup);
+
     assert(boundedVideoPacketIsCurrent(true, 7, 7, 4, 4));
     assert(!boundedVideoPacketIsCurrent(true, 6, 7, 4, 4));
     assert(!boundedVideoPacketIsCurrent(true, 7, 7, 3, 4));
@@ -36,19 +54,26 @@ int main() {
     assert(realtimeVideoCapacityExceeded(2048, 1024, 1024, 2048, 32 * 1024 * 1024));
     assert(realtimeVideoCapacityExceeded(1, 32 * 1024 * 1024, 1, 2048, 32 * 1024 * 1024));
 
-    std::atomic<bool> running{true};
-    std::atomic<uint32_t> generation{9};
+    std::atomic<uint32_t> generation{8};
+    std::atomic<bool> observed_current{false};
+    std::atomic<bool> generation_changed{false};
     std::atomic<bool> stale_was_accepted{false};
     std::thread shutdown_race([&]() {
-        while (running.load()) {
-            if (boundedVideoPacketIsCurrent(
-                    running.load(), 8, generation.load(), 2, 2)) {
-                stale_was_accepted = true;
+        while (!observed_current.load()) {
+            if (boundedVideoPacketIsCurrent(true, 8, generation.load(), 2, 2)) {
+                observed_current = true;
             }
         }
+        while (!generation_changed.load()) {
+            std::this_thread::yield();
+        }
+        stale_was_accepted = boundedVideoPacketIsCurrent(
+            true, 8, generation.load(), 2, 2);
     });
-    generation = 10;
-    running = false;
+    while (!observed_current.load()) std::this_thread::yield();
+    generation = 9;
+    generation_changed = true;
     shutdown_race.join();
+    assert(observed_current.load());
     assert(!stale_was_accepted.load());
 }

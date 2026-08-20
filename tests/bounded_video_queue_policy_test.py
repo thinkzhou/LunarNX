@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-LIBCXX = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1"
+HOST_CXX = os.environ.get("HOST_CXX", "c++")
 
 with tempfile.TemporaryDirectory(prefix="lunarnx-bounded-policy-") as temp:
     binary = Path(temp) / "bounded_video_queue_policy_test"
     subprocess.run([
-        "clang++", "-std=c++17", "-pthread", "-isystem", LIBCXX,
+        HOST_CXX, "-std=c++17", "-pthread",
         str(ROOT / "tests/bounded_video_queue_policy_test.cpp"),
         "-o", str(binary),
     ], check=True)

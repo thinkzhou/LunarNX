@@ -8,6 +8,14 @@ namespace lunar::stream {
 
 enum class BoundedVideoAdmission { Accept, DropDependent, RecoverOverflow, RecoverAge, RejectOversize };
 
+struct BoundedVideoRecoveryState {
+    uint32_t epoch = 0;
+    bool reset_pending = false;
+    bool waiting_for_keyframe = false;
+    bool recovery_request = false;
+    bool reset_wakeup = false;
+};
+
 struct BoundedVideoQueueSnapshot {
     size_t packets = 0;
     size_t bytes = 0;
@@ -61,6 +69,21 @@ inline bool realtimeVideoCapacityExceeded(size_t packets, size_t bytes,
 inline bool boundedVideoAdmissionMayEnqueue(BoundedVideoAdmission admission) {
     return admission != BoundedVideoAdmission::DropDependent &&
            admission != BoundedVideoAdmission::RejectOversize;
+}
+
+inline bool applyBoundedVideoRecovery(BoundedVideoRecoveryState& state,
+                                      bool running,
+                                      bool worker_stop,
+                                      bool force_new_epoch) {
+    state.recovery_request = true;
+    if (!running || worker_stop) return false;
+    if (state.waiting_for_keyframe && !force_new_epoch) return false;
+
+    ++state.epoch;
+    state.reset_pending = true;
+    state.waiting_for_keyframe = true;
+    state.reset_wakeup = true;
+    return true;
 }
 
 } // namespace lunar::stream
