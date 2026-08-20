@@ -65,6 +65,8 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
     last_decoded_video_ns_ = 0;
     decoded_video_frames_ = 0;
     render_fault_count_ = 0;
+    last_presented_video_ns_ = 0;
+    consecutive_render_faults_ = 0;
     stopWorkers();
 
     uint32_t worker_generation = 0;
@@ -224,6 +226,8 @@ void MediaPipeline::shutdownUnlocked() {
     last_decoded_video_ns_ = 0;
     decoded_video_frames_ = 0;
     render_fault_count_ = 0;
+    last_presented_video_ns_ = 0;
+    consecutive_render_faults_ = 0;
     if (video_renderer_) {
         lunar::diagnosticLog("media", "shutdown video renderer begin");
         video_renderer_->shutdown();
@@ -331,6 +335,8 @@ void MediaPipeline::prepareForNewVideoSource(const char* reason) {
     last_decoded_video_ns_ = 0;
     decoded_video_frames_ = 0;
     render_fault_count_ = 0;
+    last_presented_video_ns_ = 0;
+    consecutive_render_faults_ = 0;
     if (video_renderer_) video_renderer_->resetLiveness();
     if (av_sync_) {
         av_sync_->reset();
@@ -1026,6 +1032,12 @@ void MediaPipeline::presentVideoFrame() {
     if (running_.load() && video_renderer_) {
         video_renderer_->present();
         const auto fault = video_renderer_->consumeRenderFault();
+        last_presented_video_ns_.store(
+            video_renderer_->lastSuccessfulPresentNs(),
+            std::memory_order_release);
+        consecutive_render_faults_.store(
+            video_renderer_->consecutiveRenderFaults(),
+            std::memory_order_release);
         if (fault != RenderFault::None) {
             render_fault_count_.fetch_add(1, std::memory_order_relaxed);
             beginHardVideoRecovery(renderFaultName(fault), true);
@@ -1044,16 +1056,14 @@ MediaHealthStats MediaPipeline::getHealthStats() const {
         stats.decoded_video_age_ms = (now_ns - decoded_ns) / 1'000'000u;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
-    if (video_renderer_) {
-        const uint64_t presented_ns = video_renderer_->lastSuccessfulPresentNs();
-        stats.has_presented_video = presented_ns != 0;
-        if (stats.has_presented_video && now_ns >= presented_ns) {
-            stats.presented_video_age_ms = (now_ns - presented_ns) / 1'000'000u;
-        }
-        stats.consecutive_render_faults =
-            video_renderer_->consecutiveRenderFaults();
+    const uint64_t presented_ns = last_presented_video_ns_.load(
+        std::memory_order_acquire);
+    stats.has_presented_video = presented_ns != 0;
+    if (stats.has_presented_video && now_ns >= presented_ns) {
+        stats.presented_video_age_ms = (now_ns - presented_ns) / 1'000'000u;
     }
+    stats.consecutive_render_faults = consecutive_render_faults_.load(
+        std::memory_order_acquire);
     stats.render_fault_count = render_fault_count_.load(
         std::memory_order_acquire);
     return stats;

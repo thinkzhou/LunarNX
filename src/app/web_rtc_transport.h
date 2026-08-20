@@ -42,6 +42,7 @@ public:
     bool consumeDataChannelFailure();
     bool isDataChannelReady() const;
     void setMediaEnabled(bool enabled);
+    void setVideoJitterMode(webrtc::VideoJitterMode mode);
     webrtc::PeerMediaStats getMediaStats() const;
     bool isConnected() const;
     void processEvents();

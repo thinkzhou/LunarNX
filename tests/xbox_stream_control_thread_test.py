@@ -99,7 +99,9 @@ def main() -> None:
     require("reconnectWithFreshSession" in run_loop,
             "media failure should rebuild a fresh Xbox session")
     require("media_.getHealthStats()" in run_loop and
-            "video watchdog" in run_loop,
+            "video watchdog" in run_loop and
+            "kMediaHealthPollInterval{50}" in source and
+            "health_poll_due" in run_loop,
             "the owner loop must monitor RTP, decode, and present liveness")
     reconnect_section = function_body(
         source,

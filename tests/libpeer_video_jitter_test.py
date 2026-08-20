@@ -45,8 +45,15 @@ def main():
     )
     require(
         "VideoRtpJitterBuffer::kMinHoldMs" in peer_manager
-        and "std::min<uint64_t>(180" in peer_manager,
-        "Adaptive jitter hold must stay within the configured low-latency window",
+        and "smoothed_rtt_ms_" in peer_manager
+        and "kHomeMaxJitterHoldMs = 48" in peer_manager
+        and "kCloudMaxJitterHoldMs = 120" in peer_manager
+        and "setHeadBlockedPolicy" in jitter_header
+        and "kMediaStatsCacheInterval{250}" in peer_manager
+        and "networkStatsSnapshot" in peer_manager
+        and "last_rtt_sample_ms_" in peer_manager
+        and "setVideoJitterMode" in peer_manager,
+        "Adaptive jitter hold must use smoothed, profile-specific low-latency bounds",
     )
     require(
         "on_video_recovery" in peer_header

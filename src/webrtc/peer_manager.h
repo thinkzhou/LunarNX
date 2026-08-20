@@ -44,6 +44,11 @@ struct PeerMediaStats : PeerConnectionMediaStats {
     bool video_waiting_keyframe = true;
 };
 
+enum class VideoJitterMode {
+    Home,
+    Cloud,
+};
+
 struct PeerCallbacks {
     using MediaFrameCallback =
         std::function<void(const uint8_t*, size_t, uint16_t, uint64_t)>;
@@ -98,6 +103,7 @@ public:
     bool consumeDataChannelFailure();
     bool isDataChannelReady() const;
     void setMediaEnabled(bool enabled);
+    void setVideoJitterMode(VideoJitterMode mode);
     PeerMediaStats getMediaStats() const;
 
     // Connection
@@ -161,6 +167,16 @@ private:
     RtpClockMapper video_clock_{90000};
     RtpClockMapper audio_clock_{48000};
     VideoRtpJitterBuffer video_jitter_;
+    VideoJitterMode video_jitter_mode_ = VideoJitterMode::Home;
+    uint64_t smoothed_rtt_ms_ = 0;
+    uint64_t last_rtt_sample_ms_ = 0;
+    // The owner loop needs transport statistics far less often than it pumps
+    // RTP/SCTP. Keep the last libpeer snapshot so processEvents() and the
+    // session watchdog do not both call into the stats collector every 2 ms.
+    mutable std::mutex media_stats_mutex_;
+    mutable PeerConnectionMediaStats media_stats_cache_{};
+    mutable std::chrono::steady_clock::time_point media_stats_cache_at_{};
+    mutable bool media_stats_cache_valid_ = false;
     mutable std::mutex outbound_mutex_;
     std::deque<OutboundCommand> outbound_commands_;
     uint64_t next_outbound_command_id_ = 1;
@@ -193,6 +209,8 @@ private:
                                uint32_t attempts);
     void resetDataChannelHealth();
     void clearOutboundCommands();
+    PeerConnectionMediaStats networkStatsSnapshot() const;
+    void invalidateMediaStatsCache();
     static bool isReliableCommand(OutboundType type);
     static bool isSctpCommand(OutboundType type);
     static int outboundPriority(OutboundType type);

@@ -17,13 +17,17 @@ constexpr std::chrono::milliseconds kInputSampleInterval{8};
 // Match XStreaming's 62.5 Hz baseline for unchanged controller snapshots.
 // Button transitions are published immediately by the 8 ms producer.
 constexpr std::chrono::milliseconds kInputSnapshotInterval{16};
+// Reliable ordered input does not need an idle packet every tick. Keep the
+// server-side pad state alive with a bounded heartbeat instead.
+constexpr std::chrono::milliseconds kInputHeartbeatInterval{250};
 constexpr std::chrono::seconds kDataChannelTimeout{45};
 constexpr std::chrono::seconds kStartupKeyframeRetryInterval{1};
 constexpr std::chrono::seconds kRecoveryKeyframeInterval{1};
 constexpr std::chrono::seconds kReceiverFeedbackInterval{1};
-constexpr std::chrono::milliseconds kVideoRtpStallTimeout{5000};
-constexpr std::chrono::milliseconds kVideoDecodeStallTimeout{3500};
-constexpr std::chrono::milliseconds kVideoPresentStallTimeout{2000};
+constexpr std::chrono::milliseconds kMediaHealthPollInterval{50};
+constexpr std::chrono::milliseconds kVideoRtpStallTimeout{3000};
+constexpr std::chrono::milliseconds kVideoDecodeStallTimeout{2000};
+constexpr std::chrono::milliseconds kVideoPresentStallTimeout{1000};
 constexpr std::chrono::milliseconds kVideoHealthRecoveryCooldown{2000};
 // Preserve the old 8 x 16 ms Guide pulse while sampling input at 8 ms.
 constexpr int kGuidePulseFrames = 16;
@@ -115,6 +119,10 @@ bool XboxStreamSession::start(const StreamProfile& profile,
     stop_requested_ = false;
     control_recovery_requested_ = false;
     channels_.reset();
+    transport_.setVideoJitterMode(
+        profile.type == SessionType::Cloud
+            ? webrtc::VideoJitterMode::Cloud
+            : webrtc::VideoJitterMode::Home);
 
     auto cancel = [this, callbacks]() { return isCancelled(callbacks); };
     auto sleep = [this, callbacks](std::chrono::milliseconds duration) {
@@ -394,6 +402,7 @@ void XboxStreamSession::startInputLoop(RuntimeCallbacks callbacks) {
         bool guide_release_pending = false;
         auto last_input_owner = input_router_.owner();
         auto next_snapshot = std::chrono::steady_clock::now();
+        auto next_heartbeat = next_snapshot;
         auto next_input_tick = next_snapshot;
 
         while (!input_loop_stop_.load() && streaming_.load() &&
@@ -403,6 +412,7 @@ void XboxStreamSession::startInputLoop(RuntimeCallbacks callbacks) {
                             guide_pulse_frames_remaining,
                             guide_release_pending,
                             next_snapshot,
+                            next_heartbeat,
                             last_input_owner);
             } catch (const std::exception& e) {
                 lunar::diagnosticLog("xbox-input", "input sample exception: %s", e.what());
@@ -433,6 +443,7 @@ void XboxStreamSession::sampleInput(
     int& guide_pulse_frames_remaining,
     bool& guide_release_pending,
     std::chrono::steady_clock::time_point& next_snapshot,
+    std::chrono::steady_clock::time_point& next_heartbeat,
     input::StreamInputOwner& last_input_owner) {
     input::GamepadState gamepad_state{};
     try {
@@ -462,12 +473,17 @@ void XboxStreamSession::sampleInput(
 
     const auto sampled_at = std::chrono::steady_clock::now();
     const bool snapshot_due = sampled_at >= next_snapshot;
+    const bool heartbeat_due = sampled_at >= next_heartbeat;
     input_accumulator_.publish(gamepad_state,
                                input_delivery_ready_.load(),
                                snapshot_due,
-                               owner_changed && input_delivery_ready_.load());
+                               (owner_changed || heartbeat_due) &&
+                                   input_delivery_ready_.load());
     if (snapshot_due) {
         next_snapshot = sampled_at + kInputSnapshotInterval;
+    }
+    if (heartbeat_due) {
+        next_heartbeat = sampled_at + kInputHeartbeatInterval;
     }
 }
 
@@ -762,6 +778,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
     uint32_t health_recovery_attempts = 0;
     auto last_health_recovery = std::chrono::steady_clock::time_point{};
     auto video_watchdog_started = std::chrono::steady_clock::time_point{};
+    auto next_health_poll = std::chrono::steady_clock::now();
+    stream::MediaHealthStats media_health{};
     uint32_t source_discontinuity_baseline = 0;
     int input_send_failure_logs = 0;
     bool control_started = false;
@@ -878,7 +896,12 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             input_accumulator_.prepareForReconnect();
         }
         const auto media_stats = transport_.getMediaStats();
-        const auto media_health = media_.getHealthStats();
+        const auto health_poll_now = std::chrono::steady_clock::now();
+        const bool health_poll_due = health_poll_now >= next_health_poll;
+        if (health_poll_due) {
+            media_health = media_.getHealthStats();
+            next_health_poll = health_poll_now + kMediaHealthPollInterval;
+        }
         const bool pipeline_recovery_pending = media_.hasVideoRecoveryRequest();
         perf_.setRtpStats(media_stats.video_rtp_packets,
                           media_stats.audio_rtp_packets,
@@ -950,6 +973,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             if (ok) {
                 control_started = true;
                 video_watchdog_started = std::chrono::steady_clock::now();
+                next_health_poll = video_watchdog_started;
                 input_accumulator_.prepareForReconnect();
                 input_delivery_ready_ = true;
                 try {
@@ -1089,7 +1113,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                 prepareInputForReconnect();
                 media_.prepareForNewVideoSource("video RTP liveness timeout");
                 transport_.disconnect();
-            } else {
+            } else if (health_poll_due) {
                 const bool rtp_alive = rtp_seen &&
                     media_stats.video_rtp_arrival_age_ms <
                         static_cast<uint32_t>(kVideoRtpStallTimeout.count());

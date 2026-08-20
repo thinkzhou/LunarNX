@@ -13,6 +13,16 @@ int main() {
     assert(latest && latest->frames.size() == 1);
     input.commitBatch(*latest);
 
+    // Reliable ordered input must not enqueue identical idle snapshots on
+    // every producer tick; the session supplies an explicit heartbeat when
+    // the pad has been unchanged long enough.
+    input.publish(neutral, true, true);
+    assert(!input.peekBatch());
+    input.publish(neutral, true, false, true);
+    auto heartbeat = input.peekBatch();
+    assert(heartbeat && heartbeat->includes_latest);
+    input.commitBatch(*heartbeat);
+
     GamepadState down{};
     down.a = true;
     input.publish(down, true, false);

@@ -14,9 +14,11 @@ struct XStreamingDataChannel {
 };
 
 inline constexpr XStreamingDataChannel kXStreamingDataChannels[] = {
-    // Gamepad state is a realtime stream: a newer complete snapshot supersedes
-    // an older one, so it must not wait for retransmission or ordering.
-    {"input", "1.0", 0, false, 0},
+    // Gamepad state is a realtime stream: the application queue coalesces an
+    // older unsent complete snapshot into the newest one. The channel itself
+    // must stay reliable and ordered because XStreaming input packets carry a
+    // contiguous sequence shared with the startup metadata packet.
+    {"input", "1.0", 0, true, -1},
     {"chat", "chatV1", 2, true, -1},
     {"control", "controlV1", 4, true, -1},
     {"message", "messageV1", 6, true, -1},
