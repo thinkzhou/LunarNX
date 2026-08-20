@@ -151,6 +151,25 @@ private:
         uint32_t generation = 0;
     };
 
+    struct BoundedVideoStats {
+        uint64_t enqueued = 0;
+        uint64_t decoded = 0;
+        uint64_t intentional_drop = 0;
+        uint64_t alloc_fail = 0;
+        size_t depth_high = 0;
+        size_t bytes_high = 0;
+        uint64_t oldest_age_max_us = 0;
+        uint64_t enqueue_copy_total_us = 0;
+        uint64_t enqueue_copy_max_us = 0;
+        uint64_t worker_decode_total_us = 0;
+        uint64_t worker_decode_max_us = 0;
+        uint64_t recovery_overflow = 0;
+        uint64_t recovery_age = 0;
+        uint64_t recovery_decode = 0;
+        uint64_t idr_requests = 0;
+        std::chrono::steady_clock::time_point window_start{};
+    };
+
     bool enqueueVideoPacket(const uint8_t* data, size_t len, uint64_t timestamp);
     bool decodeVideoDirect(const uint8_t* data, size_t len, uint64_t timestamp);
     bool enqueueAudioPacket(const uint8_t* data,
@@ -171,6 +190,8 @@ private:
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     void recordVideoQueueLocked();
 #endif
+    void maybeLogBoundedVideoStatsLocked(
+        std::chrono::steady_clock::time_point now);
 
     bool isGenerationActive(uint32_t generation) const;
     void handleVideoFrame(const VideoFrame& frame, uint32_t generation);
@@ -216,6 +237,7 @@ private:
     std::atomic<bool> video_waiting_for_keyframe_{false};
     std::atomic<uint32_t> video_recovery_epoch_{0};
     bool video_decoder_reset_wakeup_ = false;
+    BoundedVideoStats bounded_video_stats_{};
 
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;

@@ -8,6 +8,10 @@
 #include <chrono>
 #include <string>
 
+#ifndef LUNARNX_PS_SKIP_LOOP_FILTER
+#define LUNARNX_PS_SKIP_LOOP_FILTER 0
+#endif
+
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/error.h>
@@ -194,10 +198,16 @@ bool VideoDecoder::initialize(int width, int height) {
     ctx->thread_count = 1;
     ctx->thread_type = FF_THREAD_FRAME;
     ctx->extra_hw_frames = 16;
+    ctx->has_b_frames = 0;
 
     // Accept possibly-corrupted frames (important for streaming)
-    ctx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
+    ctx->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT | AV_CODEC_FLAG_LOW_DELAY;
     ctx->flags2 |= AV_CODEC_FLAG2_SHOW_ALL | AV_CODEC_FLAG2_FAST;
+#if LUNARNX_PS_SKIP_LOOP_FILTER
+    if (video_path_ == VideoPipelinePath::PlayStation) {
+        ctx->skip_loop_filter = AVDISCARD_ALL;
+    }
+#endif
 
     lunar::diagnosticLog("video", "avcodec_open2 NVDEC begin");
     if (avcodec_open2(ctx, codec, nullptr) < 0) {
