@@ -211,8 +211,11 @@ bool XboxChannelManager::startProtocol(const StreamProfile& profile,
     return flushed;
 }
 
-bool XboxChannelManager::sendInputPacket(const uint8_t* data, size_t len) {
-    return transport_.sendLatestInputData(data, len);
+bool XboxChannelManager::sendInputPacket(const uint8_t* data,
+                                         size_t len,
+                                         bool reliable) {
+    return reliable ? transport_.sendInputData(data, len)
+                    : transport_.sendLatestInputData(data, len);
 }
 
 bool XboxChannelManager::sendControlMessage(std::string_view json) {
@@ -261,7 +264,7 @@ bool XboxChannelManager::waitForHandshake(const CancelCallback& cancel) {
         }
 
         transport_.processEvents();
-        if (transport_.consumeReliableSendFailure()) {
+        if (transport_.consumeDataChannelFailure()) {
             lunar::dropDiagnosticLog("xbox-channel",
                                      "message_handshake_send_failed=1");
             return false;
@@ -284,7 +287,7 @@ bool XboxChannelManager::flushReliableData(const CancelCallback& cancel) {
     while (transport_.hasPendingReliableData()) {
         if (cancel && cancel()) return false;
         transport_.processEvents();
-        if (transport_.consumeReliableSendFailure()) {
+        if (transport_.consumeDataChannelFailure()) {
             lunar::dropDiagnosticLog("xbox-channel",
                                      "reliable_data_send_failed=1");
             return false;
@@ -299,7 +302,7 @@ bool XboxChannelManager::flushReliableData(const CancelCallback& cancel) {
         }
         std::this_thread::sleep_for(kPollInterval);
     }
-    return !transport_.consumeReliableSendFailure();
+    return !transport_.consumeDataChannelFailure();
 }
 
 } // namespace lunar::app

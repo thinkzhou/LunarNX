@@ -55,7 +55,7 @@ def main():
 
     input_start = source.index("void XboxStreamSession::startInputLoop(")
     input_end = source.index(
-        "void XboxStreamSession::discardPendingInputTransitions(", input_start)
+        "void XboxStreamSession::prepareInputForReconnect(", input_start)
     input_loop = source[input_start:input_end]
     run_loop_start = source.index("void XboxStreamSession::runLoop(")
     run_loop_end = source.index("void XboxStreamSession::controlLoop(")
@@ -65,13 +65,13 @@ def main():
             "the input producer must own physical gamepad sampling and routing")
     require("transport_" not in input_loop,
             "the input producer must not call into libpeer/WebRTC")
-    require("xinput_.encodeFrames(input_frames)" in run_loop and
+    require("xinput_.encodeFrames(input_batch->frames)" in run_loop and
             "channels_.sendInputPacket" in run_loop,
             "the WebRTC owner loop must encode and send queued input frames")
     require("xinput_.reset()" not in source,
             "input sequence must reset with a new WebRTC association, not encoder state")
     loop_process_pos = run_loop.index("transport_.processEvents();")
-    input_send_pos = run_loop.index("xinput_.encodeFrames(input_frames)")
+    input_send_pos = run_loop.index("xinput_.encodeFrames(input_batch->frames)")
     require(input_send_pos < loop_process_pos,
             "Queued input must be sent before inbound media processing consumes the loop budget")
     require("kNetworkPumpInterval{2}" in source,

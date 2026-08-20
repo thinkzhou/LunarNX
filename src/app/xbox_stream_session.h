@@ -4,6 +4,7 @@
 #include "../input/rumble_controller.h"
 #include "../input/stream_input_router.h"
 #include "../input/xinput_encoder.h"
+#include "../input/xbox_input_accumulator.h"
 #include "../stream/media_pipeline.h"
 #include "../stream/perf_stats.h"
 #include "stream_profile.h"
@@ -14,7 +15,6 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <deque>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -74,13 +74,9 @@ private:
     void sampleInput(const RuntimeCallbacks& callbacks,
                      int& guide_pulse_frames_remaining,
                      bool& guide_release_pending,
-                     std::chrono::steady_clock::time_point& next_snapshot);
-    std::vector<input::GamepadState> takeInputFrames();
-    void discardPendingInputTransitions();
-    static bool hasButtonTransition(const input::GamepadState& previous,
-                                    const input::GamepadState& current);
-    static bool sameEncodedGamepadState(const input::GamepadState& left,
-                                        const input::GamepadState& right);
+                     std::chrono::steady_clock::time_point& next_snapshot,
+                     input::StreamInputOwner& last_input_owner);
+    void prepareInputForReconnect();
     void controlLoop(std::string session_id,
                      int keep_alive_seconds,
                      RuntimeCallbacks callbacks);
@@ -105,16 +101,11 @@ private:
     mutable std::mutex state_mutex_;
     std::mutex session_api_mutex_;
     std::mutex control_mutex_;
-    std::mutex input_mutex_;
     std::condition_variable control_cv_;
     std::thread stream_thread_;
     std::thread control_thread_;
     std::thread input_thread_;
-    std::deque<input::GamepadState> input_transitions_;
-    input::GamepadState latest_input_state_{};
-    input::GamepadState last_sampled_input_state_{};
-    bool latest_input_dirty_ = false;
-    bool has_sampled_input_ = false;
+    input::XboxInputAccumulator input_accumulator_;
     std::string session_id_;
 };
 

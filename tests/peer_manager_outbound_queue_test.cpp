@@ -1,7 +1,5 @@
 #include "webrtc/peer_manager.h"
 
-#include <mbedtls/ssl.h>
-
 #include <cassert>
 #include <atomic>
 #include <cstdint>
@@ -55,6 +53,20 @@ struct PeerManagerQueueTestAccess {
     static void commitInput(PeerManager& peer, int result) {
         peer.commitSequencedInputResult(result);
     }
+    static void observe(PeerManager& peer, Type type, int result,
+                        uint32_t attempts = 1) {
+        peer.observeSctpSendResult(type, result, attempts);
+    }
+    static void resetHealth(PeerManager& peer) {
+        peer.resetDataChannelHealth();
+    }
+    static bool dataChannelFailed(const PeerManager& peer) {
+        return peer.data_channel_failed_.load();
+    }
+    static void ageFailureStreak(PeerManager& peer,
+                                 std::chrono::milliseconds age) {
+        peer.first_sctp_send_failure_ = std::chrono::steady_clock::now() - age;
+    }
     static bool waitingForKeyframe(const PeerManager& peer) {
         return peer.video_jitter_.waitingForKeyframe();
     }
@@ -83,6 +95,8 @@ struct PeerManagerQueueTestAccess {
 } // namespace lunar::webrtc
 
 namespace {
+
+constexpr int kWantWrite = -0x6880;
 
 std::vector<uint8_t> rtp(uint16_t sequence,
                          uint32_t timestamp,
@@ -121,22 +135,24 @@ int main() {
 
     assert(peer.sendControlData(payload, sizeof(payload)));
     auto reliable = Access::front(peer);
-    assert(Access::complete(peer, reliable, MBEDTLS_ERR_SSL_WANT_WRITE));
+    assert(Access::complete(peer, reliable, kWantWrite));
     assert(Access::size(peer) == 1);
-    assert(!peer.consumeReliableSendFailure());
+    assert(!peer.consumeDataChannelFailure());
     assert(!Access::complete(peer, reliable, static_cast<int>(sizeof(payload))));
     assert(Access::size(peer) == 0);
 
     assert(peer.sendControlData(payload, sizeof(payload)));
     reliable = Access::front(peer);
-    for (int attempt = 0; attempt < 8; ++attempt) {
-        Access::complete(peer, reliable, MBEDTLS_ERR_SSL_WANT_WRITE);
-        if (attempt < 7) {
+    for (int attempt = 0; attempt < 128; ++attempt) {
+        Access::complete(peer, reliable, kWantWrite);
+        if (attempt < 127) {
             reliable = Access::front(peer);
         }
     }
     assert(Access::size(peer) == 0);
-    assert(peer.consumeReliableSendFailure());
+    assert(peer.consumeDataChannelFailure());
+    assert(Access::dataChannelFailed(peer));
+    Access::resetHealth(peer);
 
     const uint8_t input_draft_a[] = {2, 0, 0, 0, 0, 0, 0, 0};
     const uint8_t input_draft_b[] = {2, 0, 0, 0, 0, 0, 1, 0};
@@ -149,10 +165,10 @@ int main() {
     std::vector<uint8_t> wire_packet;
     assert(Access::prepareInput(sequenced, sequenced_command, wire_packet));
     assert(readU32(wire_packet, 2) == 0);
-    Access::commitInput(sequenced, MBEDTLS_ERR_SSL_WANT_WRITE);
+    Access::commitInput(sequenced, kWantWrite);
     assert(Access::nextInputSequence(sequenced) == 0);
     assert(!Access::complete(
-        sequenced, sequenced_command, MBEDTLS_ERR_SSL_WANT_WRITE));
+        sequenced, sequenced_command, kWantWrite));
 
     assert(sequenced.sendLatestInputData(input_draft_a, sizeof(input_draft_a)));
     sequenced_command = Access::front(sequenced);
@@ -167,10 +183,10 @@ int main() {
     sequenced_command = Access::front(sequenced);
     assert(Access::prepareInput(sequenced, sequenced_command, wire_packet));
     assert(readU32(wire_packet, 2) == 1);
-    Access::commitInput(sequenced, MBEDTLS_ERR_SSL_WANT_WRITE);
+    Access::commitInput(sequenced, kWantWrite);
     assert(Access::nextInputSequence(sequenced) == 1);
     assert(Access::complete(
-        sequenced, sequenced_command, MBEDTLS_ERR_SSL_WANT_WRITE));
+        sequenced, sequenced_command, kWantWrite));
     sequenced_command = Access::front(sequenced);
     assert(Access::prepareInput(sequenced, sequenced_command, wire_packet));
     assert(readU32(wire_packet, 2) == 1);
@@ -183,7 +199,8 @@ int main() {
     reliable = Access::front(peer);
     assert(!Access::complete(peer, reliable, -1));
     assert(Access::size(peer) == 0);
-    assert(peer.consumeReliableSendFailure());
+    assert(peer.consumeDataChannelFailure());
+    Access::resetHealth(peer);
 
     const uint8_t first_input[] = {4};
     const uint8_t latest_input[] = {5, 6};
@@ -195,8 +212,48 @@ int main() {
     assert(new_input.id != old_input.id);
     assert(new_input.payload == std::vector<uint8_t>(latest_input,
                                                       latest_input + 2));
-    assert(!Access::complete(peer, new_input, MBEDTLS_ERR_SSL_WANT_WRITE));
+    assert(!Access::complete(peer, new_input, kWantWrite));
     assert(Access::size(peer) == 0);
+
+    PeerManager latest_failure;
+    Access::connect(latest_failure);
+    for (int attempt = 0; attempt < 127; ++attempt) {
+        Access::observe(latest_failure, Access::Type::InputLatest,
+                        kWantWrite);
+        assert(!Access::dataChannelFailed(latest_failure));
+    }
+    Access::observe(latest_failure, Access::Type::InputLatest,
+                    kWantWrite);
+    assert(Access::dataChannelFailed(latest_failure));
+    assert(latest_failure.consumeDataChannelFailure());
+    assert(!latest_failure.consumeDataChannelFailure());
+
+    PeerManager aged_failure;
+    Access::connect(aged_failure);
+    Access::observe(aged_failure, Access::Type::InputLatest, kWantWrite);
+    Access::ageFailureStreak(aged_failure, std::chrono::milliseconds(501));
+    Access::observe(aged_failure, Access::Type::InputLatest, kWantWrite);
+    assert(Access::dataChannelFailed(aged_failure));
+    assert(aged_failure.consumeDataChannelFailure());
+
+    PeerManager streak_reset;
+    Access::connect(streak_reset);
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        Access::observe(streak_reset, Access::Type::InputLatest,
+                        kWantWrite);
+    }
+    Access::observe(streak_reset, Access::Type::InputLatest, 12);
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        Access::observe(streak_reset, Access::Type::InputLatest,
+                        kWantWrite);
+    }
+    assert(!Access::dataChannelFailed(streak_reset));
+
+    PeerManager fatal;
+    Access::connect(fatal);
+    Access::observe(fatal, Access::Type::InputLatest, -1);
+    assert(Access::dataChannelFailed(fatal));
+    assert(fatal.consumeDataChannelFailure());
 
     assert(peer.requestVideoKeyframe());
     auto pli = Access::front(peer);
@@ -221,22 +278,25 @@ int main() {
 
     assert(peer.sendControlData(payload, sizeof(payload)));
     assert(peer.sendLatestInputData(payload, sizeof(payload)));
+    assert(peer.sendInputData(payload, sizeof(payload)));
     assert(peer.requestVideoKeyframe());
-    const auto ordered = Access::types(peer);
-    assert(ordered.size() == 3);
-    assert(ordered[0] == Access::Type::Pli);
-    assert(ordered[1] == Access::Type::InputLatest);
-    assert(ordered[2] == Access::Type::Control);
+    Access::Command selected_order;
+    assert(Access::select(peer, selected_order, true));
+    assert(selected_order.type == Access::Type::Pli);
 
-    pli = Access::front(peer);
+    pli = selected_order;
     assert(!Access::complete(peer, pli, 12));
-    assert(Access::front(peer).type == Access::Type::InputLatest);
+    assert(Access::select(peer, selected_order, true));
+    assert(selected_order.type == Access::Type::InputReliable);
+    assert(!Access::complete(peer, selected_order, 12));
+    assert(Access::select(peer, selected_order, true));
+    assert(selected_order.type == Access::Type::InputLatest);
 
     PeerManager scheduler;
     Access::connect(scheduler);
     assert(scheduler.sendControlData(payload, sizeof(payload)));
     reliable = Access::front(scheduler);
-    assert(Access::complete(scheduler, reliable, MBEDTLS_ERR_SSL_WANT_WRITE));
+    assert(Access::complete(scheduler, reliable, kWantWrite));
     assert(Access::enqueueNack(scheduler, 77, 0x0003));
     Access::Command selected;
     assert(Access::select(scheduler, selected, false));

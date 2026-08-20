@@ -16,7 +16,7 @@ def require(condition, message):
 
 input_loop_start = XBOX_SESSION.index("void XboxStreamSession::startInputLoop(")
 input_loop_end = XBOX_SESSION.index(
-    "void XboxStreamSession::discardPendingInputTransitions(", input_loop_start)
+    "void XboxStreamSession::prepareInputForReconnect(", input_loop_start)
 input_loop = XBOX_SESSION[input_loop_start:input_loop_end]
 run_loop_start = XBOX_SESSION.index("void XboxStreamSession::runLoop(")
 run_loop_end = XBOX_SESSION.index("void XboxStreamSession::controlLoop(")
@@ -30,13 +30,13 @@ require("kInputSampleInterval{8}" in XBOX_SESSION and
 require("transport_" not in input_loop,
         "the Xbox input producer must not call WebRTC/libpeer")
 require("transport_.processEvents()" in run_loop and
-        "xinput_.encodeFrames(input_frames)" in run_loop and
+        "xinput_.encodeFrames(input_batch->frames)" in run_loop and
         "channels_.sendInputPacket" in run_loop,
         "the Xbox WebRTC owner loop must encode and send sampled frames")
-require("kMaxPendingInputTransitions" in XBOX_SESSION and
-        "input_transitions_.size() >= kMaxPendingInputTransitions" in XBOX_SESSION and
-        "input_transitions_.pop_front()" in XBOX_SESSION,
-        "Xbox button transitions must be bounded before batching with the latest state")
+require("input_accumulator_.peekBatch()" in run_loop and
+        "input_accumulator_.commitBatch(*input_batch)" in run_loop and
+        "input-transition-overflow" in run_loop,
+        "Xbox transitions must use transactional batching and reconnect on overflow")
 require("kPsInputInterval{8}" in PS_CONTROLLER and
         "input_thread_ = std::thread" in PS_CONTROLLER and
         "update();" in PS_CONTROLLER,

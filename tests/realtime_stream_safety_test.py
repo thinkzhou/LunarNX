@@ -59,7 +59,7 @@ def main() -> None:
             "all WebRTC sends must go through the owner-thread command queue")
     require("completeOutboundCommand" in peer_source and
             "peer_connection_is_transient_send_error" in peer_source and
-            "reliable_send_failed_" in peer_header,
+            "data_channel_failed_" in peer_header,
             "reliable commands must survive transient DTLS backpressure and expose fatal failure")
     require("selectOutboundCommand" in peer_source and
             "isSctpCommand" in peer_source and
@@ -75,7 +75,7 @@ def main() -> None:
             "the outbound command count and per-message heap use must stay bounded")
     require("flushReliableData" in channels and
             "hasPendingReliableData" in channels and
-            "consumeReliableSendFailure" in channels,
+            "consumeDataChannelFailure" in channels,
             "startup must wait for reliable commands to leave the owner queue")
     require("dropDiagnosticLog" in peer_source and
             '"webrtc-outbound"' in peer_source,

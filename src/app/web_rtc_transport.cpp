@@ -237,8 +237,8 @@ bool WebRtcTransport::hasPendingReliableData() const {
     return peer_ && peer_->hasPendingReliableData();
 }
 
-bool WebRtcTransport::consumeReliableSendFailure() {
-    return peer_ && peer_->consumeReliableSendFailure();
+bool WebRtcTransport::consumeDataChannelFailure() {
+    return peer_ && peer_->consumeDataChannelFailure();
 }
 
 bool WebRtcTransport::isDataChannelReady() const {

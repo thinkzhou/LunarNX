@@ -23,8 +23,6 @@ constexpr std::chrono::seconds kRecoveryKeyframeInterval{1};
 constexpr std::chrono::seconds kReceiverFeedbackInterval{1};
 // Preserve the old 8 x 16 ms Guide pulse while sampling input at 8 ms.
 constexpr int kGuidePulseFrames = 16;
-constexpr size_t kMaxPendingInputTransitions =
-    input::XInputEncoder::kMaxGamepadFrames - 1;
 constexpr uint32_t kRecoveryMissingPacketsThreshold = 12;
 constexpr uint32_t kRecoveryCorruptFramesThreshold = 4;
 
@@ -383,18 +381,12 @@ std::string XboxStreamSession::sessionId() const {
 
 void XboxStreamSession::startInputLoop(RuntimeCallbacks callbacks) {
     stopInputLoop();
-    {
-        std::lock_guard<std::mutex> lock(input_mutex_);
-        input_transitions_.clear();
-        latest_input_state_ = {};
-        last_sampled_input_state_ = {};
-        latest_input_dirty_ = false;
-        has_sampled_input_ = false;
-    }
+    input_accumulator_.reset();
     input_loop_stop_ = false;
     input_thread_ = std::thread([this, callbacks]() {
         int guide_pulse_frames_remaining = 0;
         bool guide_release_pending = false;
+        auto last_input_owner = input_router_.owner();
         auto next_snapshot = std::chrono::steady_clock::now();
         auto next_input_tick = next_snapshot;
 
@@ -404,7 +396,8 @@ void XboxStreamSession::startInputLoop(RuntimeCallbacks callbacks) {
                 sampleInput(callbacks,
                             guide_pulse_frames_remaining,
                             guide_release_pending,
-                            next_snapshot);
+                            next_snapshot,
+                            last_input_owner);
             } catch (const std::exception& e) {
                 lunar::diagnosticLog("xbox-input", "input sample exception: %s", e.what());
             } catch (...) {
@@ -433,7 +426,8 @@ void XboxStreamSession::sampleInput(
     const RuntimeCallbacks& callbacks,
     int& guide_pulse_frames_remaining,
     bool& guide_release_pending,
-    std::chrono::steady_clock::time_point& next_snapshot) {
+    std::chrono::steady_clock::time_point& next_snapshot,
+    input::StreamInputOwner& last_input_owner) {
     input::GamepadState gamepad_state{};
     try {
         gamepad_state = gamepad_.read();
@@ -455,92 +449,28 @@ void XboxStreamSession::sampleInput(
         gamepad_state = {};
         guide_release_pending = false;
     }
+    const auto input_owner = input_router_.owner();
+    const bool owner_changed = input_owner != last_input_owner;
+    last_input_owner = input_owner;
     gamepad_state = input_router_.route(gamepad_state);
 
     const auto sampled_at = std::chrono::steady_clock::now();
-    std::lock_guard<std::mutex> lock(input_mutex_);
-    const bool button_transition =
-        has_sampled_input_ &&
-        hasButtonTransition(last_sampled_input_state_, gamepad_state);
-    if (button_transition && input_delivery_ready_.load()) {
-        if (input_transitions_.size() >= kMaxPendingInputTransitions) {
-            input_transitions_.pop_front();
-        }
-        input_transitions_.push_back(gamepad_state);
-    }
-    latest_input_state_ = gamepad_state;
-    last_sampled_input_state_ = gamepad_state;
-    has_sampled_input_ = true;
-    if (button_transition || sampled_at >= next_snapshot) {
-        latest_input_dirty_ = true;
+    const bool snapshot_due = sampled_at >= next_snapshot;
+    input_accumulator_.publish(gamepad_state,
+                               input_delivery_ready_.load(),
+                               snapshot_due,
+                               owner_changed && input_delivery_ready_.load());
+    if (snapshot_due) {
         next_snapshot = sampled_at + kInputSnapshotInterval;
     }
 }
 
-void XboxStreamSession::discardPendingInputTransitions() {
-    std::lock_guard<std::mutex> lock(input_mutex_);
-    input_transitions_.clear();
-}
-
-std::vector<input::GamepadState> XboxStreamSession::takeInputFrames() {
-    std::lock_guard<std::mutex> lock(input_mutex_);
-    if (!has_sampled_input_ ||
-        (input_transitions_.empty() && !latest_input_dirty_)) {
-        return {};
-    }
-
-    std::vector<input::GamepadState> frames;
-    frames.reserve(input_transitions_.size() + (latest_input_dirty_ ? 1 : 0));
-    while (!input_transitions_.empty()) {
-        frames.push_back(input_transitions_.front());
-        input_transitions_.pop_front();
-    }
-    if (latest_input_dirty_) {
-        if (frames.empty() ||
-            !sameEncodedGamepadState(frames.back(), latest_input_state_)) {
-            frames.push_back(latest_input_state_);
-        }
-        latest_input_dirty_ = false;
-    }
-    return frames;
-}
-
-bool XboxStreamSession::hasButtonTransition(
-    const input::GamepadState& previous,
-    const input::GamepadState& current) {
-    return previous.a != current.a || previous.b != current.b ||
-           previous.x != current.x || previous.y != current.y ||
-           previous.dpad_up != current.dpad_up ||
-           previous.dpad_down != current.dpad_down ||
-           previous.dpad_left != current.dpad_left ||
-           previous.dpad_right != current.dpad_right ||
-           previous.lb != current.lb || previous.rb != current.rb ||
-           previous.lt != current.lt || previous.rt != current.rt ||
-           previous.l3 != current.l3 || previous.r3 != current.r3 ||
-           previous.view != current.view || previous.menu != current.menu ||
-           previous.guide != current.guide;
-}
-
-bool XboxStreamSession::sameEncodedGamepadState(
-    const input::GamepadState& left,
-    const input::GamepadState& right) {
-    return left.a == right.a && left.b == right.b &&
-           left.x == right.x && left.y == right.y &&
-           left.dpad_up == right.dpad_up &&
-           left.dpad_down == right.dpad_down &&
-           left.dpad_left == right.dpad_left &&
-           left.dpad_right == right.dpad_right &&
-           left.lb == right.lb && left.rb == right.rb &&
-           left.lt == right.lt && left.rt == right.rt &&
-           left.l3 == right.l3 && left.r3 == right.r3 &&
-           left.view == right.view && left.menu == right.menu &&
-           left.guide == right.guide &&
-           left.left_stick_x == right.left_stick_x &&
-           left.left_stick_y == right.left_stick_y &&
-           left.right_stick_x == right.right_stick_x &&
-           left.right_stick_y == right.right_stick_y &&
-           left.left_trigger == right.left_trigger &&
-           left.right_trigger == right.right_trigger;
+void XboxStreamSession::prepareInputForReconnect() {
+    input_delivery_ready_ = false;
+    input_accumulator_.prepareForReconnect();
+    lunar::persistentEventLog(
+        "xbox-input", "input-reconnect-resync transition_depth=%zu",
+        input_accumulator_.pendingTransitionCount());
 }
 
 bool XboxStreamSession::isCancelled(const RuntimeCallbacks& callbacks) const {
@@ -734,23 +664,26 @@ void XboxStreamSession::runLoop(StreamProfile profile,
         const auto loop_started = std::chrono::steady_clock::now();
         const bool connected_before_pump = transport_.isConnected();
         if (control_started && connected_before_pump) {
-            auto input_frames = takeInputFrames();
-            if (!input_frames.empty()) {
-                const auto input_packet = xinput_.encodeFrames(input_frames);
+            auto input_batch = input_accumulator_.peekBatch();
+            if (input_batch) {
+                const auto input_packet = xinput_.encodeFrames(input_batch->frames);
                 if (!first_input_logged) {
                     lunar::diagnosticLog(
                         "xbox-stream",
                         "first input path connected=true frames=%zu packet_len=%zu",
-                        input_frames.size(),
+                        input_batch->frames.size(),
                         input_packet.size());
                     std::fprintf(
                         stderr,
                         "[xbox-stream] first input path connected=true frames=%zu packet_len=%zu\n",
-                        input_frames.size(),
+                        input_batch->frames.size(),
                         input_packet.size());
                     first_input_logged = true;
                 }
-                if (channels_.sendInputPacket(input_packet.data(), input_packet.size())) {
+                if (channels_.sendInputPacket(input_packet.data(),
+                                              input_packet.size(),
+                                              input_batch->reliable)) {
+                    input_accumulator_.commitBatch(*input_batch);
                     perf_.recordInputPacket();
                 } else if (input_send_failure_logs < 8) {
                     lunar::diagnosticLog("xbox-stream",
@@ -795,17 +728,26 @@ void XboxStreamSession::runLoop(StreamProfile profile,
 #else
         transport_.processEvents();
 #endif
-        if (transport_.consumeReliableSendFailure()) {
+        if (input_accumulator_.consumeOverflowFault()) {
+            lunar::persistentEventLog(
+                "xbox-input",
+                "input-transition-overflow transition_depth=%zu action=reconnect",
+                input_accumulator_.pendingTransitionCount());
+            prepareInputForReconnect();
+            transport_.disconnect();
+        }
+        if (transport_.consumeDataChannelFailure()) {
             lunar::diagnosticLog("xbox-stream",
-                                 "reliable SCTP send budget exhausted; reconnecting");
+                                 "DataChannel send budget exhausted; reconnecting");
             lunar::persistentEventLog(
                 "xbox-stream",
-                "WebRTC reconnect requested reason=reliable-sctp-send-failure");
+                "WebRTC reconnect requested reason=data-channel-send-failure");
+            prepareInputForReconnect();
             transport_.disconnect();
         }
         const bool connected = transport_.isConnected();
         if (!connected && input_delivery_ready_.exchange(false)) {
-            discardPendingInputTransitions();
+            input_accumulator_.prepareForReconnect();
         }
         const auto media_stats = transport_.getMediaStats();
         const bool pipeline_recovery_pending = media_.hasVideoRecoveryRequest();
@@ -878,6 +820,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
 
             if (ok) {
                 control_started = true;
+                input_accumulator_.prepareForReconnect();
                 input_delivery_ready_ = true;
                 try {
                     // Enable RTP handling and request keyframe once after auth.
@@ -1087,8 +1030,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             if (std::chrono::duration_cast<std::chrono::seconds>(
                     now - last_reconnect).count() >= backoff_seconds) {
                 std::fprintf(stderr, "[ctrl] Reconnect %d/5\n", reconnect_count + 1);
-                input_delivery_ready_ = false;
-                discardPendingInputTransitions();
+                prepareInputForReconnect();
                 transport_.disconnect();
                 if (transport_.initialize()) {
                     channels_.reset();

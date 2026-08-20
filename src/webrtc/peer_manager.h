@@ -91,7 +91,7 @@ public:
     bool requestVideoKeyframe();
     bool sendReceiverFeedback(uint32_t bitrate_bps);
     bool hasPendingReliableData() const;
-    bool consumeReliableSendFailure();
+    bool consumeDataChannelFailure();
     bool isDataChannelReady() const;
     void setMediaEnabled(bool enabled);
     PeerMediaStats getMediaStats() const;
@@ -123,7 +123,8 @@ private:
         uint32_t highest_sequence = 0;
         uint32_t bitrate_bps = 0;
         uint64_t id = 0;
-        uint8_t attempts = 0;
+        uint32_t attempts = 0;
+        std::chrono::steady_clock::time_point first_attempt_at{};
         std::chrono::steady_clock::time_point expires_at{};
     };
 
@@ -160,7 +161,10 @@ private:
     std::deque<OutboundCommand> outbound_commands_;
     uint64_t next_outbound_command_id_ = 1;
     uint32_t next_input_sequence_ = 0;
-    std::atomic<bool> reliable_send_failed_{false};
+    std::atomic<bool> data_channel_failed_{false};
+    std::atomic<bool> data_channel_failure_event_{false};
+    uint32_t consecutive_sctp_send_failures_ = 0;
+    std::chrono::steady_clock::time_point first_sctp_send_failure_{};
     std::atomic<uint32_t> outbound_drop_events_{0};
 
     bool enqueueData(OutboundType type,
@@ -176,6 +180,14 @@ private:
     bool prepareSequencedInputPayload(const OutboundCommand& command,
                                       std::vector<uint8_t>& packet) const;
     void commitSequencedInputResult(int result);
+    void observeSctpSendResult(OutboundType type,
+                               int result,
+                               uint32_t attempts);
+    void markDataChannelFailed(const char* reason,
+                               OutboundType type,
+                               int result,
+                               uint32_t attempts);
+    void resetDataChannelHealth();
     void clearOutboundCommands();
     static bool isReliableCommand(OutboundType type);
     static bool isSctpCommand(OutboundType type);
