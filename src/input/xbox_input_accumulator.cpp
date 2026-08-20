@@ -84,8 +84,6 @@ void XboxInputAccumulator::commitBatch(const Batch& batch) {
     if (batch.includes_latest &&
         latest_generation_ == batch.latest_generation) {
         latest_dirty_ = false;
-    }
-    if (batch.reliable) {
         force_reliable_snapshot_ = false;
     }
 }
