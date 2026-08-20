@@ -913,6 +913,23 @@ bool XboxVideoDecoder::resetForKeyframe() {
     return true;
 }
 
+bool XboxVideoDecoder::resetForNewSource() {
+    if (!initialized_ || !codec_ctx_) return false;
+    if (!reinitializeParser()) {
+        decoder_ready_ = false;
+        return false;
+    }
+    decoder_ready_ = false;
+    seen_sps_ = false;
+    seen_pps_ = false;
+    parameter_sets_.clear();
+    parameter_sets_pending_ = false;
+    wait_log_count_ = 0;
+    lunar::diagnosticLog("video", "%s source reset; waiting for fresh parameter sets and IDR",
+                         videoCodecName(video_codec_));
+    return true;
+}
+
 // =========================================================================
 // PlayStation / Chiaki path
 // =========================================================================
@@ -1077,6 +1094,24 @@ bool PsVideoDecoder::resetForKeyframe() {
     parameter_sets_pending_ = !parameter_sets_.empty();
     wait_log_count_ = 0;
     lunar::diagnosticLog("video", "%s decoder reset; waiting for random access",
+                         videoCodecName(video_codec_));
+    return true;
+}
+
+bool PsVideoDecoder::resetForNewSource() {
+    if (!initialized_ || !codec_ctx_) return false;
+    if (!reinitializeParser()) {
+        decoder_ready_ = false;
+        return false;
+    }
+    decoder_ready_ = false;
+    seen_vps_ = false;
+    seen_sps_ = false;
+    seen_pps_ = false;
+    parameter_sets_.clear();
+    parameter_sets_pending_ = false;
+    wait_log_count_ = 0;
+    lunar::diagnosticLog("video", "%s source reset; waiting for fresh parameter sets and IDR",
                          videoCodecName(video_codec_));
     return true;
 }

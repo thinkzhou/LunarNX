@@ -21,6 +21,10 @@ constexpr std::chrono::seconds kDataChannelTimeout{45};
 constexpr std::chrono::seconds kStartupKeyframeRetryInterval{1};
 constexpr std::chrono::seconds kRecoveryKeyframeInterval{1};
 constexpr std::chrono::seconds kReceiverFeedbackInterval{1};
+constexpr std::chrono::milliseconds kVideoRtpStallTimeout{5000};
+constexpr std::chrono::milliseconds kVideoDecodeStallTimeout{3500};
+constexpr std::chrono::milliseconds kVideoPresentStallTimeout{2000};
+constexpr std::chrono::milliseconds kVideoHealthRecoveryCooldown{2000};
 // Preserve the old 8 x 16 ms Guide pulse while sampling input at 8 ms.
 constexpr int kGuidePulseFrames = 16;
 constexpr uint32_t kRecoveryMissingPacketsThreshold = 12;
@@ -109,6 +113,7 @@ bool XboxStreamSession::start(const StreamProfile& profile,
                               RuntimeCallbacks callbacks) {
     stop();
     stop_requested_ = false;
+    control_recovery_requested_ = false;
     channels_.reset();
 
     auto cancel = [this, callbacks]() { return isCancelled(callbacks); };
@@ -330,6 +335,7 @@ void XboxStreamSession::stop(bool delete_session) {
     streaming_ = false;
     input_loop_stop_ = true;
     input_delivery_ready_ = false;
+    control_recovery_requested_ = false;
     control_cv_.notify_all();
 
     std::thread stream_thread_to_join;
@@ -575,6 +581,110 @@ bool XboxStreamSession::negotiateWebRtc(const StreamProfile& profile,
     return true;
 }
 
+bool XboxStreamSession::reconnectWithFreshSession(
+    const StreamProfile& profile,
+    std::string& session_id,
+    int& keep_alive_seconds,
+    const RuntimeCallbacks& callbacks) {
+    auto cancel = [this, callbacks]() { return isCancelled(callbacks); };
+    auto sleep = [this, callbacks](std::chrono::milliseconds duration) {
+        return sleepUnlessCancelled(duration, callbacks);
+    };
+
+    const std::string old_session_id = session_id;
+    prepareInputForReconnect();
+    media_.prepareForNewVideoSource("fresh WebRTC association");
+    transport_.disconnect();
+    channels_.reset();
+    session_id.clear();
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        session_id_.clear();
+    }
+    if (!old_session_id.empty()) {
+        session_client_.deleteSessionAsync(old_session_id);
+    }
+
+    notify(callbacks.on_status, "Recreating streaming session...");
+    {
+        std::lock_guard<std::mutex> api_lock(session_api_mutex_);
+        session_client_.cleanupStaleSessions(profile, cancel);
+    }
+    if (isCancelled(callbacks)) return false;
+
+    ProvisionedSession session;
+    {
+        std::lock_guard<std::mutex> api_lock(session_api_mutex_);
+        session = session_client_.createAndWait(
+            profile, cancel, callbacks.on_status, sleep);
+    }
+    if (session.status != SessionStartStatus::Ok || session.session_id.empty()) {
+        if (!session.session_id.empty()) {
+            session_client_.deleteSessionAsync(session.session_id);
+        }
+        lunar::diagnosticLog(
+            "xbox-stream", "Fresh session creation failed status=%d error=%s",
+            static_cast<int>(session.status), session.error.c_str());
+        return false;
+    }
+    if (isCancelled(callbacks)) {
+        session_client_.deleteSessionAsync(session.session_id);
+        return false;
+    }
+
+    session_id = session.session_id;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        session_id_ = session_id;
+    }
+    notify(callbacks.on_session_id, session_id);
+    keep_alive_seconds = session.config.keep_alive_seconds > 0
+        ? session.config.keep_alive_seconds
+        : 300;
+    perf_.recordKeepAliveInterval(static_cast<uint32_t>(keep_alive_seconds));
+
+    if (!transport_.initialize()) {
+        lunar::diagnosticLog("xbox-stream", "Fresh WebRTC transport init failed");
+        transport_.disconnect();
+        session_client_.deleteSessionAsync(session_id);
+        session_id.clear();
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            session_id_.clear();
+        }
+        return false;
+    }
+    transport_.setCallbacks(createPeerCallbacks());
+    transport_.setMediaEnabled(false);
+
+    bool negotiated = false;
+    {
+        std::lock_guard<std::mutex> api_lock(session_api_mutex_);
+        if (!isCancelled(callbacks)) {
+            negotiated = negotiateWebRtc(profile, session_id, callbacks);
+        }
+    }
+    if (!negotiated ||
+        !transport_.waitDataChannels(kDataChannelTimeout, cancel)) {
+        lunar::diagnosticLog(
+            "xbox-stream", "Fresh WebRTC negotiation/data channel failed");
+        transport_.disconnect();
+        channels_.reset();
+        session_client_.deleteSessionAsync(session_id);
+        session_id.clear();
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            session_id_.clear();
+        }
+        return false;
+    }
+
+    control_recovery_requested_ = false;
+    lunar::diagnosticLog("xbox-stream", "Fresh WebRTC session established id=%s",
+                         session_id.c_str());
+    return true;
+}
+
 webrtc::PeerCallbacks XboxStreamSession::createPeerCallbacks() {
     return {
         [this](const uint8_t* data, size_t len, uint16_t sequence, uint64_t timestamp) {
@@ -604,6 +714,13 @@ webrtc::PeerCallbacks XboxStreamSession::createPeerCallbacks() {
                                             ? "RTP loss timeout"
                                             : "waiting for recovery IDR",
                                         reset_decoder);
+        },
+        [this](uint32_t ssrc) {
+            lunar::persistentEventLog(
+                "xbox-stream",
+                "video-source-discontinuity ssrc=%u action=source-reset",
+                ssrc);
+            media_.prepareForNewVideoSource("RTP source discontinuity");
         },
         [this](uint8_t gamepad_index,
                float left,
@@ -642,6 +759,10 @@ void XboxStreamSession::runLoop(StreamProfile profile,
     uint32_t keyframe_queue_drop_baseline = 0;
     uint32_t keyframe_srtp_baseline = 0;
     int reconnect_count = 0;
+    uint32_t health_recovery_attempts = 0;
+    auto last_health_recovery = std::chrono::steady_clock::time_point{};
+    auto video_watchdog_started = std::chrono::steady_clock::time_point{};
+    uint32_t source_discontinuity_baseline = 0;
     int input_send_failure_logs = 0;
     bool control_started = false;
     bool first_loop_logged = false;
@@ -728,6 +849,14 @@ void XboxStreamSession::runLoop(StreamProfile profile,
 #else
         transport_.processEvents();
 #endif
+        if (control_recovery_requested_.exchange(false)) {
+            lunar::persistentEventLog(
+                "xbox-stream",
+                "WebRTC reconnect requested reason=control-plane-health");
+            prepareInputForReconnect();
+            media_.prepareForNewVideoSource("control-plane recovery");
+            transport_.disconnect();
+        }
         if (input_accumulator_.consumeOverflowFault()) {
             lunar::persistentEventLog(
                 "xbox-input",
@@ -750,6 +879,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             input_accumulator_.prepareForReconnect();
         }
         const auto media_stats = transport_.getMediaStats();
+        const auto media_health = media_.getHealthStats();
         const bool pipeline_recovery_pending = media_.hasVideoRecoveryRequest();
         perf_.setRtpStats(media_stats.video_rtp_packets,
                           media_stats.audio_rtp_packets,
@@ -820,6 +950,7 @@ void XboxStreamSession::runLoop(StreamProfile profile,
 
             if (ok) {
                 control_started = true;
+                video_watchdog_started = std::chrono::steady_clock::now();
                 input_accumulator_.prepareForReconnect();
                 input_delivery_ready_ = true;
                 try {
@@ -854,6 +985,15 @@ void XboxStreamSession::runLoop(StreamProfile profile,
         }
 
         const auto now = std::chrono::steady_clock::now();
+        const uint32_t source_discontinuities =
+            media_stats.video_rtp_ssrc_changes +
+            media_stats.video_rtp_timestamp_discontinuities;
+        if (source_discontinuities > source_discontinuity_baseline) {
+            source_discontinuity_baseline = source_discontinuities;
+            video_watchdog_started = now;
+            health_recovery_attempts = 0;
+            last_health_recovery = {};
+        }
         if (control_started && connected) {
             const uint32_t missing_delta =
                 media_stats.video_rtp_missing_packets_detected -
@@ -926,6 +1066,84 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                     keyframe_corrupt_baseline = media_stats.video_h264_corrupt_frames;
                     keyframe_queue_drop_baseline = media_stats.rtp_queue_drops;
                     keyframe_srtp_baseline = media_stats.srtp_rtp_decrypt_failures;
+                }
+            }
+
+            const bool rtp_seen = media_stats.video_rtp_packets > 0;
+            const bool watchdog_started =
+                video_watchdog_started.time_since_epoch().count() != 0;
+            const auto video_watchdog_age = watchdog_started
+                ? now - video_watchdog_started
+                : std::chrono::steady_clock::duration::zero();
+            const bool rtp_stalled =
+                (rtp_seen && media_stats.video_rtp_arrival_age_ms >=
+                                  static_cast<uint32_t>(kVideoRtpStallTimeout.count())) ||
+                (!rtp_seen && watchdog_started && video_watchdog_age >=
+                                  kVideoRtpStallTimeout);
+            if (rtp_stalled) {
+                lunar::persistentEventLog(
+                    "xbox-stream",
+                    "video watchdog stalled rtp_age_ms=%u decoded_age_ms=%llu "
+                    "action=fresh-session-reconnect",
+                    media_stats.video_rtp_arrival_age_ms,
+                    static_cast<unsigned long long>(media_health.decoded_video_age_ms));
+                prepareInputForReconnect();
+                media_.prepareForNewVideoSource("video RTP liveness timeout");
+                transport_.disconnect();
+            } else {
+                const bool rtp_alive = rtp_seen &&
+                    media_stats.video_rtp_arrival_age_ms <
+                        static_cast<uint32_t>(kVideoRtpStallTimeout.count());
+                const bool decode_stalled = rtp_alive && watchdog_started &&
+                    ((!media_health.has_decoded_video &&
+                      video_watchdog_age >= kVideoDecodeStallTimeout) ||
+                     (media_health.has_decoded_video &&
+                      media_health.decoded_video_age_ms >=
+                          static_cast<uint64_t>(kVideoDecodeStallTimeout.count())));
+                const bool present_stalled =
+                    media_health.has_decoded_video &&
+                    ((media_health.has_presented_video &&
+                      media_health.presented_video_age_ms >=
+                          static_cast<uint64_t>(kVideoPresentStallTimeout.count())) ||
+                     (!media_health.has_presented_video &&
+                      media_health.decoded_video_age_ms >=
+                          static_cast<uint64_t>(kVideoPresentStallTimeout.count())) ||
+                     media_health.consecutive_render_faults >= 2);
+                const bool pipeline_stalled = decode_stalled || present_stalled;
+                if (pipeline_stalled &&
+                    (last_health_recovery.time_since_epoch().count() == 0 ||
+                     now - last_health_recovery >= kVideoHealthRecoveryCooldown)) {
+                    if (health_recovery_attempts >= 1) {
+                        lunar::persistentEventLog(
+                            "xbox-stream",
+                            "video watchdog persistent pipeline stall decode_age_ms=%llu "
+                            "present_age_ms=%llu faults=%u action=fresh-session-reconnect",
+                            static_cast<unsigned long long>(media_health.decoded_video_age_ms),
+                            static_cast<unsigned long long>(media_health.presented_video_age_ms),
+                            media_health.render_fault_count);
+                        prepareInputForReconnect();
+                        media_.prepareForNewVideoSource(
+                            "persistent video pipeline stall");
+                        transport_.disconnect();
+                    } else {
+                        lunar::persistentEventLog(
+                            "xbox-stream",
+                            "video watchdog pipeline stall decode_age_ms=%llu "
+                            "present_age_ms=%llu faults=%u action=decoder-recovery",
+                            static_cast<unsigned long long>(media_health.decoded_video_age_ms),
+                            static_cast<unsigned long long>(media_health.presented_video_age_ms),
+                            media_health.render_fault_count);
+                        media_.requestVideoRecovery(
+                            decode_stalled ? "video decode watchdog"
+                                           : "video present watchdog",
+                            true);
+                        ++health_recovery_attempts;
+                        last_health_recovery = now;
+                    }
+                } else if (media_health.has_presented_video &&
+                           media_health.presented_video_age_ms < 1000 &&
+                           media_health.consecutive_render_faults == 0) {
+                    health_recovery_attempts = 0;
                 }
             }
         }
@@ -1030,26 +1248,17 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             if (std::chrono::duration_cast<std::chrono::seconds>(
                     now - last_reconnect).count() >= backoff_seconds) {
                 std::fprintf(stderr, "[ctrl] Reconnect %d/5\n", reconnect_count + 1);
-                prepareInputForReconnect();
-                transport_.disconnect();
-                if (transport_.initialize()) {
-                    channels_.reset();
-                    transport_.setCallbacks(createPeerCallbacks());
-                    transport_.setMediaEnabled(false);
-                    bool renegotiated = false;
-                    {
-                        std::lock_guard<std::mutex> api_lock(session_api_mutex_);
-                        if (!isCancelled(callbacks)) {
-                            renegotiated =
-                                negotiateWebRtc(profile, session_id, callbacks);
-                        }
-                    }
-                    if (renegotiated &&
-                        transport_.waitDataChannels(kDataChannelTimeout, cancel)) {
-                        control_started = false;
-                    }
+                const bool reconnected = reconnectWithFreshSession(
+                    profile, session_id, keep_alive_seconds, callbacks);
+                if (reconnected) {
+                    control_started = false;
+                    video_watchdog_started = {};
+                    source_discontinuity_baseline = 0;
+                    health_recovery_attempts = 0;
+                    last_health_recovery = {};
+                    reconnect_count = 0;
                 }
-                ++reconnect_count;
+                if (!reconnected) ++reconnect_count;
                 last_reconnect = now;
             }
         } else if (!connected && reconnect_count >= 5) {
@@ -1096,6 +1305,7 @@ void XboxStreamSession::controlLoop(std::string session_id,
     auto next_keep_alive = std::chrono::steady_clock::now() + keep_alive_interval;
     auto next_token_refresh =
         std::chrono::steady_clock::now() + token_refresh_interval;
+    uint32_t keep_alive_failures = 0;
     auto cancel = [this, callbacks]() {
         return !streaming_.load() || isCancelled(callbacks);
     };
@@ -1123,8 +1333,19 @@ void XboxStreamSession::controlLoop(std::string session_id,
                 bool keep_alive_ok = false;
                 try {
                     std::lock_guard<std::mutex> api_lock(session_api_mutex_);
-                    if (streaming_.load() && !isCancelled(callbacks)) {
-                        keep_alive_ok = session_client_.keepAlive(session_id, cancel);
+                    std::string active_session_id;
+                    {
+                        std::lock_guard<std::mutex> state_lock(state_mutex_);
+                        active_session_id = session_id_;
+                    }
+                    if (active_session_id.empty()) {
+                        // The stream worker is between fresh session
+                        // associations. Do not send keep-alive for the old
+                        // session while it is being replaced.
+                        keep_alive_ok = true;
+                    } else if (streaming_.load() && !isCancelled(callbacks)) {
+                        keep_alive_ok = session_client_.keepAlive(
+                            active_session_id, cancel);
                     }
                 } catch (const std::exception& e) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
@@ -1146,15 +1367,26 @@ void XboxStreamSession::controlLoop(std::string session_id,
                 perf_.recordKeepAlive(
                     static_cast<uint32_t>(std::max<int64_t>(0, keep_alive_duration)),
                     keep_alive_ok);
+                if (keep_alive_ok) {
+                    keep_alive_failures = 0;
+                } else if (++keep_alive_failures >= 2) {
+                    lunar::persistentEventLog(
+                        "xbox-stream",
+                        "keep-alive failed consecutive=%u action=reconnect",
+                        keep_alive_failures);
+                    control_recovery_requested_ = true;
+                    control_cv_.notify_all();
+                }
                 next_keep_alive = now + keep_alive_interval;
             }
 
             if (now >= next_token_refresh) {
                 if (callbacks.refresh_tokens) {
+                    bool refresh_ok = true;
                     try {
                         std::lock_guard<std::mutex> api_lock(session_api_mutex_);
                         if (streaming_.load() && !isCancelled(callbacks)) {
-                            callbacks.refresh_tokens();
+                            refresh_ok = callbacks.refresh_tokens();
                         }
                     } catch (const std::exception& e) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
@@ -1163,12 +1395,21 @@ void XboxStreamSession::controlLoop(std::string session_id,
                         lunar::diagnosticLog("xbox-stream",
                                              "Token refresh exception: %s",
                                              e.what());
+                        refresh_ok = false;
                     } catch (...) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
                         perf_.recordTokenRefreshException();
 #endif
                         lunar::diagnosticLog("xbox-stream",
                                              "Token refresh unknown exception");
+                        refresh_ok = false;
+                    }
+                    if (!refresh_ok) {
+                        lunar::persistentEventLog(
+                            "xbox-stream",
+                            "token refresh failed action=reconnect");
+                        control_recovery_requested_ = true;
+                        control_cv_.notify_all();
                     }
                 }
                 next_token_refresh = now + token_refresh_interval;

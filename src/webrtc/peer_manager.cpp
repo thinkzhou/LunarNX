@@ -236,6 +236,17 @@ void PeerManager::onVideoTrack(uint8_t* data,
             },
             [self](bool reset_decoder) {
                 self->handleVideoJitterRecovery(reset_decoder);
+            },
+            [self](uint32_t ssrc) {
+                self->video_clock_.reset();
+                if (self->callbacks_.on_video_source_discontinuity) {
+                    try {
+                        self->callbacks_.on_video_source_discontinuity(ssrc);
+                    } catch (...) {
+                        lunar::diagnosticLog(
+                            "webrtc", "video source discontinuity callback failed");
+                    }
+                }
             });
     } catch (...) {
         // std::function construction happens before VideoRtpJitterBuffer can
@@ -965,10 +976,10 @@ PeerMediaStats PeerManager::getMediaStats() const {
     // Recovery state drives Xbox PLI requests and must not depend on whether
     // diagnostic-only counters are compiled into the release build.
     stats.video_waiting_keyframe = video_jitter_.waitingForKeyframe();
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
     stats.video_rtp_nacks = video.nacks;
     stats.video_rtp_nack_retries = video.nack_retries;
     stats.video_rtp_resyncs = video.resyncs;
+    stats.video_rtp_timestamp_discontinuities = video.timestamp_discontinuities;
     stats.video_rtp_last_gap_packets = video.last_gap_packets;
     stats.video_rtp_ssrc = video.ssrc;
     stats.video_rtp_ssrc_changes = video.ssrc_changes;
@@ -988,7 +999,6 @@ PeerMediaStats PeerManager::getMediaStats() const {
         std::min<size_t>(UINT32_MAX, video.buffered_frames));
     stats.video_jitter_buffered_bytes = static_cast<uint32_t>(
         std::min<size_t>(UINT32_MAX, video.buffered_bytes));
-#endif
     return stats;
 }
 

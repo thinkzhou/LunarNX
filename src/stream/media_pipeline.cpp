@@ -34,6 +34,12 @@ std::atomic<int> g_media_worker_logs{0};
 std::atomic<int> g_video_sync_logs{0};
 std::atomic<uint64_t> g_cloud_1080_render_frames{0};
 
+uint64_t monotonicNowNs() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<
+        std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 bool shouldLogMediaQueue() {
     return g_media_queue_logs.fetch_add(1) < kMediaQueueLogLimit;
 }
@@ -55,6 +61,10 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
                                const MediaPipelineOptions& options) {
     running_ = false;
     video_recovery_request_ = false;
+    video_new_source_pending_ = false;
+    last_decoded_video_ns_ = 0;
+    decoded_video_frames_ = 0;
+    render_fault_count_ = 0;
     stopWorkers();
 
     uint32_t worker_generation = 0;
@@ -207,9 +217,13 @@ void MediaPipeline::shutdownUnlocked() {
     running_ = false;
     video_recovery_request_ = false;
     video_decoder_reset_pending_ = false;
+    video_new_source_pending_ = false;
     video_waiting_for_keyframe_ = false;
     video_recovery_epoch_ = 0;
     video_ready_notified_ = false;
+    last_decoded_video_ns_ = 0;
+    decoded_video_frames_ = 0;
+    render_fault_count_ = 0;
     if (video_renderer_) {
         lunar::diagnosticLog("media", "shutdown video renderer begin");
         video_renderer_->shutdown();
@@ -307,6 +321,22 @@ void MediaPipeline::requestVideoRecovery(const char* reason,
         lunar::diagnosticLog("media", "video keyframe requested reason=%s",
                              reason ? reason : "unknown");
     }
+}
+
+void MediaPipeline::prepareForNewVideoSource(const char* reason) {
+    std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
+    if (!running_.load()) return;
+
+    video_new_source_pending_ = true;
+    last_decoded_video_ns_ = 0;
+    decoded_video_frames_ = 0;
+    render_fault_count_ = 0;
+    if (video_renderer_) video_renderer_->resetLiveness();
+    if (av_sync_) {
+        av_sync_->reset();
+        av_sync_->start();
+    }
+    beginHardVideoRecovery(reason ? reason : "new video source", true);
 }
 
 bool MediaPipeline::beginHardVideoRecoveryLocked(bool force_new_epoch,
@@ -585,6 +615,7 @@ bool MediaPipeline::startWorkers(uint32_t generation) {
 #endif
         video_recovery_request_ = false;
         video_decoder_reset_pending_ = false;
+        video_new_source_pending_ = false;
         video_waiting_for_keyframe_ = false;
         video_recovery_epoch_ = 0;
         video_decoder_reset_wakeup_ = false;
@@ -651,6 +682,7 @@ void MediaPipeline::stopWorkers() {
         video_worker_generation_ = 0;
         video_worker_stop_ = false;
         video_decoder_reset_pending_ = false;
+        video_new_source_pending_ = false;
         video_waiting_for_keyframe_ = false;
         video_recovery_epoch_ = 0;
         video_decoder_reset_wakeup_ = false;
@@ -674,6 +706,7 @@ void MediaPipeline::videoWorkerLoop() {
         QueuedVideoPacket packet;
         bool have_packet = false;
         bool reset_requested = false;
+        bool reset_new_source = false;
         uint32_t reset_epoch = 0;
         {
             std::unique_lock<std::mutex> lock(video_queue_mutex_);
@@ -692,6 +725,7 @@ void MediaPipeline::videoWorkerLoop() {
             }
             reset_requested = video_decoder_reset_pending_.load() &&
                 (reset_wakeup || (have_packet && packet.contains_idr));
+            reset_new_source = video_new_source_pending_.load();
             reset_epoch = video_recovery_epoch_.load();
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
             if (have_packet) {
@@ -703,7 +737,9 @@ void MediaPipeline::videoWorkerLoop() {
 #endif
         }
         if (reset_requested) {
-            const bool reset = video_decoder_ && resetVideoDecoderForKeyframe();
+            const bool reset = video_decoder_ && (reset_new_source
+                ? resetVideoDecoderForKeyframe(true)
+                : resetVideoDecoderForKeyframe());
             if (!reset) {
                 lunar::diagnosticLog("media", "video decoder reset for keyframe failed");
                 video_recovery_request_ = true;
@@ -712,6 +748,7 @@ void MediaPipeline::videoWorkerLoop() {
                 std::lock_guard<std::mutex> lock(video_queue_mutex_);
                 if (video_recovery_epoch_.load() == reset_epoch) {
                     video_decoder_reset_pending_ = false;
+                    if (reset_new_source) video_new_source_pending_ = false;
                 }
             }
         }
@@ -724,14 +761,15 @@ void MediaPipeline::videoWorkerLoop() {
     lunar::diagnosticLog("media", "video worker loop end");
 }
 
-bool MediaPipeline::resetVideoDecoderForKeyframe() {
+bool MediaPipeline::resetVideoDecoderForKeyframe(bool new_source) {
     if (!video_decoder_) return false;
     if (video_renderer_ && !video_renderer_->prepareDecoderReset()) {
         lunar::dropDiagnosticLog(
             "video-reset", "phase=gpu-handoff-failed action=defer-decoder-flush");
         return false;
     }
-    return video_decoder_->resetForKeyframe();
+    return new_source ? video_decoder_->resetForNewSource()
+                      : video_decoder_->resetForKeyframe();
 }
 
 void MediaPipeline::audioWorkerLoop() {
@@ -882,6 +920,9 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
         std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
         if (!isGenerationActive(generation) || !av_sync_ || !video_renderer_) return;
 
+        last_decoded_video_ns_ = monotonicNowNs();
+        decoded_video_frames_.fetch_add(1, std::memory_order_relaxed);
+
         av_sync_->updateVideoPts(frame.timestamp);
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         const auto timing = av_sync_->getVideoTiming(frame.timestamp);
@@ -984,7 +1025,38 @@ void MediaPipeline::presentVideoFrame() {
     std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
     if (running_.load() && video_renderer_) {
         video_renderer_->present();
+        const auto fault = video_renderer_->consumeRenderFault();
+        if (fault != RenderFault::None) {
+            render_fault_count_.fetch_add(1, std::memory_order_relaxed);
+            beginHardVideoRecovery(renderFaultName(fault), true);
+        }
     }
+}
+
+MediaHealthStats MediaPipeline::getHealthStats() const {
+    MediaHealthStats stats;
+    const uint64_t now_ns = monotonicNowNs();
+    const uint64_t decoded_ns = last_decoded_video_ns_.load(
+        std::memory_order_acquire);
+    stats.has_decoded_video = decoded_video_frames_.load(
+        std::memory_order_acquire) > 0 && decoded_ns != 0;
+    if (stats.has_decoded_video && now_ns >= decoded_ns) {
+        stats.decoded_video_age_ms = (now_ns - decoded_ns) / 1'000'000u;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
+    if (video_renderer_) {
+        const uint64_t presented_ns = video_renderer_->lastSuccessfulPresentNs();
+        stats.has_presented_video = presented_ns != 0;
+        if (stats.has_presented_video && now_ns >= presented_ns) {
+            stats.presented_video_age_ms = (now_ns - presented_ns) / 1'000'000u;
+        }
+        stats.consecutive_render_faults =
+            video_renderer_->consecutiveRenderFaults();
+    }
+    stats.render_fault_count = render_fault_count_.load(
+        std::memory_order_acquire);
+    return stats;
 }
 
 } // namespace lunar::stream

@@ -31,6 +31,7 @@ struct PeerMediaStats : PeerConnectionMediaStats {
     uint32_t video_rtp_nacks = 0;
     uint32_t video_rtp_nack_retries = 0;
     uint32_t video_rtp_resyncs = 0;
+    uint32_t video_rtp_timestamp_discontinuities = 0;
     uint32_t video_rtp_last_gap_packets = 0;
     uint32_t video_rtp_ssrc = 0;
     uint32_t video_rtp_ssrc_changes = 0;
@@ -56,6 +57,9 @@ struct PeerCallbacks {
     // keeps fenced/displayed frames alive and asks the sender for a fresh IDR;
     // decoder flushes remain reserved for actual decoder/queue failures.
     std::function<void(bool reset_decoder)> on_video_recovery;
+    // Called before the first access unit from a new SSRC/timestamp source is
+    // mapped onto the media clock.
+    std::function<void(uint32_t ssrc)> on_video_source_discontinuity;
 
     // Xbox 4-motor rumble. Called when Xbox sends vibration data.
     // Parameters match XStreaming: {leftMotor, rightMotor, leftTrigger, rightTrigger} 0.0-1.0

@@ -58,6 +58,10 @@ public:
     /// Discard decoder reference state and wait for the next IDR.  This is
     /// used after RTP queue loss or a hardware decode error.
     virtual bool resetForKeyframe() = 0;
+    /// Reset all source-specific parser and parameter-set state. Unlike a
+    /// normal keyframe recovery this must not carry SPS/PPS across a new RTP
+    /// SSRC or WebRTC association.
+    virtual bool resetForNewSource() = 0;
     void flush();
     void shutdown();
 
@@ -101,6 +105,7 @@ public:
     bool decode(const uint8_t* data, size_t len, uint64_t timestamp,
                 const VideoAccessUnitInfo* inspected_access_unit = nullptr) override;
     bool resetForKeyframe() override;
+    bool resetForNewSource() override;
 
 private:
     bool decoder_ready_ = false;
@@ -121,6 +126,7 @@ public:
     bool decode(const uint8_t* data, size_t len, uint64_t timestamp,
                 const VideoAccessUnitInfo* inspected_access_unit = nullptr) override;
     bool resetForKeyframe() override;
+    bool resetForNewSource() override;
 
 private:
     bool decoder_ready_ = false;

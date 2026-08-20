@@ -502,9 +502,25 @@ struct Deko3DRenderContext {
   size_t active_present_slice=0;
   bool present_slice_active=false;
   uint64_t present_frame_id=0;
+  std::atomic<uint8_t>* pending_render_fault=nullptr;
 };
 
 namespace {
+
+void markContextRenderFault(Deko3DRenderContext& s,
+                            RenderFault fault,
+                            const char* reason) {
+  if (!s.pending_render_fault || fault == RenderFault::None) return;
+  uint8_t expected = static_cast<uint8_t>(RenderFault::None);
+  if (s.pending_render_fault->compare_exchange_strong(
+          expected, static_cast<uint8_t>(fault),
+          std::memory_order_release, std::memory_order_relaxed)) {
+    lunar::persistentEventLog(
+        "video-render",
+        "fault=%s reason=%s action=media-recovery",
+        renderFaultName(fault), reason ? reason : "unknown");
+  }
+}
 
 void hardwareProbeLog(uint64_t frame_id, const char* stage,
                       const char* format = nullptr, ...) {
@@ -1012,7 +1028,10 @@ void recordPresentPipeline(Deko3DRenderContext& s,
 }
 
 bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
-  if(!frame||frame->format!=AV_PIX_FMT_NVTEGRA)return false;
+  if(!frame||frame->format!=AV_PIX_FMT_NVTEGRA){
+    markContextRenderFault(s, RenderFault::InvalidFrame, "format");
+    return false;
+  }
   hardwareProbeLog(s.present_frame_id, "mapping-begin",
                    "format=%d size=%dx%d queue_error=%d",
                    frame->format, frame->width, frame->height,
@@ -1020,6 +1039,7 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
   AVNVTegraMap* nvmap=av_nvtegra_frame_get_fbuf_map(frame);
   if(!nvmap){
     lunar::diagnosticLog("render","present reject missing nvtegra map width=%d height=%d",frame->width,frame->height);
+    markContextRenderFault(s, RenderFault::MissingNvMap, "missing-nvmap");
     return false;
   }
 
@@ -1034,6 +1054,7 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
   if(!handle||!address||size==0||!frame->data[0]||!frame->data[1]||
      frame->linesize[0]<=0||frame->linesize[1]<=0){
     lunar::diagnosticLog("render","present reject invalid nvtegra map handle=%u addr=%p size=%u",handle,address,size);
+    markContextRenderFault(s, RenderFault::InvalidNvMap, "map-fields");
     return false;
   }
 
@@ -1042,6 +1063,7 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
   const uintptr_t chroma_addr=reinterpret_cast<uintptr_t>(frame->data[1]);
   if(luma_addr<base_addr||chroma_addr<base_addr){
     lunar::diagnosticLog("render","present reject nvtegra planes before map handle=%u addr=%p y=%p uv=%p",handle,address,frame->data[0],frame->data[1]);
+    markContextRenderFault(s, RenderFault::InvalidNvMap, "plane-before-map");
     return false;
   }
   const uint64_t luma_delta=static_cast<uint64_t>(luma_addr-base_addr);
@@ -1049,6 +1071,7 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
   if(luma_delta>=size||chroma_delta>=size||chroma_delta<=luma_delta||
      luma_delta>UINT32_MAX||chroma_delta>UINT32_MAX){
     lunar::diagnosticLog("render","present reject nvtegra plane offsets handle=%u size=%u y=%llu uv=%llu",handle,size,(unsigned long long)luma_delta,(unsigned long long)chroma_delta);
+    markContextRenderFault(s, RenderFault::InvalidNvMap, "plane-offsets");
     return false;
   }
   const uint32_t luma_offset=static_cast<uint32_t>(luma_delta);
@@ -1067,6 +1090,7 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
   if(frame->width<=0||frame->height<=0||luma_width==0||luma_height==0||
      chroma_width==0||chroma_height==0){
     lunar::diagnosticLog("render","present reject invalid nvtegra geometry width=%d height=%d pitches=%d/%d",frame->width,frame->height,frame->linesize[0],frame->linesize[1]);
+    markContextRenderFault(s, RenderFault::InvalidNvMap, "geometry");
     return false;
   }
 
@@ -1087,6 +1111,8 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
   if(mapping_index<0){
     if(s.fms.size()>=32){
       lunar::diagnosticLog("render","present reject nvtegra mapping cache full size=%zu",s.fms.size());
+      markContextRenderFault(s, RenderFault::MappingCacheExhausted,
+                             "mapping-cache-full");
       return false;
     }
 
@@ -1139,6 +1165,7 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
     const uint64_t chroma_end=static_cast<uint64_t>(chroma_offset)+mapping.cll.getSize();
     if(luma_end>size||chroma_end>size){
       lunar::diagnosticLog("render","present reject nvtegra layout handle=%u size=%u y=%u uv=%u luma_layout=%llu chroma_layout=%llu",handle,size,luma_offset,chroma_offset,(unsigned long long)mapping.ll.getSize(),(unsigned long long)mapping.cll.getSize());
+      markContextRenderFault(s, RenderFault::InvalidNvMap, "layout-size");
       return false;
     }
 
@@ -1155,6 +1182,8 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
                      s.q && s.q.isInErrorState() ? 1 : 0);
     if(!external_mem){
       lunar::diagnosticLog("render","present reject external memblock handle=%u addr=%p size=%u",handle,address,size);
+      markContextRenderFault(s, RenderFault::ExternalMemblockFailed,
+                             "external-memblock");
       return false;
     }
 
@@ -1168,6 +1197,8 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
       s.fms.push_back(std::move(mapping));
     }catch(...){
       lunar::diagnosticLog("render","present reject nvtegra mapping allocation failed handle=%u size=%u",handle,size);
+      markContextRenderFault(s, RenderFault::ExternalMemblockFailed,
+                             "mapping-vector");
       return false;
     }
     if(shouldLogRender()){
@@ -1190,6 +1221,8 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
     }else{
       s.q.submitCommands(s.update_ring->end(s.update_cb));
       lunar::diagnosticLog("render","present reject descriptor update fail");
+      markContextRenderFault(s, RenderFault::DescriptorUpdateFailed,
+                             "image-descriptor");
       return false;
     }
     s.q.submitCommands(s.update_ring->end(s.update_cb));
@@ -1220,11 +1253,53 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
 VideoRenderer::VideoRenderer() = default;
 VideoRenderer::~VideoRenderer(){shutdown();delete static_cast<Deko3DRenderContext*>(ctx_);ctx_=nullptr;}
 
+void VideoRenderer::recordSuccessfulPresent() {
+  successful_presents_.fetch_add(1, std::memory_order_relaxed);
+  last_successful_present_ns_.store(
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count()),
+      std::memory_order_release);
+  consecutive_render_faults_.store(0, std::memory_order_release);
+}
+
+void VideoRenderer::markRenderFault(RenderFault fault) {
+  if (fault == RenderFault::None) return;
+  uint8_t expected = static_cast<uint8_t>(RenderFault::None);
+  if (pending_render_fault_.compare_exchange_strong(
+          expected, static_cast<uint8_t>(fault),
+          std::memory_order_release, std::memory_order_relaxed)) {
+    lunar::persistentEventLog("video-render", "fault=%s action=media-recovery",
+                              renderFaultName(fault));
+  }
+}
+
+RenderFault VideoRenderer::consumeRenderFault() {
+  const auto fault = static_cast<RenderFault>(
+      pending_render_fault_.exchange(static_cast<uint8_t>(RenderFault::None),
+                                     std::memory_order_acq_rel));
+  if (fault != RenderFault::None) {
+    consecutive_render_faults_.fetch_add(1, std::memory_order_acq_rel);
+  }
+  return fault;
+}
+
+void VideoRenderer::resetLiveness() {
+  pending_render_fault_.store(static_cast<uint8_t>(RenderFault::None),
+                              std::memory_order_release);
+  last_successful_present_ns_.store(0, std::memory_order_release);
+  consecutive_render_faults_.store(0, std::memory_order_release);
+}
+
 void VideoRenderer::setVideoBackend(VideoBackend backend){
   video_backend_=backend;
 }
 
 bool VideoRenderer::initialize(const char*,int w,int h){
+  pending_render_fault_.store(static_cast<uint8_t>(RenderFault::None),
+                              std::memory_order_release);
+  successful_presents_.store(0, std::memory_order_release);
+  last_successful_present_ns_.store(0, std::memory_order_release);
+  consecutive_render_faults_.store(0, std::memory_order_release);
   if(video_backend_==VideoBackend::Software){
     try{
       lunar::diagnosticLog("render","software renderer init begin width=%d height=%d",w,h);
@@ -1259,6 +1334,7 @@ bool VideoRenderer::initialize(const char*,int w,int h){
   }
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);
   if(s->ok)shutdown();
+  s->pending_render_fault=&pending_render_fault_;
 
   std::unique_lock<std::recursive_mutex> gpu_lock;
   try {
@@ -1394,10 +1470,12 @@ bool VideoRenderer::render(const VideoFrame&frame){
     AVFrame* f=frame.avframe;
     if(!f){
       if(shouldLogRender())lunar::diagnosticLog("render","software render reject missing AVFrame");
+      markRenderFault(RenderFault::InvalidFrame);
       return false;
     }
     if(f->width<=0||f->height<=0){
       if(shouldLogRender())lunar::diagnosticLog("render","software render reject invalid size width=%d height=%d",f->width,f->height);
+      markRenderFault(RenderFault::InvalidFrame);
       return false;
     }
     std::lock_guard<std::mutex> lock(software_mutex_);
@@ -1416,6 +1494,7 @@ bool VideoRenderer::render(const VideoFrame&frame){
     software_sws_=sws;
     if(!sws){
       if(shouldLogRender())lunar::diagnosticLog("render","software render reject sws_getCachedContext failed format=%d",f->format);
+      markRenderFault(RenderFault::InvalidFrame);
       return false;
     }
     const size_t rgba_size=static_cast<size_t>(f->width)*static_cast<size_t>(f->height)*4;
@@ -1423,6 +1502,7 @@ bool VideoRenderer::render(const VideoFrame&frame){
       software_rgba_.resize(rgba_size);
     }catch(...){
       if(shouldLogRender())lunar::diagnosticLog("render","software render reject rgba alloc failed size=%zu",rgba_size);
+      markRenderFault(RenderFault::InvalidFrame);
       return false;
     }
     uint8_t* dst_data[4]={software_rgba_.data(),nullptr,nullptr,nullptr};
@@ -1437,27 +1517,33 @@ bool VideoRenderer::render(const VideoFrame&frame){
                        dst_linesize);
     if(rows<=0){
       if(shouldLogRender())lunar::diagnosticLog("render","software render reject sws_scale rows=%d",rows);
+      markRenderFault(RenderFault::InvalidFrame);
       return false;
     }
     if(perf_)perf_->recordRenderSubmit(toMicroseconds(RenderClock::now()-render_start));
     const bool published=SoftwareVideoFrameSink::instance().publishRgba(
         software_rgba_.data(),f->width,f->height,frame.timestamp);
     if(shouldLogRender())lunar::diagnosticLog("render","software render success width=%d height=%d rows=%d published=%s",f->width,f->height,rows,published?"true":"false");
+    if(published) recordSuccessfulPresent();
+    else markRenderFault(RenderFault::InvalidFrame);
     return published;
   }
 
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);
   if(!s||!s->ok){
     if(shouldLogRender())lunar::diagnosticLog("render","render reject context unavailable");
+    markRenderFault(RenderFault::InvalidFrame);
     return false;
   }
   AVFrame* f=frame.avframe;
   if(!f){
     if(shouldLogRender())lunar::diagnosticLog("render","render reject missing AVFrame");
+    markRenderFault(RenderFault::InvalidFrame);
     return false;
   }
   if(f->format!=AV_PIX_FMT_NVTEGRA){
     if(shouldLogRender())lunar::diagnosticLog("render","render reject format=%d expected=%d",f->format,AV_PIX_FMT_NVTEGRA);
+    markRenderFault(RenderFault::InvalidFrame);
     return false;
   }
   std::lock_guard<std::mutex> lock(s->render_mutex);
@@ -1465,6 +1551,7 @@ bool VideoRenderer::render(const VideoFrame&frame){
   if(!keep||av_frame_ref(keep,f)<0){
     if(keep)av_frame_free(&keep);
     if(shouldLogRender())lunar::diagnosticLog("render","render reject frame ref failed");
+    markRenderFault(RenderFault::FrameReferenceFailed);
     return false;
   }
   const bool had_startup_candidate=
@@ -1523,12 +1610,19 @@ void VideoRenderer::present(){
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);
   if(!s||!s->ok){
     if(shouldLogRender())lunar::diagnosticLog("render","present reject context unavailable");
+    markRenderFault(RenderFault::InvalidFrame);
     return;
   }
   std::lock_guard<std::recursive_mutex> gpu_lock(s->vctx->getGpuMutex());
   std::lock_guard<std::mutex> lock(s->render_mutex);
+  if(s->q && s->q.isInErrorState()){
+    markContextRenderFault(*s, RenderFault::QueueError, "present-entry");
+    return;
+  }
   if(s->decoder_reset_requested){
     if(!s->q||!s->present_ring){
+      markContextRenderFault(*s, RenderFault::InvalidFrame,
+                             "reset-command-ring");
       s->decoder_reset_ready=false;
       s->decoder_reset_requested=false;
       s->decoder_reset_drain_steps=0;
@@ -1585,7 +1679,11 @@ void VideoRenderer::present(){
         s->resolution_transition.activeHeight());
   }
   if(s->resolution_transition.isTransitioning()){
-    if(!s->q||!s->present_ring)return;
+    if(!s->q||!s->present_ring){
+      markContextRenderFault(*s, RenderFault::InvalidFrame,
+                             "transition-command-ring");
+      return;
+    }
 
     const size_t submitted_index=s->next_submitted_frame;
     s->present_ring->begin(s->present_cb);
@@ -1655,10 +1753,15 @@ void VideoRenderer::present(){
                    s->q && s->q.isInErrorState() ? 1 : 0);
   if(!fb||!db){
     if(shouldLogRender())lunar::diagnosticLog("render","present reject framebuffer=%s depth=%s",fb?"true":"false",db?"true":"false");
+    markContextRenderFault(*s, RenderFault::InvalidFrame, "framebuffer");
     return;
   }
 
-  if(!s->present_ring)return;
+  if(!s->present_ring){
+    markContextRenderFault(*s, RenderFault::InvalidFrame,
+                           "present-command-ring");
+    return;
+  }
   hardwareProbeLog(frame_id, "command-ring-begin-before",
                    "slice=%zu queue_error=%d", s->next_submitted_frame,
                    s->q && s->q.isInErrorState() ? 1 : 0);
@@ -1688,6 +1791,8 @@ void VideoRenderer::present(){
     if(submitted_frame)av_frame_free(&submitted_frame);
     s->present_slice_active=false;
     if(shouldLogRender())lunar::diagnosticLog("render","present reject in-flight frame ref failed");
+    markContextRenderFault(*s, RenderFault::FrameReferenceFailed,
+                           "in-flight-frame-ref");
     return;
   }
 
@@ -1709,11 +1814,15 @@ void VideoRenderer::present(){
   hardwareProbeLog(frame_id, "queue-submit-after",
                    "slice=%zu queue_error=%d", submitted_index,
                    s->q && s->q.isInErrorState() ? 1 : 0);
+  const bool queue_error = s->q && s->q.isInErrorState();
   s->cl=0;
   completed_frame=submitted_frame;
   s->next_submitted_frame=(submitted_index+1)%s->submitted_frames.size();
   s->present_slice_active=false;
   if(perf_)perf_->recordRenderSubmit(toMicroseconds(RenderClock::now()-render_start));
+  if(queue_error) markContextRenderFault(*s, RenderFault::QueueError,
+                                         "present-submit");
+  else recordSuccessfulPresent();
   if(shouldLogRender())lunar::diagnosticLog("render","present submit width=%d height=%d",s->frame_w,s->frame_h);
 }
 
@@ -1722,7 +1831,7 @@ bool VideoRenderer::prepareDecoderReset(){
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);
   if(!s)return false;
   std::unique_lock<std::mutex> lock(s->render_mutex);
-  if(!s->ok||!s->q)return false;
+  if(!s->ok||!s->q||s->q.isInErrorState())return false;
   bool has_submitted_frames=false;
   for(auto* frame:s->submitted_frames){
     if(frame){has_submitted_frames=true;break;}
@@ -1802,6 +1911,7 @@ void VideoRenderer::shutdown(){
   configurePresentPipeline(s->pipeline, PostProcessMode::Off);
   s->static_state_dirty=true;
   s->ok=false;
+  s->pending_render_fault=nullptr;
 }
 
 }
@@ -1810,11 +1920,45 @@ void VideoRenderer::shutdown(){
 #include <mutex>
 namespace lunar::stream {
 VideoRenderer::VideoRenderer()=default;VideoRenderer::~VideoRenderer(){shutdown();}
+void VideoRenderer::recordSuccessfulPresent(){
+  successful_presents_.fetch_add(1, std::memory_order_relaxed);
+  last_successful_present_ns_.store(
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count()),
+      std::memory_order_release);
+  consecutive_render_faults_.store(0, std::memory_order_release);
+}
+void VideoRenderer::markRenderFault(RenderFault fault){
+  if(fault==RenderFault::None)return;
+  uint8_t expected=static_cast<uint8_t>(RenderFault::None);
+  if(pending_render_fault_.compare_exchange_strong(
+         expected,static_cast<uint8_t>(fault),std::memory_order_release,
+         std::memory_order_relaxed)){
+    lunar::persistentEventLog("video-render","fault=%s action=media-recovery",
+                              renderFaultName(fault));
+  }
+}
+RenderFault VideoRenderer::consumeRenderFault(){
+  const auto fault=static_cast<RenderFault>(pending_render_fault_.exchange(
+      static_cast<uint8_t>(RenderFault::None),std::memory_order_acq_rel));
+  if(fault!=RenderFault::None)
+    consecutive_render_faults_.fetch_add(1,std::memory_order_acq_rel);
+  return fault;
+}
+void VideoRenderer::resetLiveness(){
+  pending_render_fault_.store(static_cast<uint8_t>(RenderFault::None),std::memory_order_release);
+  last_successful_present_ns_.store(0,std::memory_order_release);
+  consecutive_render_faults_.store(0,std::memory_order_release);
+}
 void VideoRenderer::setVideoBackend(VideoBackend){video_backend_=VideoBackend::Software;}
 void VideoRenderer::setPostProcessMode(PostProcessMode){}
 void VideoRenderer::setPostProcessEnabled(bool){}
 void VideoRenderer::setDitheringEnabled(bool, float){}
 bool VideoRenderer::initialize(const char* t,int w,int h){
+  pending_render_fault_.store(static_cast<uint8_t>(RenderFault::None),std::memory_order_release);
+  successful_presents_.store(0,std::memory_order_release);
+  last_successful_present_ns_.store(0,std::memory_order_release);
+  consecutive_render_faults_.store(0,std::memory_order_release);
   if(SDL_Init(SDL_INIT_VIDEO)<0)return false;
   auto* win=SDL_CreateWindow(t,SDL_WINDOWPOS_UNDEFINED,SDL_WINDOWPOS_UNDEFINED,w,h,SDL_WINDOW_SHOWN|SDL_WINDOW_RESIZABLE);
   if(!win)return false;window_=win;
@@ -1827,10 +1971,19 @@ bool VideoRenderer::render(const VideoFrame& f){
   std::lock_guard<std::mutex> lock(sdl_mutex_);
   auto* t=static_cast<SDL_Texture*>(texture_);
   auto* r=static_cast<SDL_Renderer*>(renderer_);
-  if(!t||!r)return false;
+  if(!t||!r){
+    markRenderFault(RenderFault::InvalidFrame);
+    return false;
+  }
   SDL_Rect rect = {0, 0, f.width, f.height};
-  SDL_UpdateYUVTexture(t, &rect, f.data[0], f.linesize[0], f.data[1], f.linesize[1], f.data[2], f.linesize[2]);
-  SDL_RenderClear(r);SDL_RenderCopy(r,t,nullptr,nullptr);SDL_RenderPresent(r);return true;
+  if(SDL_UpdateYUVTexture(t, &rect, f.data[0], f.linesize[0], f.data[1], f.linesize[1], f.data[2], f.linesize[2]) < 0 ||
+     SDL_RenderClear(r) < 0 || SDL_RenderCopy(r,t,nullptr,nullptr) < 0){
+    markRenderFault(RenderFault::InvalidFrame);
+    return false;
+  }
+  SDL_RenderPresent(r);
+  recordSuccessfulPresent();
+  return true;
 }
 void VideoRenderer::present(){}
 bool VideoRenderer::prepareDecoderReset(){return true;}

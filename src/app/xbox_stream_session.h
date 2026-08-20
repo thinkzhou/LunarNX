@@ -64,6 +64,10 @@ private:
     bool negotiateWebRtc(const StreamProfile& profile,
                          const std::string& session_id,
                          const RuntimeCallbacks& callbacks);
+    bool reconnectWithFreshSession(const StreamProfile& profile,
+                                   std::string& session_id,
+                                   int& keep_alive_seconds,
+                                   const RuntimeCallbacks& callbacks);
     webrtc::PeerCallbacks createPeerCallbacks();
     void runLoop(StreamProfile profile,
                  std::string session_id,
@@ -98,6 +102,7 @@ private:
     std::atomic<bool> stop_requested_{false};
     std::atomic<bool> input_loop_stop_{true};
     std::atomic<bool> input_delivery_ready_{false};
+    std::atomic<bool> control_recovery_requested_{false};
     mutable std::mutex state_mutex_;
     std::mutex session_api_mutex_;
     std::mutex control_mutex_;

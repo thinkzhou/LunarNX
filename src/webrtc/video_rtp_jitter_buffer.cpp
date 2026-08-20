@@ -23,6 +23,7 @@ constexpr uint64_t kMinNackRetryMs = 20;
 constexpr uint64_t kMaxNackRetryMs = 60;
 constexpr size_t kMaxHeadBlockedFrames = 8;
 constexpr uint64_t kMinHeadBlockedHoldMs = 80;
+constexpr uint32_t kTimestampDiscontinuityTicks = 180000;
 constexpr size_t kMaxRtpPayloadBytes = 2048;
 constexpr uint8_t kStartCode[] = {0x00, 0x00, 0x00, 0x01};
 
@@ -40,9 +41,7 @@ uint32_t saturatingAdd(uint32_t value, uint32_t increment) {
 struct ParsedRtp {
     uint16_t sequence = 0;
     uint32_t timestamp = 0;
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
     uint32_t ssrc = 0;
-#endif
     bool marker = false;
     const uint8_t* payload = nullptr;
     size_t payload_size = 0;
@@ -79,13 +78,11 @@ bool parseRtp(const uint8_t* packet, size_t size, ParsedRtp& parsed) {
         (static_cast<uint32_t>(packet[5]) << 16) |
         (static_cast<uint32_t>(packet[6]) << 8) |
         packet[7];
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
     parsed.ssrc =
         (static_cast<uint32_t>(packet[8]) << 24) |
         (static_cast<uint32_t>(packet[9]) << 16) |
         (static_cast<uint32_t>(packet[10]) << 8) |
         packet[11];
-#endif
     parsed.marker = (packet[1] & 0x80) != 0;
     parsed.payload = packet + offset;
     parsed.payload_size = payload_size;
@@ -285,9 +282,9 @@ struct VideoRtpJitterBuffer::Impl {
     std::array<MissingRange, kMaxPendingNackRanges> pending_nack_ranges{};
     size_t pending_nack_head = 0;
     size_t pending_nack_count = 0;
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
     bool have_ssrc = false;
-#endif
+    bool have_last_packet_timestamp = false;
+    uint32_t last_packet_timestamp = 0;
 
     VideoRtpJitterStats counters;
 
@@ -310,6 +307,8 @@ struct VideoRtpJitterBuffer::Impl {
         received_prior = 0;
         have_last_timestamp = false;
         last_timestamp = 0;
+        have_last_packet_timestamp = false;
+        last_packet_timestamp = 0;
         have_last_consumed_sequence = false;
         last_consumed_sequence = 0;
         recovery_notified = false;
@@ -323,10 +322,43 @@ struct VideoRtpJitterBuffer::Impl {
         nacks_in_window = 0;
         pending_nack_head = 0;
         pending_nack_count = 0;
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
         have_ssrc = false;
-#endif
         counters = {};
+    }
+
+    void resetForSource(uint32_t new_ssrc) {
+        clearFrames();
+        received_window.reset();
+        waiting_keyframe = true;
+        have_sequence = false;
+        max_sequence = 0;
+        highest_sequence = 0;
+        base_sequence = 0;
+        unique_received = 0;
+        expected_prior = 0;
+        received_prior = 0;
+        have_last_timestamp = false;
+        last_timestamp = 0;
+        have_last_packet_timestamp = false;
+        last_packet_timestamp = 0;
+        have_last_consumed_sequence = false;
+        last_consumed_sequence = 0;
+        recovery_notified = false;
+        decoder_reset_notified = false;
+        last_recovery_notify_ms = 0;
+        soft_recovery_active = false;
+        last_soft_loss_ms = 0;
+        soft_losses_in_window = 0;
+        have_nack_window = false;
+        nack_window_started_ms = 0;
+        nacks_in_window = 0;
+        pending_nack_head = 0;
+        pending_nack_count = 0;
+        have_ssrc = true;
+        counters.ssrc = new_ssrc;
+        counters.missing_packets = 0;
+        counters.highest_sequence = 0;
+        counters.last_gap_packets = 0;
     }
 
     bool wasReceived(uint32_t extended_sequence) const {
@@ -552,9 +584,7 @@ struct VideoRtpJitterBuffer::Impl {
                 counters.sequence_gaps++;
                 counters.missing_packets_detected = saturatingAdd(
                     counters.missing_packets_detected, delta - 1);
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
                 counters.last_gap_packets = delta - 1;
-#endif
                 sendNacks(previous_highest + 1,
                           extended,
                           timestamp,
@@ -1037,10 +1067,10 @@ struct VideoRtpJitterBuffer::Impl {
                  uint64_t now_ms,
                  const EmitCallback& emit,
                  const NackCallback& nack,
-                 const RecoveryCallback& recovery) {
+                 const RecoveryCallback& recovery,
+                 const SourceDiscontinuityCallback& source_discontinuity) {
         ParsedRtp parsed;
         if (!parseRtp(packet, size, parsed)) return;
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
         if (counters.last_arrival_ms > 0 && now_ms >= counters.last_arrival_ms) {
             counters.last_arrival_gap_ms = now_ms - counters.last_arrival_ms;
             counters.max_arrival_gap_ms = std::max(
@@ -1048,14 +1078,33 @@ struct VideoRtpJitterBuffer::Impl {
                 counters.last_arrival_gap_ms);
         }
         counters.last_arrival_ms = now_ms;
+        const bool had_ssrc = have_ssrc;
         if (!have_ssrc) {
             have_ssrc = true;
             counters.ssrc = parsed.ssrc;
-        } else if (parsed.ssrc != counters.ssrc) {
-            counters.ssrc = parsed.ssrc;
-            counters.ssrc_changes++;
         }
-#endif
+
+        const bool ssrc_changed = had_ssrc && parsed.ssrc != counters.ssrc;
+        const bool timestamp_discontinuity =
+            !ssrc_changed && have_last_packet_timestamp &&
+            !timestampNewer(parsed.timestamp, last_packet_timestamp) &&
+            static_cast<uint32_t>(last_packet_timestamp - parsed.timestamp) >
+                kTimestampDiscontinuityTicks;
+        if (ssrc_changed || timestamp_discontinuity) {
+            if (ssrc_changed) counters.ssrc_changes++;
+            if (timestamp_discontinuity) counters.timestamp_discontinuities++;
+            resetForSource(parsed.ssrc);
+            try {
+                if (source_discontinuity) source_discontinuity(parsed.ssrc);
+            } catch (...) {
+            }
+            // Reset the clock before this source can emit its first access
+            // unit. Media recovery then flushes decoder/parser state and
+            // waits for a fresh IDR.
+            notifyRecovery(recovery, true, now_ms, true);
+        }
+        have_last_packet_timestamp = true;
+        last_packet_timestamp = parsed.timestamp;
         counters.packets++;
 
         const bool recovery_authorized =
@@ -1189,9 +1238,11 @@ void VideoRtpJitterBuffer::receive(const uint8_t* packet,
                                    uint64_t now_ms,
                                    const EmitCallback& emit,
                                    const NackCallback& nack,
-                                   const RecoveryCallback& recovery) {
+                                   const RecoveryCallback& recovery,
+                                   const SourceDiscontinuityCallback& source_discontinuity) {
     try {
-        impl_->receive(packet, size, now_ms, emit, nack, recovery);
+        impl_->receive(packet, size, now_ms, emit, nack, recovery,
+                       source_discontinuity);
     } catch (const std::bad_alloc&) {
         impl_->overflow(recovery, now_ms);
     } catch (...) {
