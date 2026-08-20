@@ -49,4 +49,18 @@ inline bool boundedVideoMayDecodeWhileRecovering(bool waiting_for_keyframe,
     return !waiting_for_keyframe || random_access;
 }
 
+inline bool realtimeVideoCapacityExceeded(size_t packets, size_t bytes,
+                                          size_t incoming_bytes,
+                                          size_t max_packets,
+                                          size_t max_bytes) {
+    return packets > 0 &&
+           (packets >= max_packets ||
+            incoming_bytes > max_bytes - (bytes > max_bytes ? max_bytes : bytes));
+}
+
+inline bool boundedVideoAdmissionMayEnqueue(BoundedVideoAdmission admission) {
+    return admission != BoundedVideoAdmission::DropDependent &&
+           admission != BoundedVideoAdmission::RejectOversize;
+}
+
 } // namespace lunar::stream

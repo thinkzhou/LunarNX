@@ -437,7 +437,10 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
         const bool age_exceeded = admission == BoundedVideoAdmission::RecoverAge;
         const bool capacity_exceeded =
             admission == BoundedVideoAdmission::RecoverOverflow ||
-            admission == BoundedVideoAdmission::RejectOversize;
+            admission == BoundedVideoAdmission::RejectOversize ||
+            (!bounded && realtimeVideoCapacityExceeded(
+                video_queue_.size(), queued_video_bytes_, packet.data.size(),
+                max_packets, max_bytes));
 
         if (admission == BoundedVideoAdmission::DropDependent) {
             intentional_drop = true;
@@ -473,9 +476,13 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
                                      recovery_dropped_packets,
                                      recovery_dropped_bytes);
             }
-            if (!packet.contains_idr) intentional_drop = true;
+            if (!packet.contains_idr ||
+                admission == BoundedVideoAdmission::RejectOversize) {
+                intentional_drop = true;
+            }
         }
-        if (!intentional_drop) {
+        if (!intentional_drop &&
+            (!bounded || boundedVideoAdmissionMayEnqueue(admission))) {
             packet.recovery_epoch = video_recovery_epoch_.load();
             video_queue_.push_back(std::move(packet));
             queued_video_bytes_ += video_queue_.back().data.size();

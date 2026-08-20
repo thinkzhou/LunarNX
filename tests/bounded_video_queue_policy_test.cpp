@@ -19,6 +19,9 @@ int main() {
     assert(decide({1, 1024, 49ms, false}, 1024, false) == BoundedVideoAdmission::Accept);
     assert(decide({1, 1024, 50ms, false}, 1024, false) == BoundedVideoAdmission::RecoverAge);
     assert(decide({0, 0, 0ms, false}, 8 * 1024 * 1024 + 1, true) == BoundedVideoAdmission::RejectOversize);
+    assert(!boundedVideoAdmissionMayEnqueue(BoundedVideoAdmission::RejectOversize));
+    assert(boundedVideoAdmissionMayEnqueue(BoundedVideoAdmission::Accept));
+    assert(boundedVideoAdmissionMayEnqueue(BoundedVideoAdmission::RecoverOverflow));
     assert(decide({0, 0, 0ms, true}, 1024, false) == BoundedVideoAdmission::DropDependent);
     assert(decide({0, 0, 0ms, true}, 1024, true) == BoundedVideoAdmission::Accept);
     assert(boundedVideoResetMustPrecedeDecode(true, false, true));
@@ -29,6 +32,9 @@ int main() {
     assert(!boundedVideoPacketIsCurrent(true, 6, 7, 4, 4));
     assert(!boundedVideoPacketIsCurrent(true, 7, 7, 3, 4));
     assert(!boundedVideoPacketIsCurrent(false, 7, 7, 4, 4));
+    assert(!realtimeVideoCapacityExceeded(2047, 1024, 1024, 2048, 32 * 1024 * 1024));
+    assert(realtimeVideoCapacityExceeded(2048, 1024, 1024, 2048, 32 * 1024 * 1024));
+    assert(realtimeVideoCapacityExceeded(1, 32 * 1024 * 1024, 1, 2048, 32 * 1024 * 1024));
 
     std::atomic<bool> running{true};
     std::atomic<uint32_t> generation{9};

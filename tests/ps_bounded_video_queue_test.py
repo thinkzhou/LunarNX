@@ -36,8 +36,11 @@ require("std::chrono::steady_clock::now() - packet.enqueued_at >=\n             
 require("queue.packets >= max_packets" in policy and
         "incoming_bytes > max_bytes" in policy,
         "enqueue must enforce bounded AU count and bytes")
+require("admission == BoundedVideoAdmission::RejectOversize" in impl and
+        "intentional_drop = true" in impl,
+        "oversized bounded AUs must recover without entering the queue")
 require("beginHardVideoRecoveryLocked(" in impl and
-        "if (!packet.contains_idr) intentional_drop = true" in impl,
+        "!packet.contains_idr ||" in impl,
         "overflow must enter hard recovery instead of retaining dependent P frames")
 require("BoundedVideoAdmission::DropDependent" in impl and
         "return true;" in impl,
