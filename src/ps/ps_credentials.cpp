@@ -236,6 +236,24 @@ bool PsCredentials::addAndSave(const RegisteredCredential& cred,
     return true;
 }
 
+bool PsCredentials::updateLastKnownAddrAndSave(const std::string& server_mac,
+                                               const std::string& address,
+                                               const std::string& path) {
+    auto normalized = normalizeMac(server_mac);
+    if (!normalized || address.empty()) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto updated = hosts_;
+    auto it = std::find_if(updated.begin(), updated.end(),
+        [&](const RegisteredCredential& value) {
+            return value.server_mac == *normalized;
+        });
+    if (it == updated.end() || it->last_known_addr == address) return false;
+    it->last_known_addr = address;
+    if (!saveHosts(updated, path)) return false;
+    hosts_ = std::move(updated);
+    return true;
+}
+
 void PsCredentials::add(const RegisteredCredential& cred) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = std::find_if(hosts_.begin(), hosts_.end(),

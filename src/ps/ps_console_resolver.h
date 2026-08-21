@@ -14,8 +14,16 @@ enum class ResolvedRouteType {
     None,
 };
 
+enum class ResolvedRouteOrigin {
+    None,
+    LanDiscovered,
+    LanPersisted,
+    PsnRemote,
+};
+
 struct ResolvedRoute {
     ResolvedRouteType type = ResolvedRouteType::None;
+    ResolvedRouteOrigin origin = ResolvedRouteOrigin::None;
     std::string host_addr;       // for local
     std::string console_duid;    // for remote
     std::string error;

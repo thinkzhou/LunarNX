@@ -13,6 +13,9 @@
 #include "../ps/ps_stream_controller.h"
 #include "../ps/psn_auth_manager.h"
 #include <algorithm>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <cstdio>
 #include <thread>
 
@@ -550,6 +553,7 @@ void PsActivity::onPause() {
     // focus while popping the child.
     console_list_refresh_suspended_ = true;
     console_list_refresh_pending_ = true;
+    stopDiscovery();
 }
 
 void PsActivity::onResume() {
@@ -602,6 +606,8 @@ void PsActivity::onResume() {
         if (has_session && !had_psn_session_) fetchPsnConsoles();
         had_psn_session_ = has_session;
     }
+
+    if (source_ == PsConsoleSource::Local) startLanDiscovery();
 }
 
 void PsActivity::startLanDiscovery() {
@@ -691,6 +697,8 @@ void PsActivity::stopDiscovery() {
 void PsActivity::setConsoleSource(PsConsoleSource source) {
     if (source_ == source) return;
     source_ = source;
+    if (source_ == PsConsoleSource::Local) startLanDiscovery();
+    else stopDiscovery();
     updateSourceUi();
     rebuildConsoleList(hosts_);
 }
@@ -817,6 +825,11 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         const bool local_standby = host.local.has_value() &&
             host.local->verified &&
             host.local->state == ps::PsConsoleState::Standby;
+        in_addr local_address{};
+        const bool local_address_valid = host.local.has_value() &&
+            inet_pton(AF_INET, host.local->ip.c_str(), &local_address) == 1;
+        const bool local_persisted = host.local.has_value() &&
+            local_address_valid && !host.local->verified;
         const bool remote_enabled = host.remote.has_value() &&
             host.remote->remoteplay_enabled;
 
@@ -841,6 +854,15 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
             action->setText(brls::getStr("lunarnx/ps/btn_connect"));
             action->registerClickAction([this, host](brls::View*) -> bool {
                 diagnosticLog("ui-ps", "Local Connect clicked name=%s",
+                              host.nickname.c_str());
+                connectToConsole(host);
+                return true;
+            });
+        } else if (source_ == PsConsoleSource::Local && paired && local_persisted) {
+            stylePrimaryButton(action);
+            action->setText(brls::getStr("lunarnx/ps/btn_try_connect"));
+            action->registerClickAction([this, host](brls::View*) -> bool {
+                diagnosticLog("ui-ps", "Persisted LAN connect clicked name=%s",
                               host.nickname.c_str());
                 connectToConsole(host);
                 return true;
