@@ -1,9 +1,7 @@
 #ifdef __SWITCH__
 
 #include "ps_discovery.h"
-#include "../diagnostics.h"
 #include <arpa/inet.h>
-#include <algorithm>
 #include <cstring>
 #include <switch.h>
 
@@ -73,25 +71,6 @@ bool PsDiscovery::start(const std::vector<std::string>& manual_hosts,
         directed->sin_addr.s_addr = current_ip | ~subnet_mask;
     }
 
-    std::vector<sockaddr_storage> periodic_targets;
-    if (directed_broadcast.ss_family == AF_INET) {
-        periodic_targets.push_back(directed_broadcast);
-    }
-    for (const auto& host : manual_hosts) {
-        sockaddr_in direct{};
-        direct.sin_family = AF_INET;
-        if (inet_pton(AF_INET, host.c_str(), &direct.sin_addr) != 1) continue;
-        sockaddr_storage target{};
-        std::memcpy(&target, &direct, sizeof(direct));
-        const bool duplicate = std::any_of(periodic_targets.begin(),
-            periodic_targets.end(), [&](const sockaddr_storage& existing) {
-                const auto* existing_addr = reinterpret_cast<const sockaddr_in*>(&existing);
-                return existing.ss_family == AF_INET &&
-                    existing_addr->sin_addr.s_addr == direct.sin_addr.s_addr;
-            });
-        if (!duplicate) periodic_targets.push_back(target);
-    }
-
     ChiakiDiscoveryServiceOptions options{};
     options.hosts_max = 16;
     options.host_drop_pings = 3;
@@ -99,9 +78,10 @@ bool PsDiscovery::start(const std::vector<std::string>& manual_hosts,
     options.ping_initial_ms = 0;
     options.send_addr = &send_addr;
     options.send_addr_size = sizeof(broadcast);
-    options.broadcast_addrs = periodic_targets.empty()
-        ? nullptr : periodic_targets.data();
-    options.broadcast_num = periodic_targets.size();
+    if (directed_broadcast.ss_family == AF_INET) {
+        options.broadcast_addrs = &directed_broadcast;
+        options.broadcast_num = 1;
+    }
     options.cb = onHostsDiscovered;
     options.cb_user = this;
 
@@ -112,10 +92,29 @@ bool PsDiscovery::start(const std::vector<std::string>& manual_hosts,
     }
     running_.store(true);
 
-    diagnosticLog("ps-discovery",
-                  "periodic_targets=%zu saved_hosts=%zu directed_broadcast=%d",
-                  periodic_targets.size(), manual_hosts.size(),
-                  directed_broadcast.ss_family == AF_INET ? 1 : 0);
+    // Chiaki's service periodically broadcasts, but some access points filter
+    // both limited and directed broadcasts. Probe saved numeric addresses on
+    // the same discovery socket so a reply can verify the historical route
+    // without allocating another service/thread per console.
+    for (const auto& host : manual_hosts) {
+        sockaddr_in direct{};
+        direct.sin_family = AF_INET;
+        if (inet_pton(AF_INET, host.c_str(), &direct.sin_addr) != 1) continue;
+
+        ChiakiDiscoveryPacket packet{};
+        packet.cmd = CHIAKI_DISCOVERY_CMD_SRCH;
+        packet.protocol_version = const_cast<char*>(
+            CHIAKI_DISCOVERY_PROTOCOL_VERSION_PS4);
+        direct.sin_port = htons(CHIAKI_DISCOVERY_PORT_PS4);
+        chiaki_discovery_send(&service_.discovery, &packet,
+            reinterpret_cast<sockaddr*>(&direct), sizeof(direct));
+
+        packet.protocol_version = const_cast<char*>(
+            CHIAKI_DISCOVERY_PROTOCOL_VERSION_PS5);
+        direct.sin_port = htons(CHIAKI_DISCOVERY_PORT_PS5);
+        chiaki_discovery_send(&service_.discovery, &packet,
+            reinterpret_cast<sockaddr*>(&direct), sizeof(direct));
+    }
     return true;
 }
 

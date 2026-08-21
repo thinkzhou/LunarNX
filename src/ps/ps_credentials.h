@@ -21,9 +21,6 @@ public:
     // Replace one credential only after the complete credential set has been
     // durably written. A failed save leaves the in-memory set unchanged.
     bool addAndSave(const RegisteredCredential& cred, const std::string& path);
-    bool updateLastKnownAddrAndSave(const std::string& server_mac,
-                                    const std::string& address,
-                                    const std::string& path);
     void add(const RegisteredCredential& cred);
     void remove(const std::string& server_mac);
     bool empty() const;

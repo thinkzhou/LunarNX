@@ -13,9 +13,6 @@
 #include "../ps/ps_stream_controller.h"
 #include "../ps/psn_auth_manager.h"
 #include <algorithm>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
 #include <cstdio>
 #include <thread>
 
@@ -553,7 +550,6 @@ void PsActivity::onPause() {
     // focus while popping the child.
     console_list_refresh_suspended_ = true;
     console_list_refresh_pending_ = true;
-    stopDiscovery();
 }
 
 void PsActivity::onResume() {
@@ -568,21 +564,21 @@ void PsActivity::onResume() {
     const bool has_session = ps_manager_->hasStoredPsnSession();
     updateAccountUi();
     console_list_refresh_suspended_ = false;
-    auto alive = alive_;
-    brls::sync([this, alive]() {
-        // Replacing the connection activity with StreamView briefly resumes
-        // this page before immediately pausing it again. Do not let that
-        // stale resume task steal global focus or start discovery.
-        if (!alive->load() || console_list_refresh_suspended_) return;
-        if (console_list_refresh_pending_) {
+    if (console_list_refresh_pending_) {
+        auto alive = alive_;
+        brls::sync([this, alive]() {
+            // Replacing the connection activity with StreamView briefly
+            // resumes this page before immediately pausing it again. Do not
+            // let that stale resume task steal global focus from the stream.
+            // Keep the refresh pending until this page is genuinely visible.
+            if (!alive->load() || console_list_refresh_suspended_) return;
             console_list_refresh_pending_ = false;
             // This runs after popActivity has finished restoring its saved
             // focus. Move to a persistent control before deleting list rows.
             if (lan_button_) brls::Application::giveFocus(lan_button_);
             rebuildConsoleList(ps_manager_->getDiscoveredHosts());
-        }
-        if (source_ == PsConsoleSource::Local) startLanDiscovery();
-    });
+        });
+    }
 
     // Existing sessions may not have an online_id stored yet; fetch it once so
     // the account name shows without requiring a re-login.
@@ -606,7 +602,6 @@ void PsActivity::onResume() {
         if (has_session && !had_psn_session_) fetchPsnConsoles();
         had_psn_session_ = has_session;
     }
-
 }
 
 void PsActivity::startLanDiscovery() {
@@ -631,6 +626,7 @@ void PsActivity::startLanDiscovery() {
     if (!started && lan_state_) {
         lan_state_->setText(brls::getStr("lunarnx/ps/lan_search_failed"));
     }
+    rebuildConsoleList(ps_manager_->getDiscoveredHosts());
 }
 
 void PsActivity::fetchPsnConsoles() {
@@ -695,8 +691,6 @@ void PsActivity::stopDiscovery() {
 void PsActivity::setConsoleSource(PsConsoleSource source) {
     if (source_ == source) return;
     source_ = source;
-    if (source_ == PsConsoleSource::Local) startLanDiscovery();
-    else stopDiscovery();
     updateSourceUi();
     rebuildConsoleList(hosts_);
 }
@@ -797,8 +791,7 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         if (host.credentials.has_value())
             detail += " · " + brls::getStr("lunarnx/ps/detail_paired");
         if (host.local.has_value()) {
-            if (!host.local->verified ||
-                host.local->state == ps::PsConsoleState::Unknown) {
+            if (!host.local->verified) {
                 detail += " · " + brls::getStr("lunarnx/ps/detail_last_known");
             } else {
                 detail += host.local->state == ps::PsConsoleState::Standby
@@ -818,8 +811,8 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
         card->addView(info);
 
         const bool paired = host.credentials.has_value();
-        const bool local_usable = ps::PsConsoleResolver::hasUsableLocalRoute(host);
-        const bool local_ready = local_usable && host.local->verified &&
+        const bool local_ready = host.local.has_value() &&
+            host.local->verified &&
             host.local->state == ps::PsConsoleState::Ready;
         const bool local_standby = host.local.has_value() &&
             host.local->verified &&
@@ -848,17 +841,6 @@ void PsActivity::rebuildConsoleList(const std::vector<ps::PsConsole>& hosts) {
             action->setText(brls::getStr("lunarnx/ps/btn_connect"));
             action->registerClickAction([this, host](brls::View*) -> bool {
                 diagnosticLog("ui-ps", "Local Connect clicked name=%s",
-                              host.nickname.c_str());
-                connectToConsole(host);
-                return true;
-            });
-        } else if (source_ == PsConsoleSource::Local && paired && local_usable) {
-            stylePrimaryButton(action);
-            action->setText(local_ready
-                ? brls::getStr("lunarnx/ps/btn_connect")
-                : brls::getStr("lunarnx/ps/btn_try_connect"));
-            action->registerClickAction([this, host](brls::View*) -> bool {
-                diagnosticLog("ui-ps", "Persisted LAN connect clicked name=%s",
                               host.nickname.c_str());
                 connectToConsole(host);
                 return true;

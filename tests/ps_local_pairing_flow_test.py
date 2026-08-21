@@ -18,11 +18,12 @@ def main() -> None:
 
     assert "nifmGetCurrentIpConfigInfo" in discovery
     assert "current_ip | ~subnet_mask" in discovery
-    assert "options.broadcast_addrs = periodic_targets.empty()" in discovery
-    assert "options.broadcast_num = periodic_targets.size()" in discovery
+    assert "options.broadcast_addrs = &directed_broadcast" in discovery
+    assert "options.broadcast_num = 1" in discovery
     assert "manual_hosts" in discovery
-    assert "chiaki_discovery_send(&service_.discovery" not in discovery
-    assert "periodic_targets" in discovery
+    assert "chiaki_discovery_send(&service_.discovery" in discovery
+    assert "CHIAKI_DISCOVERY_PROTOCOL_VERSION_PS4" in discovery
+    assert "CHIAKI_DISCOVERY_PROTOCOL_VERSION_PS5" in discovery
     assert "chiaki_discovery_host_system_version_target(&host)" in discovery
     assert "int target" in (ROOT / "src/ps/ps_console.h").read_text()
     assert "bool startDiscovery(HostListCallback cb)" in discovery or True

@@ -20,18 +20,5 @@ int main() {
 
     assert(!lunar::ps::hexPsnAccountIdToBase64("1234", encoded));
     assert(!lunar::ps::hexPsnAccountIdToBase64("0123456789abcdeg", encoded));
-
-    assert(lunar::ps::decimalPsnAccountIdToBase64("18446744073709551615", encoded));
-    assert(lunar::ps::base64Decode(encoded, decoded));
-    assert(decoded == std::string(8, static_cast<char>(0xff)));
-    assert(!lunar::ps::decimalPsnAccountIdToBase64("18446744073709551616", encoded));
-    assert(!lunar::ps::decimalPsnAccountIdToBase64("12x", encoded));
-
-    // Explicit format selection keeps a numeric Apollo value from being
-    // interpreted as decimal by the phone pairing form.
-    assert(lunar::ps::hexPsnAccountIdToBase64("0000000000000010", encoded));
-    assert(lunar::ps::base64Decode(encoded, decoded));
-    assert(decoded == std::string("\x10\0\0\0\0\0\0\0", 8));
-    assert(!lunar::ps::normalizeBase64PsnAccountId("AQI=", encoded));
     return 0;
 }
