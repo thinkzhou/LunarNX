@@ -28,6 +28,10 @@ struct PairingText {
     const char* detail;
     const char* account;
     const char* account_hint;
+    const char* account_type;
+    const char* base64_option;
+    const char* hex_option;
+    const char* decimal_option;
     const char* lookup_instruction;
     const char* lookup_link;
     const char* format_hint;
@@ -45,9 +49,10 @@ const PairingText& pairingText(const std::string& locale) {
         "en", "LunarNX local pairing",
         "Paste the console user's Base64 Account ID, then enter the 8-digit PIN shown by the console.",
         "Base64 Account ID", "Paste the Encoded ID, for example AbCdEf12345=",
-        "Open PSNTools, search for your PSN Online ID, then copy the Base64 Encoded ID and paste it below.",
-        "Open PSNTools Account ID Checker",
-        "Only an 8-byte Base64 Account ID is accepted.", "8-digit PIN",
+        "Account ID format", "Base64 Account ID", "Apollo Hex (little-endian)",
+        "Decimal Account ID",
+        "Choose the format shown by your local pairing tool. No online lookup is used.", "",
+        "Base64 decodes to 8 bytes. Apollo Hex is converted locally in little-endian order.", "8-digit PIN",
         "Send to Switch", "Account ID and PIN are sent only to LunarNX on your local network.",
         "Sent. Check your Switch for the pairing result.",
         "Invalid Account ID or PIN.",
@@ -58,9 +63,10 @@ const PairingText& pairingText(const std::string& locale) {
         "zh-CN", "LunarNX 本地配对",
         "请粘贴主机用户的 Base64 Account ID，然后输入主机画面显示的 8 位 PIN 码。",
         "Base64 Account ID", "粘贴 Encoded ID，例如 AbCdEf12345=",
-        "打开 PSNTools，搜索你的 PSN 在线 ID，复制 Base64 格式的 Encoded ID，再粘贴到下方。",
-        "打开 PSNTools Account ID 查询工具",
-        "仅接受解码后为 8 字节的 Base64 Account ID。", "8 位 PIN 码",
+        "Account ID 格式", "Base64 Account ID", "Apollo 十六进制（小端序）",
+        "十进制 Account ID",
+        "请选择离线工具显示的格式。不会进行在线查询。", "",
+        "Base64 解码后必须为 8 字节；Apollo 十六进制会在本机按小端序转换。", "8 位 PIN 码",
         "发送到 Switch", "Account ID 和 PIN 只会通过当前局域网发送给 LunarNX。",
         "已发送，请查看 Switch 上的配对结果。",
         "Account ID 或 PIN 无效。",
@@ -71,9 +77,10 @@ const PairingText& pairingText(const std::string& locale) {
         "zh-TW", "LunarNX 本機配對",
         "請貼上主機使用者的 Base64 Account ID，然後輸入主機畫面顯示的 8 位 PIN 碼。",
         "Base64 Account ID", "貼上 Encoded ID，例如 AbCdEf12345=",
-        "開啟 PSNTools，搜尋你的 PSN 線上 ID，複製 Base64 格式的 Encoded ID，再貼到下方。",
-        "開啟 PSNTools Account ID 查詢工具",
-        "僅接受解碼後為 8 位元組的 Base64 Account ID。", "8 位 PIN 碼",
+        "Account ID 格式", "Base64 Account ID", "Apollo 十六進位（小端序）",
+        "十進位 Account ID",
+        "請選擇離線工具顯示的格式。不會進行線上查詢。", "",
+        "Base64 解碼後必須為 8 位元組；Apollo 十六進位會在本機按小端序轉換。", "8 位 PIN 碼",
         "傳送至 Switch", "Account ID 和 PIN 只會透過目前區域網路傳送給 LunarNX。",
         "已傳送，請查看 Switch 上的配對結果。",
         "Account ID 或 PIN 無效。",
@@ -140,8 +147,11 @@ std::string pairingPage(const std::string& submit_path, const PairingText& text)
         "a{color:#1769e0;font-weight:600}"
         ".note{color:#59616d;font-size:13px}</style></head><body><main><h1>" + text.title +
         "</h1><p>" + text.detail + "</p><form method=post action=\"" + submit_path +
-        "\"><p>" + text.lookup_instruction + " <a target=\"_blank\" rel=\"noopener noreferrer\" href=\"https://www.psntools.com/psn/checker/\">" +
-        text.lookup_link + "</a></p>"
+        "\"><p>" + text.lookup_instruction + "</p>"
+        "<label>" + text.account_type + "</label><select name=\"account_type\" required>"
+        "<option value=\"base64_id\">" + text.base64_option + "</option>"
+        "<option value=\"hex_id\">" + text.hex_option + "</option>"
+        "<option value=\"decimal_id\">" + text.decimal_option + "</option></select>"
         "<label>" + text.account + "</label><input name=\"account_input\" required autocomplete=off autocapitalize=off spellcheck=false placeholder=\"" +
         text.account_hint + "\"><p class=note>" + text.format_hint + "</p><label>" + text.pin +
         "</label><input name=\"pin\" type=\"password\" required inputmode=\"numeric\" pattern=\"[0-9]{8}\" maxlength=\"8\">"
@@ -314,10 +324,12 @@ void PsPhonePairingServer::run(std::string session_path, std::string locale,
             const size_t body_start = request.find("\r\n\r\n");
             const std::string body = body_start == std::string::npos
                 ? "" : request.substr(body_start + 4);
+            std::string account_type;
             std::string account_input;
             std::string account_id;
             std::string pin_text;
-            const bool has_fields = formValue(body, "account_input", account_input) &&
+            const bool has_fields = formValue(body, "account_type", account_type) &&
+                formValue(body, "account_input", account_input) &&
                 formValue(body, "pin", pin_text);
             const bool pin_valid = has_fields && pin_text.size() == 8 &&
                 std::all_of(pin_text.begin(), pin_text.end(), [](unsigned char c) {
@@ -326,7 +338,15 @@ void PsPhonePairingServer::run(std::string session_path, std::string locale,
             bool valid = has_fields && pin_valid;
             const char* validation_error = pin_valid ? text.invalid : text.invalid_pin;
             if (valid) {
-                valid = normalizeBase64PsnAccountId(account_input, account_id);
+                if (account_type == "base64_id") {
+                    valid = normalizeBase64PsnAccountId(account_input, account_id);
+                } else if (account_type == "hex_id") {
+                    valid = hexPsnAccountIdToBase64(account_input, account_id);
+                } else if (account_type == "decimal_id") {
+                    valid = decimalPsnAccountIdToBase64(account_input, account_id);
+                } else {
+                    valid = false;
+                }
                 if (!valid) validation_error = text.invalid_base64;
             }
             uint32_t pin = valid ? static_cast<uint32_t>(std::strtoul(pin_text.c_str(), nullptr, 10)) : 0;
