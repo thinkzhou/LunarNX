@@ -70,5 +70,10 @@ require("kPendingFrameCapacity=2" in renderer and
 require("VideoSchedulingMode" not in renderer and
         "VideoSchedulingMode" not in audio,
         "decoder sinks must remain independent of protocol scheduling policy")
+require("decoded_pending_drop_oldest" in (ROOT / "src/stream/perf_stats.h").read_text() and
+        "unique_video_frames_presented" in (ROOT / "src/stream/perf_stats.h").read_text() and
+        "present_gap_max_us" in (ROOT / "src/stream/perf_stats.h").read_text() and
+        "10s decoded_queue_drop_oldest" in (ROOT / "src/ps/ps_media_bridge.cpp").read_text(),
+        "decoded-to-present visibility must be exposed through low-frequency counters")
 
 print("media pipeline scheduling contract passed")

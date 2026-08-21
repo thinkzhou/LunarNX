@@ -53,6 +53,8 @@ private:
     uint64_t video_enqueue_failures_ = 0;
     std::chrono::steady_clock::time_point video_summary_at_ =
         std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point video_detail_summary_at_ =
+        std::chrono::steady_clock::now();
 
     // Audio clock
     int audio_sample_rate_ = 48000;
