@@ -93,6 +93,17 @@ def main():
     require(metadata_pos < control_started_pos,
             "metadata must be flushed before gamepad drafts can be enqueued")
 
+    watchdog_start = run_loop.index("const bool pipeline_stalled")
+    watchdog_end = run_loop.index(
+        "if (std::chrono::duration_cast<std::chrono::seconds>(",
+        watchdog_start,
+    )
+    watchdog = run_loop[watchdog_start:watchdog_end]
+    require("if (pipeline_stalled) {" in watchdog and
+            "else if (media_health.has_presented_video" not in watchdog and
+            "health_recovery_attempts >= 1" in watchdog,
+            "a repeated present of an old frame must not clear a pending recovery attempt")
+
     print("Xbox stream session order tests passed")
 
 

@@ -1164,40 +1164,43 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                           static_cast<uint64_t>(kVideoPresentStallTimeout.count())) ||
                      media_health.consecutive_render_faults >= 2);
                 const bool pipeline_stalled = decode_stalled || present_stalled;
-                if (pipeline_stalled &&
-                    (last_health_recovery.time_since_epoch().count() == 0 ||
-                     now - last_health_recovery >= kVideoHealthRecoveryCooldown)) {
-                    if (health_recovery_attempts >= 1) {
-                        lunar::persistentEventLog(
-                            "xbox-stream",
-                            "video watchdog persistent pipeline stall decode_age_ms=%llu "
-                            "present_age_ms=%llu faults=%u action=fresh-session-reconnect",
-                            static_cast<unsigned long long>(media_health.decoded_video_age_ms),
-                            static_cast<unsigned long long>(media_health.presented_video_age_ms),
-                            media_health.render_fault_count);
-                        prepareInputForReconnect();
-                        media_.prepareForNewVideoSource(
-                            "persistent video pipeline stall");
-                        transport_.disconnect();
-                    } else {
-                        lunar::persistentEventLog(
-                            "xbox-stream",
-                            "video watchdog pipeline stall decode_age_ms=%llu "
-                            "present_age_ms=%llu faults=%u action=decoder-recovery",
-                            static_cast<unsigned long long>(media_health.decoded_video_age_ms),
-                            static_cast<unsigned long long>(media_health.presented_video_age_ms),
-                            media_health.render_fault_count);
-                        media_.requestVideoRecovery(
-                            decode_stalled ? "video decode watchdog"
-                                           : "video present watchdog",
-                            true);
-                        ++health_recovery_attempts;
-                        last_health_recovery = now;
+                if (pipeline_stalled) {
+                    if (last_health_recovery.time_since_epoch().count() == 0 ||
+                        now - last_health_recovery >= kVideoHealthRecoveryCooldown) {
+                        if (health_recovery_attempts >= 1) {
+                            lunar::persistentEventLog(
+                                "xbox-stream",
+                                "video watchdog persistent pipeline stall decode_age_ms=%llu "
+                                "present_age_ms=%llu faults=%u action=fresh-session-reconnect",
+                                static_cast<unsigned long long>(media_health.decoded_video_age_ms),
+                                static_cast<unsigned long long>(media_health.presented_video_age_ms),
+                                media_health.render_fault_count);
+                            prepareInputForReconnect();
+                            media_.prepareForNewVideoSource(
+                                "persistent video pipeline stall");
+                            transport_.disconnect();
+                        } else {
+                            lunar::persistentEventLog(
+                                "xbox-stream",
+                                "video watchdog pipeline stall decode_age_ms=%llu "
+                                "present_age_ms=%llu faults=%u action=decoder-recovery",
+                                static_cast<unsigned long long>(media_health.decoded_video_age_ms),
+                                static_cast<unsigned long long>(media_health.presented_video_age_ms),
+                                media_health.render_fault_count);
+                            media_.requestVideoRecovery(
+                                decode_stalled ? "video decode watchdog"
+                                               : "video present watchdog",
+                                true);
+                            ++health_recovery_attempts;
+                            last_health_recovery = now;
+                        }
                     }
-                } else if (media_health.has_presented_video &&
-                           media_health.presented_video_age_ms < 1000 &&
-                           media_health.consecutive_render_faults == 0) {
-                    health_recovery_attempts = 0;
+                } else {
+                    if (media_health.has_presented_video &&
+                        media_health.presented_video_age_ms < 1000 &&
+                        media_health.consecutive_render_faults == 0) {
+                        health_recovery_attempts = 0;
+                    }
                 }
             }
         }
