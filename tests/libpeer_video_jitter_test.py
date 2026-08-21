@@ -60,6 +60,13 @@ def main():
         and "setVideoJitterMode" in peer_manager,
         "Adaptive jitter hold must use smoothed, profile-specific low-latency bounds",
     )
+    jitter_source = Path("src/webrtc/video_rtp_jitter_buffer.cpp").read_text()
+    require(
+        "kCloudRttThresholdMs" in jitter_source
+        and "kMaxMissingPacketHoldMs" in jitter_source
+        and "missingPacketHoldMs" in jitter_source,
+        "high-RTT missing packets must receive a bounded NACK recovery budget",
+    )
     require(
         "on_video_recovery" in peer_header
         and "media_.requestVideoRecovery" in session

@@ -537,6 +537,25 @@ void test_cloud_profile_allows_wan_retransmission_budget() {
     assert(h.frames.size() >= 2);
 }
 
+void test_high_rtt_missing_frame_keeps_nack_budget() {
+    Harness h;
+    h.jitter.setHoldMs(100);
+    h.jitter.setNetworkRttMs(380);
+    openWithIdr(h, 2080, 1000);
+
+    h.push(rtp(2081, 2000, false, {0x7c, 0x81, 0x11}), 1);
+    h.push(rtp(2083, 2000, true, {0x7c, 0x41, 0x33}), 2);
+    h.push(rtp(2084, 3000, true, {0x61, 0x44}), 200);
+
+    // A 380 ms route cannot complete a NACK round inside the old 120 ms
+    // deadline. The incomplete frame must remain buffered instead of being
+    // counted as H264 corruption immediately.
+    assert(h.jitter.stats().corrupt_frames == 0);
+
+    h.push(rtp(2085, 4000, true, {0x61, 0x55}), 520);
+    assert(h.jitter.stats().corrupt_frames == 1);
+}
+
 void test_log_sized_gap_is_fully_covered() {
     Harness h;
     openWithIdr(h, 2200, 1000);
@@ -707,6 +726,7 @@ int main() {
     test_nack_retries_while_retransmission_can_meet_deadline();
     test_nack_does_not_retry_past_high_rtt_frame_deadline();
     test_cloud_profile_allows_wan_retransmission_budget();
+    test_high_rtt_missing_frame_keeps_nack_budget();
     test_log_sized_gap_is_fully_covered();
     test_recovery_nacks_only_current_keyframe();
     test_recovery_keyframe_nacks_remain_rate_limited();

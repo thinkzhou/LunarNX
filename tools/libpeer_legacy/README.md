@@ -32,11 +32,12 @@ The UDP socket requests a 4 MiB `SO_RCVBUF` as a best-effort burst cushion for
 1080p/HQ IDR frames and reports the effective value after target-side clamping.
 Once DTLS is established, `peer_connection_loop()` uses nonblocking
 `recvfrom(MSG_DONTWAIT)` calls instead of running a timed `select()` before
-every datagram. The completed-state receive loop stops at `EAGAIN`, 128 raw UDP
-datagrams, or one millisecond, whichever comes first. It reports receive/decode
-work so LunarNX can perform a bounded multi-pass drain without starving DTLS or
-SCTP; the socket and drain changes are safe to ignore when a target clamps the
-requested buffer size.
+every datagram. The completed-state receive loop stops at `EAGAIN`, 96 raw UDP
+datagrams, or one millisecond, whichever comes first. RTP queue decoding is
+capped at 32 packets per pass so a burst cannot monopolize the owner loop. It
+reports receive/decode work so LunarNX can perform a bounded multi-pass drain
+without starving DTLS or SCTP; the socket and drain changes are safe to ignore
+when a target clamps the requested buffer size.
 
 The packet and time budgets count every raw STUN, DTLS, RTCP, and RTP datagram,
 not only packets returned to the PeerConnection classifier. Timed receive stays

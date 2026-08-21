@@ -97,8 +97,10 @@ void userAppInit()
     // libnx default UDP receive buffer is only about 42 KiB, which lets the
     // kernel drop packets while the Switch is busy presenting a frame.
     // Keep the larger buffer in the dynamic socket heap; if a platform build
-    // cannot reserve it, retry with libnx's original configuration.
-    cfg.udp_rx_buf_size = 512 * 1024;
+    // cannot reserve it, retry with libnx's original configuration. At
+    // 30 Mbps, 2 MiB covers roughly half a second of media bursts without
+    // increasing the NRO BSS.
+    cfg.udp_rx_buf_size = 2 * 1024 * 1024;
     switchEarlyLog("applet type=%d", at);
     if (at == AppletType_Application || at == AppletType_SystemApplication)
     {
