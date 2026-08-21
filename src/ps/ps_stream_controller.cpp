@@ -311,9 +311,10 @@ bool PsStreamController::startStream() {
 #else
     media_opts.video_scheduling =
         stream::VideoSchedulingMode::BoundedLowLatency;
-    media_opts.video_queue_limits.max_packets = 3;
+    media_opts.video_queue_limits.max_packets = std::clamp<size_t>(
+        static_cast<size_t>((fps_ + 9) / 10), 3, 8);
     media_opts.video_queue_limits.max_bytes = 8 * 1024 * 1024;
-    media_opts.video_queue_limits.max_age = std::chrono::milliseconds(50);
+    media_opts.video_queue_limits.max_age = std::chrono::milliseconds(100);
 #endif
     if (!media_->initialize(width_, height_, &perf_, media_opts)) {
         last_error_ = "Failed to initialize media pipeline";

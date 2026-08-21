@@ -16,17 +16,17 @@ def main() -> None:
     renderer = (ROOT / "src/stream/video_renderer.cpp").read_text()
     pipeline = (ROOT / "src/stream/media_pipeline.cpp").read_text()
 
-    require("AVFrame* pending_frame=nullptr" in renderer and
+    require("std::array<AVFrame*,kPendingFrameCapacity> pending_frames" in renderer and
+            "kPendingFrameCapacity=2" in renderer and
             "AVFrame* current_frame=nullptr" in renderer,
-            "Zero-copy renderer should retain pending and currently displayed frames")
+            "Zero-copy renderer should retain a two-frame pending queue and current frame")
     require("std::array<AVFrame*, brls::FRAMEBUFFERS_COUNT> submitted_frames" in renderer,
             "Submitted NVDEC frames should remain retained across the command ring")
     require("av_frame_ref(keep,f)" in renderer and
-            "pending_frame=keep" in renderer,
-            "Renderer should retain the borrowed NVTEGRA frame")
-    require("s->current_frame=s->pending_frame" in renderer and
-            "s->pending_frame=nullptr" in renderer,
-            "Present should retain the latest frame for repeated UI draws")
+            "enqueuePendingFrame(*s,keep)" in renderer,
+            "Renderer should retain the borrowed NVTEGRA frame in the bounded queue")
+    require("s->current_frame=dequeuePendingFrame(*s)" in renderer,
+            "Present should consume the oldest decoded frame")
     require("s->present_ring->begin(s->present_cb)" in renderer and
             "next_submitted_frame" in renderer,
             "Frame retirement must follow the existing Deko3D command-ring fence")

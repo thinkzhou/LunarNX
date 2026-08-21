@@ -36,7 +36,7 @@ reset_start = renderer.index("bool VideoRenderer::prepareDecoderReset()")
 reset_end = renderer.index("bool VideoRenderer::pollEvents()", reset_start)
 reset = renderer[reset_start:reset_end]
 require("submitted_frames" in reset and
-        "!s->pending_frame" in reset and
+        "s->pending_count==0" in reset and
         "!s->current_frame" in reset and
         "return true" in reset,
         "hardware decoder reset before the first frame must not wait for a UI "

@@ -47,7 +47,7 @@ def main():
     transition_start = present.index(
         "if(s->resolution_transition.isTransitioning())")
     transition_end = present.index(
-        "if(!s->pending_frame&&!s->current_frame)", transition_start)
+        "if(s->pending_count==0&&!s->current_frame)", transition_start)
     transition = present[transition_start:transition_end]
     transition_clear = transition.index("s->fms.clear()")
     transition_release = transition.index("av_frame_free(&s->current_frame)")
