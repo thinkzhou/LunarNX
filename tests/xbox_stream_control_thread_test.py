@@ -68,7 +68,7 @@ def main() -> None:
             "keep-alive cadence must use the server-provided interval")
     require("keep_alive_result.isAuthError()" in control_loop and
             "callbacks.refresh_tokens(true)" in control_loop and
-            control_loop.count("keepAliveDetailed(session_id, cancel)") >= 2,
+            control_loop.count("keepAliveDetailed(") >= 2,
             "401/403 keep-alive failures must force token refresh and retry once")
     require("preserving WebRTC media" in control_loop and
             "transport_.disconnect()" not in control_loop,

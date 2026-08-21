@@ -91,6 +91,7 @@ protected:
     AVBufferRef* hw_device_ctx_ = nullptr;
     FrameCallback on_frame_;
     struct PerfStats* perf_ = nullptr;
+    std::deque<uint64_t> submitted_timestamps_;
     bool initialized_ = false;
     int error_log_count_ = 0;
 };

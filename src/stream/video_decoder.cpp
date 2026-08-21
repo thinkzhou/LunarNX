@@ -776,7 +776,6 @@ bool VideoDecoder::decodeAccessUnit(const uint8_t* data, size_t len,
                 continue;
             }
             submitted_timestamps_.push_back(timestamp);
-            if (prepended_parameter_sets) parameter_sets_pending_ = false;
 
             int decoded_frames = 0;
             while (ret >= 0) {
