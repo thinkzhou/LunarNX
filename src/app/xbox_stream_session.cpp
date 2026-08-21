@@ -1483,9 +1483,10 @@ void XboxStreamSession::controlLoop(std::string session_id,
                     if (!refresh_ok) {
                         lunar::persistentEventLog(
                             "xbox-stream",
-                            "token refresh failed action=reconnect");
-                        control_recovery_requested_ = true;
-                        control_cv_.notify_all();
+                            "token refresh failed action=preserve-media");
+                        lunar::diagnosticLog(
+                            "xbox-stream",
+                            "Periodic token refresh failed; preserving WebRTC media");
                     }
                 }
                 next_token_refresh = now + token_refresh_interval;

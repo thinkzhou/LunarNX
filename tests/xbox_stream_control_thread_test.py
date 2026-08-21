@@ -73,6 +73,11 @@ def main() -> None:
     require("preserving WebRTC media" in control_loop and
             "transport_.disconnect()" not in control_loop,
             "keep-alive failures must not directly tear down healthy WebRTC")
+    require('"token refresh failed action=preserve-media"' in control_loop and
+            '"token refresh failed action=reconnect"' not in control_loop and
+            "control_recovery_requested_ = true" not in
+            control_loop[control_loop.index("if (!refresh_ok)"):],
+            "periodic token refresh failures must preserve healthy WebRTC")
     require("next_keep_alive = now + keep_alive_interval;" in control_loop,
             "keep-alive cadence must remain anchored to its pre-request time")
     require("next_token_refresh = now + token_refresh_interval;" in control_loop,
