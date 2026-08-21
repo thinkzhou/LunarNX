@@ -139,6 +139,7 @@ bool VideoDecoder::initialize(int width, int height) {
     seen_pps_ = false;
     parameter_sets_.clear();
     parameter_sets_pending_ = false;
+    submitted_timestamps_.clear();
     wait_log_count_ = 0;
     error_log_count_ = 0;
     if (video_path_ == VideoPipelinePath::Xbox &&
@@ -545,7 +546,9 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
     }
 
     std::vector<uint8_t> startup_access_unit;
-    if (playstation_path && parameter_sets_pending_ &&
+    const bool prepended_parameter_sets = playstation_path &&
+        parameter_sets_pending_ && !parameter_sets_.empty();
+    if (prepended_parameter_sets &&
         !parameter_sets_.empty()) {
         startup_access_unit.reserve(parameter_sets_.size() + len);
         startup_access_unit.insert(startup_access_unit.end(),
@@ -554,7 +557,6 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
         startup_access_unit.insert(startup_access_unit.end(), data, data + len);
         data = startup_access_unit.data();
         len = startup_access_unit.size();
-        parameter_sets_pending_ = false;
         lunar::diagnosticLog("video",
                              "prepended cached %s parameter sets bytes=%zu total=%zu",
                              codec_name,
@@ -585,21 +587,9 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
         std::memcpy(pkt->data, data, len);
         if (au.has_random_access) pkt->flags |= AV_PKT_FLAG_KEY;
 
-        int ret = avcodec_send_packet(ctx, pkt);
-        if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
-            lunar::cloud1080CrashProbeLog(
-                "crash-probe",
-                "DEBUG-c1080 phase=decode-send au=%llu ret=%d",
-                static_cast<unsigned long long>(probe_frame_index), ret);
-        }
-        bool decode_ok = ret >= 0 || ret == AVERROR(EAGAIN);
-        if (log) {
-            lunar::diagnosticLog("video",
-                                 "hardware avcodec_send_packet ret=%d index=%d",
-                                 ret,
-                                 log_index);
-        }
-
+        bool decode_ok = true;
+        bool packet_accepted = false;
+        int ret = 0;
         int decoded_frames = 0;
         auto receive_available = [&]() {
             int receive_ret = 0;
@@ -616,6 +606,11 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
                 auto t1 = std::chrono::high_resolution_clock::now();
                 if (receive_ret == 0) {
                     decoded_frames++;
+                    uint64_t frame_timestamp = timestamp;
+                    if (!submitted_timestamps_.empty()) {
+                        frame_timestamp = submitted_timestamps_.front();
+                        submitted_timestamps_.pop_front();
+                    }
                     if (log) {
                         lunar::diagnosticLog("video",
                                              "hardware avcodec_receive_frame frame index=%d width=%d height=%d format=%d",
@@ -628,7 +623,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
                         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
                         perf_->recordDecodeLatencyNs(static_cast<uint64_t>(ns));
                     }
-                    if (!deliverFrame(frame, timestamp, log_index, log)) {
+                    if (!deliverFrame(frame, frame_timestamp, log_index, log)) {
                         decode_ok = false;
                     }
                 } else {
@@ -648,22 +643,41 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
             }
         };
 
-        if (ret == AVERROR(EAGAIN)) {
+        for (int attempt = 0; attempt < 4 && !packet_accepted; ++attempt) {
+            ret = avcodec_send_packet(ctx, pkt);
+            if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
+                lunar::cloud1080CrashProbeLog(
+                    "crash-probe",
+                    "DEBUG-c1080 phase=decode-send au=%llu ret=%d attempt=%d",
+                    static_cast<unsigned long long>(probe_frame_index), ret,
+                    attempt);
+            }
+            if (log || ret < 0) {
+                lunar::diagnosticLog(
+                    "video", "hardware avcodec_send_packet ret=%d index=%d attempt=%d",
+                    ret, log_index, attempt);
+            }
+            if (ret >= 0) {
+                packet_accepted = true;
+                submitted_timestamps_.push_back(timestamp);
+                if (prepended_parameter_sets) parameter_sets_pending_ = false;
+                break;
+            }
+            if (ret != AVERROR(EAGAIN)) {
+                decode_ok = false;
+                break;
+            }
             const int before_retry_frames = decoded_frames;
             receive_available();
-            const int retry_ret = avcodec_send_packet(ctx, pkt);
-            if (log || retry_ret < 0) {
-                lunar::diagnosticLog("video",
-                                     "hardware avcodec_send_packet retry ret=%d index=%d drained=%d",
-                                     retry_ret,
-                                     log_index,
-                                     decoded_frames - before_retry_frames);
-            }
-            ret = retry_ret;
-            if (retry_ret < 0 && retry_ret != AVERROR(EAGAIN)) {
+            if (decoded_frames == before_retry_frames) {
                 decode_ok = false;
+                break;
             }
-        } else if (ret == AVERROR_UNKNOWN && error_log_count_ < kVideoErrorLogLimit) {
+        }
+        if (!packet_accepted) {
+            decode_ok = false;
+        }
+        if (ret == AVERROR_UNKNOWN && error_log_count_ < kVideoErrorLogLimit) {
             lunar::diagnosticLog("video",
                                  "NVDEC status error; packet not retried index=%d len=%zu ts=%llu",
                                  log_index,
@@ -673,19 +687,20 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
 
         av_packet_free(&pkt);
         receive_available();
-        if (ret < 0 && decoded_frames == 0) {
+        if (!packet_accepted) {
             if (perf_) perf_->recordVideoDecodeError();
             logDecodeDrop(perf_, "hardware_send_packet_rejected", ret, 0,
                           timestamp, len, &au, ctx->width, ctx->height);
             if (error_log_count_ < kVideoErrorLogLimit) {
                 lunar::diagnosticLog("video",
-                                     "hardware avcodec_send_packet rejected index=%d codec=%s len=%zu ts=%llu nal=%s random_access=%d",
+                                     "hardware avcodec_send_packet rejected index=%d codec=%s len=%zu ts=%llu nal=%s random_access=%d accepted=%d",
                                      log_index,
                                      codec_name,
                                      len,
                                      static_cast<unsigned long long>(timestamp),
                                      au.nal_types.empty() ? "-" : au.nal_types.c_str(),
-                                     au.has_random_access ? 1 : 0);
+                                     au.has_random_access ? 1 : 0,
+                                     packet_accepted ? 1 : 0);
             }
             logVideoDecodeError("hardware avcodec_send_packet failed",
                                 ret,
@@ -694,18 +709,20 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
         }
         if (log) {
             lunar::diagnosticLog("video",
-                                 "hardware video decode done index=%d frames=%d send_ret=%d",
-                                 log_index,
-                                 decoded_frames,
-                                 ret);
+                                     "hardware video decode done index=%d frames=%d send_ret=%d accepted=%d",
+                                     log_index,
+                                     decoded_frames,
+                                     ret,
+                                     packet_accepted ? 1 : 0);
         }
         if (lunar::shouldSampleCloud1080CrashProbe(probe_frame_index)) {
             lunar::cloud1080CrashProbeLog(
                 "crash-probe",
-                "DEBUG-c1080 phase=decode-end au=%llu frames=%d send_ret=%d ok=%d",
+                "DEBUG-c1080 phase=decode-end au=%llu frames=%d send_ret=%d accepted=%d ok=%d",
                 static_cast<unsigned long long>(probe_frame_index),
                 decoded_frames,
                 ret,
+                packet_accepted ? 1 : 0,
                 decode_ok ? 1 : 0);
         }
         return decode_ok;
@@ -776,6 +793,8 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
                 logVideoDecodeError("avcodec_send_packet failed", ret, error_log_count_);
                 continue;
             }
+            submitted_timestamps_.push_back(timestamp);
+            if (prepended_parameter_sets) parameter_sets_pending_ = false;
 
             int decoded_frames = 0;
             while (ret >= 0) {
@@ -787,6 +806,11 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
 
                 if (ret == 0) {
                     decoded_frames++;
+                    uint64_t frame_timestamp = timestamp;
+                    if (!submitted_timestamps_.empty()) {
+                        frame_timestamp = submitted_timestamps_.front();
+                        submitted_timestamps_.pop_front();
+                    }
                     if (log) {
                         lunar::diagnosticLog("video",
                                              "avcodec_receive_frame frame index=%d width=%d height=%d format=%d",
@@ -799,7 +823,7 @@ bool VideoDecoder::decode(const uint8_t* data, size_t len, uint64_t timestamp,
                         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
                         perf_->recordDecodeLatencyNs(static_cast<uint64_t>(ns));
                     }
-                    if (!deliverFrame(frame, timestamp, log_index, log)) {
+                    if (!deliverFrame(frame, frame_timestamp, log_index, log)) {
                         decode_ok = false;
                     }
                 } else {
@@ -836,6 +860,7 @@ bool VideoDecoder::resetForKeyframe() {
     if (!initialized_ || !codec_ctx_) return false;
 
     auto* ctx = static_cast<AVCodecContext*>(codec_ctx_);
+    submitted_timestamps_.clear();
     avcodec_flush_buffers(ctx);
 
     if (parser_) {
@@ -882,6 +907,7 @@ void VideoDecoder::flush() {
         }
         if (ret < 0) break;
     }
+    submitted_timestamps_.clear();
 }
 
 void VideoDecoder::shutdown() {
@@ -904,6 +930,7 @@ void VideoDecoder::shutdown() {
     seen_pps_ = false;
     parameter_sets_.clear();
     parameter_sets_pending_ = false;
+    submitted_timestamps_.clear();
     wait_log_count_ = 0;
     error_log_count_ = 0;
     initialized_ = false;

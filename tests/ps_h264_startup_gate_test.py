@@ -26,6 +26,15 @@ require("if (playstation_path && !au.has_vcl)" in decode_gate and
 require("parameter_sets_pending_" in decoder and
         "startup_access_unit" in decoder,
         "cached codec parameter sets must be prepended to the first VCL access unit")
+require("bool packet_accepted = false" in decoder and
+        "if (!packet_accepted)" in decoder and
+        "submitted_timestamps_.push_back(timestamp)" in decoder,
+        "NVDEC decode must distinguish accepted packets from drained output and "
+        "track timestamps only for accepted access units")
+require("if (prepended_parameter_sets) parameter_sets_pending_ = false" in decoder and
+        decoder.index("if (prepended_parameter_sets) parameter_sets_pending_ = false") >
+        decoder.index("bool packet_accepted = false"),
+        "cached parameter sets must remain pending until the AU is accepted")
 
 require("last_recovery_request_" in controller and
         "requestRecoveryIDR" in controller and
