@@ -3,6 +3,7 @@
 #include "../common.h"
 #include "media_pipeline.h"
 #include "video_codec.h"
+#include <deque>
 #include <functional>
 #include <cstdint>
 #include <vector>
@@ -135,6 +136,7 @@ private:
     bool seen_pps_ = false;
     std::vector<uint8_t> parameter_sets_;
     bool parameter_sets_pending_ = false;
+    std::deque<uint64_t> submitted_timestamps_;
     int wait_log_count_ = 0;
 };
 

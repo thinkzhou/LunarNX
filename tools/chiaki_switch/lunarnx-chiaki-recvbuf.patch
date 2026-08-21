@@ -1,5 +1,5 @@
 diff --git a/lib/src/takion.c b/lib/src/takion.c
-index 38f9f5df..37971927 100644
+index 38f9f5df..6c62e987 100644
 --- a/lib/src/takion.c
 +++ b/lib/src/takion.c
 @@ -39,6 +39,12 @@
@@ -24,7 +24,24 @@ index 38f9f5df..37971927 100644
  		int r = setsockopt(takion->sock, SOL_SOCKET, SO_RCVBUF, (const CHIAKI_SOCKET_BUF_TYPE)&rcvbuf_val, sizeof(rcvbuf_val));
  		if(r < 0)
  		{
-@@ -330,7 +336,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+@@ -251,6 +257,16 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+ 			ret = CHIAKI_ERR_NETWORK;
+ 			goto error_sock;
+ 		}
++		int rcvbuf_actual = 0;
++		socklen_t rcvbuf_actual_size = sizeof(rcvbuf_actual);
++		if(getsockopt(takion->sock, SOL_SOCKET, SO_RCVBUF,
++				(CHIAKI_SOCKET_BUF_TYPE)&rcvbuf_actual,
++				&rcvbuf_actual_size) == 0)
++		{
++			CHIAKI_LOGI(takion->log,
++				"LUNARNX-PS-SOCKET rcvbuf_requested=%d rcvbuf_actual=%d",
++				rcvbuf_val, rcvbuf_actual);
++		}
+ 
+ #if defined(__APPLE__) && TARGET_OS_OSX
+ 		SInt32 majorVersion;
+@@ -330,7 +346,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
  			ret = CHIAKI_ERR_NETWORK;
  			goto error_pipe;
  		}
@@ -33,3 +50,20 @@ index 38f9f5df..37971927 100644
  		int r = setsockopt(takion->sock, SOL_SOCKET, SO_RCVBUF, (const CHIAKI_SOCKET_BUF_TYPE)&rcvbuf_val, sizeof(rcvbuf_val));
  		if(r < 0)
  		{
+@@ -339,6 +355,16 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_takion_connect(ChiakiTakion *takion, Chiaki
+ 			ret = CHIAKI_ERR_NETWORK;
+ 			goto error_sock;
+ 		}
++		int rcvbuf_actual = 0;
++		socklen_t rcvbuf_actual_size = sizeof(rcvbuf_actual);
++		if(getsockopt(takion->sock, SOL_SOCKET, SO_RCVBUF,
++				(CHIAKI_SOCKET_BUF_TYPE)&rcvbuf_actual,
++				&rcvbuf_actual_size) == 0)
++		{
++			CHIAKI_LOGI(takion->log,
++				"LUNARNX-PS-SOCKET rcvbuf_requested=%d rcvbuf_actual=%d",
++				rcvbuf_val, rcvbuf_actual);
++		}
+ 		if(info->ip_dontfrag)
+ 		{
+ #if defined(__APPLE__) && TARGET_OS_OSX

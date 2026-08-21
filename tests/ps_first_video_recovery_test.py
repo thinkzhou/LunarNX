@@ -20,8 +20,9 @@ require("stream_transport_connected_ = true" in controller and
         "the first-frame timeout must start after StreamConnection is ready, "
         "not while PSN DATA hole punching is still in progress")
 require("hasVideoRecoveryRequest()" in controller and
-        "requested IDR while waiting for first rendered frame" in controller,
-        "PS loading must service recovery requests before Streaming state")
+        "requested IDR for video recovery" in controller and
+        "if (media_ && media_->hasVideoRecoveryRequest()" in controller,
+        "PS monitor must service recovery requests in every stream state")
 require("last_recovery_request" in controller and
         "std::chrono::seconds(1)" in controller,
         "PS loading recovery requests must be rate limited")
@@ -29,9 +30,9 @@ require("video_monitor_thread_" in controller_header and
         "stopVideoMonitor();" in controller,
         "PS first-frame monitor must have explicit lifecycle cleanup")
 require("media_.requestVideoRecovery(\"ps video sample loss\")" not in bridge and
-        "1s video samples=" in bridge,
+        "decodeVideoPacket(data, size, pts)" in bridge,
         "successful Chiaki samples must not duplicate FEC recovery requests, "
-        "while compact bridge statistics remain available")
+        "and complete AUs must reach the media scheduling boundary")
 require("noisy != NoisyLogKind::None) return" in adapter and
         "diagnosticLogMutex()" in adapter and
         "CHIAKI_LOG_DEBUG" not in adapter.split("log.level_mask =", 1)[1],

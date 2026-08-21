@@ -4,13 +4,12 @@
 #include "../diagnostics.h"
 #include "audio_packet_reorder.h"
 #include "audio_decoder.h"
+#include "bounded_video_queue_policy.h"
 #include "stream_backend_provider.h"
 #include "video_codec.h"
 #include <atomic>
 #include <functional>
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
 #include <chrono>
-#endif
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -57,6 +56,13 @@ enum class VideoBackend {
 enum class VideoSchedulingMode {
     RealtimeQueued,
     DirectLowLatency,
+    BoundedLowLatency,
+};
+
+struct VideoQueueLimits {
+    size_t max_packets = 3;
+    size_t max_bytes = 8 * 1024 * 1024;
+    std::chrono::milliseconds max_age{50};
 };
 
 inline const char* videoBackendName(VideoBackend backend) {
@@ -95,6 +101,7 @@ struct MediaPipelineOptions {
     float dithering_strength = 3.0f;
     bool hold_non_target_startup_frames = false;
     VideoSchedulingMode video_scheduling = VideoSchedulingMode::RealtimeQueued;
+    VideoQueueLimits video_queue_limits{};
 };
 
 /// Owns the media half of a streaming session.
@@ -151,11 +158,10 @@ private:
         uint32_t generation = 0;
         uint32_t recovery_epoch = 0;
         bool contains_idr = false;
+        bool contains_vcl = false;
         VideoAccessUnitInfo access_unit;
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
         std::chrono::steady_clock::time_point enqueued_at;
         uint64_t queue_age_us = 0;
-#endif
         std::vector<uint8_t> data;
     };
 
@@ -163,6 +169,25 @@ private:
         AudioFrame frame;
         uint32_t generation = 0;
         uint32_t source_epoch = 0;
+    };
+
+    struct BoundedVideoStats {
+        uint64_t enqueued = 0;
+        uint64_t decoded = 0;
+        uint64_t intentional_drop = 0;
+        uint64_t alloc_fail = 0;
+        size_t depth_high = 0;
+        size_t bytes_high = 0;
+        uint64_t oldest_age_max_us = 0;
+        uint64_t enqueue_copy_total_us = 0;
+        uint64_t enqueue_copy_max_us = 0;
+        uint64_t worker_decode_total_us = 0;
+        uint64_t worker_decode_max_us = 0;
+        uint64_t recovery_overflow = 0;
+        uint64_t recovery_age = 0;
+        uint64_t recovery_decode = 0;
+        uint64_t idr_requests = 0;
+        std::chrono::steady_clock::time_point window_start{};
     };
 
     bool enqueueVideoPacket(const uint8_t* data, size_t len, uint64_t timestamp);
@@ -185,6 +210,8 @@ private:
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     void recordVideoQueueLocked();
 #endif
+    void maybeLogBoundedVideoStatsLocked(
+        std::chrono::steady_clock::time_point now);
 
     bool isGenerationActive(uint32_t generation) const;
     void handleVideoFrame(const VideoFrame& frame, uint32_t generation);
@@ -209,6 +236,7 @@ private:
     std::atomic<PerfStats*> perf_{nullptr};
     std::atomic<VideoSchedulingMode> video_scheduling_{
         VideoSchedulingMode::RealtimeQueued};
+    VideoQueueLimits video_queue_limits_{};
     std::atomic<bool> running_{false};
     std::atomic<uint32_t> generation_{0};
     // DirectLowLatency decoding invokes the frame callback synchronously. A
@@ -232,6 +260,7 @@ private:
     std::atomic<bool> video_waiting_for_keyframe_{false};
     std::atomic<uint32_t> video_recovery_epoch_{0};
     bool video_decoder_reset_wakeup_ = false;
+    BoundedVideoStats bounded_video_stats_{};
 
     std::atomic<uint64_t> last_decoded_video_ns_{0};
     std::atomic<uint32_t> decoded_video_frames_{0};
