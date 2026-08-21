@@ -10,24 +10,26 @@ using namespace lunar::stream;
 
 int main() {
     const auto decide = [](BoundedVideoQueueSnapshot queue, size_t bytes,
-                           bool random_access) {
+                           bool random_access, bool has_vcl) {
         return evaluateBoundedVideoAdmission(
-            queue, bytes, random_access, 3, 8 * 1024 * 1024, 50ms);
+            queue, bytes, random_access, has_vcl, 3, 8 * 1024 * 1024, 50ms);
     };
-    assert(decide({0, 0, 0ms, false}, 1024, false) == BoundedVideoAdmission::Accept);
-    assert(decide({3, 3072, 1ms, false}, 1024, false) == BoundedVideoAdmission::RecoverOverflow);
-    assert(decide({1, 1024, 49ms, false}, 1024, false) == BoundedVideoAdmission::Accept);
-    assert(decide({1, 1024, 50ms, false}, 1024, false) == BoundedVideoAdmission::RecoverAge);
-    assert(decide({0, 0, 0ms, false}, 8 * 1024 * 1024 + 1, true) == BoundedVideoAdmission::RejectOversize);
+    assert(decide({0, 0, 0ms, false}, 1024, false, true) == BoundedVideoAdmission::Accept);
+    assert(decide({3, 3072, 1ms, false}, 1024, false, true) == BoundedVideoAdmission::RecoverOverflow);
+    assert(decide({1, 1024, 49ms, false}, 1024, false, true) == BoundedVideoAdmission::Accept);
+    assert(decide({1, 1024, 50ms, false}, 1024, false, true) == BoundedVideoAdmission::RecoverAge);
+    assert(decide({0, 0, 0ms, false}, 8 * 1024 * 1024 + 1, true, true) == BoundedVideoAdmission::RejectOversize);
     assert(!boundedVideoAdmissionMayEnqueue(BoundedVideoAdmission::RejectOversize));
     assert(boundedVideoAdmissionMayEnqueue(BoundedVideoAdmission::Accept));
     assert(boundedVideoAdmissionMayEnqueue(BoundedVideoAdmission::RecoverOverflow));
-    assert(decide({0, 0, 0ms, true}, 1024, false) == BoundedVideoAdmission::DropDependent);
-    assert(decide({0, 0, 0ms, true}, 1024, true) == BoundedVideoAdmission::Accept);
+    assert(decide({0, 0, 0ms, true}, 1024, false, true) == BoundedVideoAdmission::DropDependent);
+    assert(decide({0, 0, 0ms, true}, 1024, true, true) == BoundedVideoAdmission::Accept);
+    assert(decide({0, 0, 0ms, true}, 1024, false, false) == BoundedVideoAdmission::Accept);
     assert(boundedVideoResetMustPrecedeDecode(true, false, true));
     assert(!boundedVideoResetMustPrecedeDecode(false, false, true));
-    assert(!boundedVideoMayDecodeWhileRecovering(true, false));
-    assert(boundedVideoMayDecodeWhileRecovering(true, true));
+    assert(!boundedVideoMayDecodeWhileRecovering(true, false, true));
+    assert(boundedVideoMayDecodeWhileRecovering(true, true, true));
+    assert(boundedVideoMayDecodeWhileRecovering(true, false, false));
 
     BoundedVideoRecoveryState recovery;
     recovery.epoch = 12;
@@ -44,7 +46,7 @@ int main() {
     assert(recovery.reset_pending);
     assert(recovery.waiting_for_keyframe);
     assert(recovery.recovery_request);
-    assert(recovery.reset_wakeup);
+    assert(!recovery.reset_wakeup);
 
     assert(boundedVideoPacketIsCurrent(true, 7, 7, 4, 4));
     assert(!boundedVideoPacketIsCurrent(true, 6, 7, 4, 4));

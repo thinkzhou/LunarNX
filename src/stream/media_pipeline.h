@@ -141,6 +141,7 @@ private:
         uint32_t generation = 0;
         uint32_t recovery_epoch = 0;
         bool contains_idr = false;
+        bool contains_vcl = false;
         VideoAccessUnitInfo access_unit;
         std::chrono::steady_clock::time_point enqueued_at;
         uint64_t queue_age_us = 0;

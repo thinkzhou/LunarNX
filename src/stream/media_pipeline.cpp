@@ -398,6 +398,7 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
         ? inspectXboxH264AccessUnit(data, len)
         : inspectVideoAccessUnit(video_codec_, data, len);
     packet.contains_idr = packet.access_unit.has_random_access;
+    packet.contains_vcl = packet.access_unit.has_vcl;
     packet.enqueued_at = std::chrono::steady_clock::now();
 
     // Bounded PS ingress must avoid copying access units that are already
@@ -417,7 +418,8 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
             const auto pre_copy_admission = evaluateBoundedVideoAdmission(
                 {0, 0, std::chrono::steady_clock::duration::zero(),
                  video_waiting_for_keyframe_.load()},
-                len, packet.contains_idr, video_queue_limits_.max_packets,
+                len, packet.contains_idr, packet.contains_vcl,
+                video_queue_limits_.max_packets,
                 video_queue_limits_.max_bytes, video_queue_limits_.max_age);
             if (pre_copy_admission == BoundedVideoAdmission::DropDependent) {
                 bounded_video_stats_.intentional_drop++;
@@ -514,7 +516,8 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
             ? evaluateBoundedVideoAdmission(
                   {video_queue_.size(), std::min(queued_video_bytes_, max_bytes),
                    oldest_age, video_waiting_for_keyframe_.load()},
-                  packet.data.size(), packet.contains_idr, max_packets, max_bytes,
+                  packet.data.size(), packet.contains_idr, packet.contains_vcl,
+                  max_packets, max_bytes,
                   video_queue_limits_.max_age)
             : BoundedVideoAdmission::Accept;
         const bool age_exceeded = admission == BoundedVideoAdmission::RecoverAge;
@@ -1043,7 +1046,8 @@ void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet) {
     auto* perf = perfStats();
 #endif
     if (!boundedVideoMayDecodeWhileRecovering(
-            video_waiting_for_keyframe_.load(), packet.contains_idr)) {
+            video_waiting_for_keyframe_.load(), packet.contains_idr,
+            packet.contains_vcl)) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         if (perf) {
             perf->logVideoDropDiagnostic(

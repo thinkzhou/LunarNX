@@ -383,11 +383,11 @@ void PsStreamController::startVideoMonitor() {
                 waiting_started = now;
             }
 
-            if (!streaming && media_ && media_->hasVideoRecoveryRequest() &&
+            if (media_ && media_->hasVideoRecoveryRequest() &&
                 requestRecoveryIDR()) {
                 media_->clearVideoRecoveryRequest();
                 diagnosticLog("ps-controller",
-                              "requested IDR while waiting for first rendered frame");
+                              "requested IDR for video recovery");
             }
 
             if (!waiting_notice_sent &&

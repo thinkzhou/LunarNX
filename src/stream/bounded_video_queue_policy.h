@@ -25,10 +25,10 @@ struct BoundedVideoQueueSnapshot {
 
 inline BoundedVideoAdmission evaluateBoundedVideoAdmission(
     const BoundedVideoQueueSnapshot& queue, size_t incoming_bytes,
-    bool random_access, size_t max_packets, size_t max_bytes,
+    bool random_access, bool has_vcl, size_t max_packets, size_t max_bytes,
     std::chrono::steady_clock::duration max_age) {
     if (incoming_bytes > max_bytes) return BoundedVideoAdmission::RejectOversize;
-    if (queue.waiting_for_keyframe && !random_access)
+    if (queue.waiting_for_keyframe && has_vcl && !random_access)
         return BoundedVideoAdmission::DropDependent;
     if (queue.packets > 0 && queue.oldest_age >= max_age)
         return BoundedVideoAdmission::RecoverAge;
@@ -53,8 +53,9 @@ inline bool boundedVideoResetMustPrecedeDecode(bool reset_pending,
 }
 
 inline bool boundedVideoMayDecodeWhileRecovering(bool waiting_for_keyframe,
-                                                 bool random_access) {
-    return !waiting_for_keyframe || random_access;
+                                                 bool random_access,
+                                                 bool has_vcl) {
+    return !waiting_for_keyframe || !has_vcl || random_access;
 }
 
 inline bool realtimeVideoCapacityExceeded(size_t packets, size_t bytes,
@@ -82,7 +83,11 @@ inline bool applyBoundedVideoRecovery(BoundedVideoRecoveryState& state,
     ++state.epoch;
     state.reset_pending = true;
     state.waiting_for_keyframe = true;
-    state.reset_wakeup = true;
+    // Do not flush the decoder as soon as the queue trips the recovery
+    // threshold. Keep the last rendered frame alive while waiting for the
+    // recovery IDR; the video worker will reset immediately before decoding
+    // that IDR.
+    state.reset_wakeup = false;
     return true;
 }
 

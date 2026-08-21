@@ -42,6 +42,11 @@ require("admission == BoundedVideoAdmission::RejectOversize" in impl and
 require("beginHardVideoRecoveryLocked(" in impl and
         "!packet.contains_idr ||" in impl,
         "overflow must enter hard recovery instead of retaining dependent P frames")
+require("state.reset_wakeup = false" in policy,
+        "bounded recovery must defer decoder reset until the recovery IDR arrives")
+require("packet.contains_vcl" in impl and
+        "packet.contains_idr, packet.contains_vcl" in impl,
+        "recovery admission must preserve parameter-set-only access units")
 require("BoundedVideoAdmission::DropDependent" in impl and
         "return true;" in impl,
         "waiting P frames must be intentional successful callback drops")
