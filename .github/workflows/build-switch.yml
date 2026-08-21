@@ -90,6 +90,7 @@ jobs:
           python3 tests/libpeer_sctp_config_test.py
           python3 tests/libpeer_dtls_read_loop_test.py
           python3 tests/datachannel_ppid_test.py
+          python3 tests/audio_player_reset_test.py
           python3 tests/switch_nro_bss_test.py
           python3 tests/github_actions_switch_build_test.py
           git diff --check
