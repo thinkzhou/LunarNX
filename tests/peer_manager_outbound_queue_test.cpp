@@ -171,8 +171,9 @@ int main() {
     assert(readU32(wire_packet, 2) == 0);
     Access::commitInput(sequenced, kWantWrite);
     assert(Access::nextInputSequence(sequenced) == 0);
-    assert(!Access::complete(
+    assert(Access::complete(
         sequenced, sequenced_command, kWantWrite));
+    assert(Access::size(sequenced) == 1);
 
     assert(sequenced.sendLatestInputData(input_draft_a, sizeof(input_draft_a)));
     sequenced_command = Access::front(sequenced);
