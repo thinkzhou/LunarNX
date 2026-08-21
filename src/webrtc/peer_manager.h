@@ -203,7 +203,8 @@ private:
                      const uint8_t* data,
                      size_t len,
                      bool replace_existing,
-                     uint64_t input_ticket = 0);
+                     uint64_t input_ticket = 0,
+                     bool invalidate_pending_snapshot = false);
     bool enqueueNack(uint16_t pid, uint16_t blp);
     bool enqueueSimple(OutboundCommand command, bool high_priority);
     void drainOutboundCommands(std::chrono::steady_clock::time_point deadline);

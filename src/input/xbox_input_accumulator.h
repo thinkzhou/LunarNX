@@ -49,10 +49,12 @@ private:
     std::deque<Transition> transitions_;
     GamepadState latest_state_{};
     GamepadState last_sampled_state_{};
+    GamepadState last_snapshot_state_{};
     uint64_t next_transition_id_ = 1;
     uint64_t latest_generation_ = 0;
     bool latest_dirty_ = false;
     bool has_sampled_state_ = false;
+    bool has_snapshot_state_ = false;
     bool force_snapshot_ = false;
     bool overflow_fault_ = false;
 };

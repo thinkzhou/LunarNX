@@ -106,6 +106,23 @@ int main() {
     assert(ui_neutral);
     input.commitBatch(*ui_neutral);
 
+    // An analog change can arrive between 16 ms snapshot ticks. It must stay
+    // dirty until the next snapshot tick rather than being hidden by the
+    // producer's 8 ms sample de-duplication.
+    input.reset();
+    input.publish(neutral, true, true);
+    input.commitBatch(*input.peekBatch());
+    stick.left_stick_x = 2345;
+    input.publish(stick, true, false);
+    input.publish(stick, true, true);
+    auto delayed_analog = input.peekBatch();
+    assert(delayed_analog && delayed_analog->includes_latest);
+    input.commitBatch(*delayed_analog);
+    input.publish(neutral, true, false);
+    input.publish(neutral, true, true);
+    auto delayed_neutral = input.peekBatch();
+    assert(delayed_neutral && delayed_neutral->includes_latest);
+
     input.prepareForReconnect();
     auto resync = input.peekBatch();
     assert(resync && resync->includes_latest);

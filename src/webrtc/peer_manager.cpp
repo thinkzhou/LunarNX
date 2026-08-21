@@ -504,7 +504,8 @@ bool PeerManager::enqueueData(OutboundType type,
                               const uint8_t* data,
                               size_t len,
                               bool replace_existing,
-                              uint64_t input_ticket) {
+                              uint64_t input_ticket,
+                              bool invalidate_pending_snapshot) {
     if (!data || len == 0 || len > kMaxOutboundPayloadBytes ||
         !connected_.load() || data_channel_failed_.load()) {
         if (data && len > kMaxOutboundPayloadBytes) {
@@ -515,6 +516,16 @@ bool PeerManager::enqueueData(OutboundType type,
     }
     try {
         std::lock_guard<std::mutex> lock(outbound_mutex_);
+        if (invalidate_pending_snapshot) {
+            for (auto it = outbound_commands_.begin();
+                 it != outbound_commands_.end();) {
+                if (it->type == OutboundType::InputLatest) {
+                    it = outbound_commands_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
         if (replace_existing) {
             for (auto& command : outbound_commands_) {
                 if (command.type == type) {
@@ -653,7 +664,8 @@ uint64_t PeerManager::sendInputTransitionData(const uint8_t* data, size_t len) {
         return 0;
     }
     const uint64_t ticket = next_input_delivery_ticket_++;
-    if (!enqueueData(OutboundType::InputTransition, data, len, false, ticket)) {
+    if (!enqueueData(OutboundType::InputTransition, data, len, false,
+                     ticket, true)) {
         return 0;
     }
     return ticket;

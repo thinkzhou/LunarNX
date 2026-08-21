@@ -197,6 +197,20 @@ int main() {
     assert(transition_result && transition_result->ticket == transition_ticket);
     assert(transition_result->sent);
 
+    // A transition supersedes any unsent absolute snapshot. Otherwise a
+    // queued neutral snapshot could arrive after A-down and roll it back.
+    PeerManager superseded_snapshot;
+    Access::connect(superseded_snapshot);
+    assert(superseded_snapshot.sendLatestInputData(
+        input_draft_a, sizeof(input_draft_a)));
+    const uint64_t superseding_ticket =
+        superseded_snapshot.sendInputTransitionData(
+            input_draft_b, sizeof(input_draft_b));
+    assert(superseding_ticket != 0);
+    const auto superseded_types = Access::types(superseded_snapshot);
+    assert(superseded_types.size() == 1);
+    assert(superseded_types.front() == Access::Type::InputTransition);
+
     assert(sequenced.sendInputData(input_draft_a, sizeof(input_draft_a)));
     sequenced_command = Access::front(sequenced);
     assert(Access::prepareInput(sequenced, sequenced_command, wire_packet));

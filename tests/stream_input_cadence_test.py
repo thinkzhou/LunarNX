@@ -49,7 +49,7 @@ require("{\"input\", \"1.0\", 0, true, -1}" in DATA_CHANNELS and
         "Xbox input must split reliable transitions from replaceable snapshots")
 require("kInputHeartbeatInterval{250}" in XBOX_SESSION and
         "heartbeat_due" in XBOX_SESSION and
-        "sameEncodedState(last_sampled_state_, state)" in
+        "sameEncodedState(last_snapshot_state_, state)" in
             (ROOT / "src/input/xbox_input_accumulator.cpp").read_text(),
         "unchanged reliable input must be suppressed with a 250 ms heartbeat")
 require("kPsInputInterval{8}" in PS_CONTROLLER and

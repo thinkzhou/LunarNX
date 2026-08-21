@@ -9,12 +9,14 @@ void XboxInputAccumulator::reset() {
     transitions_.clear();
     latest_state_ = {};
     last_sampled_state_ = {};
+    last_snapshot_state_ = {};
     next_transition_id_ = 1;
     latest_generation_ = 0;
     latest_dirty_ = false;
     has_sampled_state_ = false;
     force_snapshot_ = false;
     overflow_fault_ = false;
+    has_snapshot_state_ = false;
 }
 
 void XboxInputAccumulator::publish(const GamepadState& state,
@@ -22,8 +24,8 @@ void XboxInputAccumulator::publish(const GamepadState& state,
                                    bool mark_latest,
                                    bool force_snapshot) {
     std::lock_guard<std::mutex> lock(mutex_);
-    const bool state_changed = !has_sampled_state_ ||
-        !sameEncodedState(last_sampled_state_, state);
+    const bool snapshot_changed = !has_snapshot_state_ ||
+        !sameEncodedState(last_snapshot_state_, state);
     const bool transition = has_sampled_state_ &&
                             hasDigitalTransition(last_sampled_state_, state);
     if (transition && delivery_ready) {
@@ -40,9 +42,13 @@ void XboxInputAccumulator::publish(const GamepadState& state,
     // unchanged state only builds a backlog of identical packets. A snapshot
     // is still marked dirty when its wire-visible state changes, on reconnect,
     // or when the caller requests the periodic idle heartbeat.
-    if (transition || force_snapshot || (mark_latest && state_changed)) {
+    if (transition || force_snapshot || (mark_latest && snapshot_changed)) {
         latest_dirty_ = true;
         ++latest_generation_;
+    }
+    if (mark_latest || force_snapshot) {
+        last_snapshot_state_ = state;
+        has_snapshot_state_ = true;
     }
     if (force_snapshot) {
         force_snapshot_ = true;
