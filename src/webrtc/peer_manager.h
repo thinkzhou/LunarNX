@@ -12,10 +12,16 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <optional>
 
 namespace lunar::webrtc {
 
 struct PeerManagerQueueTestAccess;
+
+struct InputDeliveryResult {
+    uint64_t ticket = 0;
+    bool sent = false;
+};
 
 struct IceCandidate {
     std::string sdp;          // Full candidate line
@@ -94,7 +100,9 @@ public:
     // Locally initiated DTLS-client channels use XStreaming's even SID order.
     bool createDataChannels();
     bool sendInputData(const uint8_t* data, size_t len);
+    uint64_t sendInputTransitionData(const uint8_t* data, size_t len);
     bool sendLatestInputData(const uint8_t* data, size_t len);
+    std::optional<InputDeliveryResult> consumeInputDeliveryResult();
     bool sendControlData(const uint8_t* data, size_t len);
     bool sendMessageData(const uint8_t* data, size_t len);
     bool requestVideoKeyframe();
@@ -115,6 +123,7 @@ private:
     friend struct PeerManagerQueueTestAccess;
     enum class OutboundType {
         InputReliable,
+        InputTransition,
         InputLatest,
         Control,
         Message,
@@ -133,6 +142,7 @@ private:
         uint32_t highest_sequence = 0;
         uint32_t bitrate_bps = 0;
         uint64_t id = 0;
+        uint64_t input_ticket = 0;
         uint32_t attempts = 0;
         std::chrono::steady_clock::time_point first_attempt_at{};
         std::chrono::steady_clock::time_point expires_at{};
@@ -179,7 +189,9 @@ private:
     mutable bool media_stats_cache_valid_ = false;
     mutable std::mutex outbound_mutex_;
     std::deque<OutboundCommand> outbound_commands_;
+    std::deque<InputDeliveryResult> input_delivery_results_;
     uint64_t next_outbound_command_id_ = 1;
+    uint64_t next_input_delivery_ticket_ = 1;
     uint32_t next_input_sequence_ = 0;
     std::atomic<bool> data_channel_failed_{false};
     std::atomic<bool> data_channel_failure_event_{false};
@@ -190,7 +202,8 @@ private:
     bool enqueueData(OutboundType type,
                      const uint8_t* data,
                      size_t len,
-                     bool replace_existing);
+                     bool replace_existing,
+                     uint64_t input_ticket = 0);
     bool enqueueNack(uint16_t pid, uint16_t blp);
     bool enqueueSimple(OutboundCommand command, bool high_priority);
     void drainOutboundCommands(std::chrono::steady_clock::time_point deadline);

@@ -780,6 +780,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
     auto video_watchdog_started = std::chrono::steady_clock::time_point{};
     auto next_health_poll = std::chrono::steady_clock::now();
     stream::MediaHealthStats media_health{};
+    std::optional<input::XboxInputAccumulator::Batch> pending_input_batch;
+    uint64_t pending_input_ticket = 0;
     uint32_t source_discontinuity_baseline = 0;
     int input_send_failure_logs = 0;
     bool control_started = false;
@@ -802,7 +804,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
         }
         const auto loop_started = std::chrono::steady_clock::now();
         const bool connected_before_pump = transport_.isConnected();
-        if (control_started && connected_before_pump) {
+        if (control_started && connected_before_pump &&
+            !pending_input_batch) {
             auto input_batch = input_accumulator_.peekBatch();
             if (input_batch) {
                 // Re-apply ownership at the send boundary. The sampling
@@ -825,8 +828,13 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                         input_packet.size());
                     first_input_logged = true;
                 }
-                if (channels_.sendInputPacket(input_packet.data(),
-                                              input_packet.size())) {
+                const auto submission = channels_.sendInputPacket(
+                    input_packet.data(), input_packet.size(),
+                    input_batch->reliable);
+                if (submission.accepted && submission.ticket != 0) {
+                    pending_input_ticket = submission.ticket;
+                    pending_input_batch = std::move(*input_batch);
+                } else if (submission.accepted) {
                     input_accumulator_.commitBatch(*input_batch);
                     perf_.recordInputPacket();
                 } else if (input_send_failure_logs < 8) {
@@ -872,6 +880,19 @@ void XboxStreamSession::runLoop(StreamProfile profile,
 #else
         transport_.processEvents();
 #endif
+        while (const auto delivery = transport_.consumeInputDeliveryResult()) {
+            if (delivery->ticket != pending_input_ticket) continue;
+            if (delivery->sent && pending_input_batch) {
+                input_accumulator_.commitBatch(*pending_input_batch);
+                perf_.recordInputPacket();
+            } else if (!delivery->sent) {
+                lunar::dropDiagnosticLog(
+                    "xbox-input", "transition send failed ticket=%llu",
+                    static_cast<unsigned long long>(delivery->ticket));
+            }
+            pending_input_batch.reset();
+            pending_input_ticket = 0;
+        }
         if (control_recovery_requested_.exchange(false)) {
             lunar::persistentEventLog(
                 "xbox-stream",
@@ -900,6 +921,10 @@ void XboxStreamSession::runLoop(StreamProfile profile,
         const bool connected = transport_.isConnected();
         if (!connected && input_delivery_ready_.exchange(false)) {
             input_accumulator_.prepareForReconnect();
+        }
+        if (!connected) {
+            pending_input_batch.reset();
+            pending_input_ticket = 0;
         }
         const auto media_stats = transport_.getMediaStats();
         const auto health_poll_now = std::chrono::steady_clock::now();

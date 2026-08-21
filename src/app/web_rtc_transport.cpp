@@ -197,8 +197,18 @@ bool WebRtcTransport::sendInputData(const uint8_t* data, size_t len) {
     return peer_ && peer_->sendInputData(data, len);
 }
 
+uint64_t WebRtcTransport::sendInputTransitionData(const uint8_t* data,
+                                                  size_t len) {
+    return peer_ ? peer_->sendInputTransitionData(data, len) : 0;
+}
+
 bool WebRtcTransport::sendLatestInputData(const uint8_t* data, size_t len) {
     return peer_ && peer_->sendLatestInputData(data, len);
+}
+
+std::optional<webrtc::InputDeliveryResult>
+WebRtcTransport::consumeInputDeliveryResult() {
+    return peer_ ? peer_->consumeInputDeliveryResult() : std::nullopt;
 }
 
 bool WebRtcTransport::sendControlData(const uint8_t* data, size_t len) {

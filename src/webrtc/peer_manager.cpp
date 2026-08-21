@@ -503,7 +503,8 @@ bool PeerManager::createDataChannels() {
 bool PeerManager::enqueueData(OutboundType type,
                               const uint8_t* data,
                               size_t len,
-                              bool replace_existing) {
+                              bool replace_existing,
+                              uint64_t input_ticket) {
     if (!data || len == 0 || len > kMaxOutboundPayloadBytes ||
         !connected_.load() || data_channel_failed_.load()) {
         if (data && len > kMaxOutboundPayloadBytes) {
@@ -531,6 +532,7 @@ bool PeerManager::enqueueData(OutboundType type,
         command.type = type;
         command.payload.assign(data, data + len);
         command.id = next_outbound_command_id_++;
+        command.input_ticket = input_ticket;
         outbound_commands_.push_back(std::move(command));
         return true;
     } catch (...) {
@@ -645,8 +647,28 @@ bool PeerManager::sendInputData(const uint8_t* data, size_t len) {
     return enqueueData(OutboundType::InputReliable, data, len, false);
 }
 
+uint64_t PeerManager::sendInputTransitionData(const uint8_t* data, size_t len) {
+    if (!data || len == 0 || len > kMaxOutboundPayloadBytes ||
+        !connected_.load() || data_channel_failed_.load()) {
+        return 0;
+    }
+    const uint64_t ticket = next_input_delivery_ticket_++;
+    if (!enqueueData(OutboundType::InputTransition, data, len, false, ticket)) {
+        return 0;
+    }
+    return ticket;
+}
+
 bool PeerManager::sendLatestInputData(const uint8_t* data, size_t len) {
     return enqueueData(OutboundType::InputLatest, data, len, true);
+}
+
+std::optional<InputDeliveryResult> PeerManager::consumeInputDeliveryResult() {
+    std::lock_guard<std::mutex> lock(outbound_mutex_);
+    if (input_delivery_results_.empty()) return std::nullopt;
+    const auto result = input_delivery_results_.front();
+    input_delivery_results_.pop_front();
+    return result;
 }
 
 bool PeerManager::sendControlData(const uint8_t* data, size_t len) {
@@ -678,6 +700,7 @@ bool PeerManager::sendReceiverFeedback(uint32_t bitrate_bps) {
 
 bool PeerManager::isReliableCommand(OutboundType type) {
     return type == OutboundType::InputReliable ||
+           type == OutboundType::InputTransition ||
            type == OutboundType::Control ||
            type == OutboundType::Message;
 }
@@ -691,12 +714,14 @@ int PeerManager::outboundPriority(OutboundType type) {
         case OutboundType::Pli: return 0;
         case OutboundType::Nack: return 1;
         case OutboundType::ReceiverFeedback: return 2;
-        // The newest complete controller state must always beat a stale
-        // bootstrap/control retry. Gameplay input is a realtime stream.
-        case OutboundType::InputLatest: return 3;
-        case OutboundType::InputReliable: return 4;
+        // A transition cannot be overtaken by an absolute snapshot on the
+        // ordered input channel. Latest still beats stale bootstrap/control
+        // retries, which is the latency optimization this queue needs.
+        case OutboundType::InputTransition: return 3;
+        case OutboundType::InputLatest: return 4;
+        case OutboundType::InputReliable: return 5;
         case OutboundType::Control:
-        case OutboundType::Message: return 5;
+        case OutboundType::Message: return 6;
     }
     return 5;
 }
@@ -758,6 +783,7 @@ int PeerManager::sendOutboundCommand(const OutboundCommand& command) {
     }
     switch (command.type) {
         case OutboundType::InputReliable:
+        case OutboundType::InputTransition:
         case OutboundType::InputLatest:
             return sendInputCommand(command);
         case OutboundType::Control:
@@ -870,6 +896,7 @@ bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
             [&command](const OutboundCommand& candidate) {
                 return candidate.id == command.id;
             });
+        const bool command_present = queued != outbound_commands_.end();
         if (queued != outbound_commands_.end() && !keep_for_retry) {
             outbound_commands_.erase(queued);
         } else if (queued != outbound_commands_.end() &&
@@ -880,6 +907,12 @@ bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
             if (queued->first_attempt_at.time_since_epoch().count() == 0) {
                 queued->first_attempt_at = now;
             }
+        }
+        if (command.type == OutboundType::InputTransition &&
+            command.input_ticket != 0 && !keep_for_retry &&
+            command_present) {
+            input_delivery_results_.push_back(
+                {command.input_ticket, result >= 0});
         }
     }
     if (isSctpCommand(command.type)) {
@@ -956,7 +989,9 @@ void PeerManager::resetDataChannelHealth() {
 void PeerManager::clearOutboundCommands() {
     std::lock_guard<std::mutex> lock(outbound_mutex_);
     outbound_commands_.clear();
+    input_delivery_results_.clear();
     next_outbound_command_id_ = 1;
+    next_input_delivery_ticket_ = 1;
 }
 
 bool PeerManager::isConnected() const {

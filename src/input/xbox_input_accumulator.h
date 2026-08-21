@@ -15,6 +15,7 @@ class XboxInputAccumulator {
 public:
     struct Batch {
         std::vector<GamepadState> frames;
+        bool reliable = false;
         uint64_t last_transition_id = 0;
         uint64_t latest_generation = 0;
         bool includes_latest = false;

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace lunar::app {
@@ -33,7 +34,9 @@ public:
     bool waitDataChannels(std::chrono::milliseconds timeout,
                           const CancelCallback& cancel);
     bool sendInputData(const uint8_t* data, size_t len);
+    uint64_t sendInputTransitionData(const uint8_t* data, size_t len);
     bool sendLatestInputData(const uint8_t* data, size_t len);
+    std::optional<webrtc::InputDeliveryResult> consumeInputDeliveryResult();
     bool sendControlData(const uint8_t* data, size_t len);
     bool sendMessageData(const uint8_t* data, size_t len);
     bool requestVideoKeyframe();

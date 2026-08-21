@@ -38,13 +38,15 @@ require("transport_.processEvents()" in run_loop and
         "the Xbox WebRTC owner loop must encode and send sampled frames")
 require("input_accumulator_.peekBatch()" in run_loop and
         "input_accumulator_.commitBatch(*input_batch)" in run_loop and
-        "input_batch->reliable" not in run_loop and
+        "input_batch->reliable" in run_loop and
+        "pending_input_batch" in run_loop and
         "input-transition-overflow" in run_loop,
-        "Xbox input must use transactional batching without per-frame application retries")
+        "Xbox input must keep transition batches pending until their send result")
 require("{\"input\", \"1.0\", 0, true, -1}" in DATA_CHANNELS and
         "ch.ordered ? DATA_CHANNEL_RELIABLE" in PEER_MANAGER and
+        "sendInputTransitionData(data, len)" in XBOX_CHANNEL and
         "sendLatestInputData(data, len)" in XBOX_CHANNEL,
-        "Xbox gamepad input must use a reliable ordered channel with app-level latest-state coalescing")
+        "Xbox input must split reliable transitions from replaceable snapshots")
 require("kInputHeartbeatInterval{250}" in XBOX_SESSION and
         "heartbeat_due" in XBOX_SESSION and
         "sameEncodedState(last_sampled_state_, state)" in

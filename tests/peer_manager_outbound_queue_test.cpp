@@ -53,6 +53,10 @@ struct PeerManagerQueueTestAccess {
     static void commitInput(PeerManager& peer, int result) {
         peer.commitSequencedInputResult(result);
     }
+    static std::optional<lunar::webrtc::InputDeliveryResult>
+    consumeInputResult(PeerManager& peer) {
+        return peer.consumeInputDeliveryResult();
+    }
     static void observe(PeerManager& peer, Type type, int result,
                         uint32_t attempts = 1) {
         peer.observeSctpSendResult(type, result, attempts);
@@ -178,6 +182,20 @@ int main() {
     assert(Access::nextInputSequence(sequenced) == 1);
     assert(!Access::complete(
         sequenced, sequenced_command, static_cast<int>(wire_packet.size())));
+
+    const uint64_t transition_ticket = sequenced.sendInputTransitionData(
+        input_draft_a, sizeof(input_draft_a));
+    assert(transition_ticket != 0);
+    auto transition_command = Access::front(sequenced);
+    assert(transition_command.type == Access::Type::InputTransition);
+    assert(Access::complete(sequenced, transition_command, kWantWrite));
+    assert(!Access::consumeInputResult(sequenced));
+    transition_command = Access::front(sequenced);
+    assert(!Access::complete(sequenced, transition_command,
+                             static_cast<int>(sizeof(input_draft_a))));
+    const auto transition_result = Access::consumeInputResult(sequenced);
+    assert(transition_result && transition_result->ticket == transition_ticket);
+    assert(transition_result->sent);
 
     assert(sequenced.sendInputData(input_draft_a, sizeof(input_draft_a)));
     sequenced_command = Access::front(sequenced);
