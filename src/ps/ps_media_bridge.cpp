@@ -2,7 +2,6 @@
 
 #include "ps_media_bridge.h"
 #include "../diagnostics.h"
-#include "../stream/perf_stats.h"
 #include <cstring>
 #include <algorithm>
 #include <chrono>
@@ -34,47 +33,9 @@ bool PsMediaBridge::onVideoSample(uint8_t* data, size_t size, int32_t frames_los
     video_frame_count_++;
     media_.recordIncomingVideoSample(size, pts,
         static_cast<uint32_t>(std::max(frames_lost, 0)));
-    video_samples_since_summary_++;
-    video_sample_bytes_ += size;
-    if (frames_lost > 0) {
-        video_lost_frames_ += static_cast<uint64_t>(frames_lost);
-    }
-
     // Copy data - chiaki reuses the buffer after callback returns
     const bool queued = media_.decodeVideoPacket(data, size, pts);
-    if (!queued) video_enqueue_failures_++;
-
-    const auto now = std::chrono::steady_clock::now();
-    if (now - video_summary_at_ >= std::chrono::seconds(1)) {
-        lunar::diagnosticLog(
-            "ps-media",
-            "1s video samples=%llu bytes=%llu frames_lost=%llu recovered=%d enqueue_fail=%llu media_running=%d",
-            static_cast<unsigned long long>(video_samples_since_summary_),
-            static_cast<unsigned long long>(video_sample_bytes_),
-            static_cast<unsigned long long>(video_lost_frames_),
-            recovered ? 1 : 0,
-            static_cast<unsigned long long>(video_enqueue_failures_),
-            media_.isRunning() ? 1 : 0);
-        video_samples_since_summary_ = 0;
-        video_sample_bytes_ = 0;
-        video_lost_frames_ = 0;
-        video_enqueue_failures_ = 0;
-        video_summary_at_ = now;
-    }
-    if (now - video_detail_summary_at_ >= std::chrono::seconds(10)) {
-        const auto* perf = media_.diagnosticsPerfStats();
-        if (perf) {
-            lunar::diagnosticLog(
-                "ps-media",
-                "10s decoded_queue_drop_oldest=%u decoded_queue_depth_high=%u "
-                "unique_presented=%u present_gap_max_us=%llu",
-                perf->decoded_pending_drop_oldest.load(),
-                perf->decoded_pending_depth_high.load(),
-                perf->unique_video_frames_presented.load(),
-                static_cast<unsigned long long>(perf->present_gap_max_us.load()));
-        }
-        video_detail_summary_at_ = now;
-    }
+    (void)recovered;
     return queued;
 }
 

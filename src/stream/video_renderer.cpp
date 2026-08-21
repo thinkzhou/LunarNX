@@ -1669,6 +1669,7 @@ void VideoRenderer::present(){
     return;
   }
   const uint64_t frame_id=++s->present_frame_id;
+  bool advanced_to_new_frame=false;
   hardwareProbeLog(frame_id, "present-entry",
                    "pending=%zu current=%d queue_error=%d",
                    s->pending_count, s->current_frame ? 1 : 0,
@@ -1676,6 +1677,7 @@ void VideoRenderer::present(){
   if(s->pending_count>0){
     if(s->current_frame)av_frame_free(&s->current_frame);
     s->current_frame=dequeuePendingFrame(*s);
+    advanced_to_new_frame=s->current_frame!=nullptr;
   }
   if(!updateFrameMapping(*s,s->current_frame)){
     hardwareProbeLog(frame_id, "mapping-rejected",
@@ -1745,7 +1747,7 @@ void VideoRenderer::present(){
                    "cmdlist=%p queue_error=%d", reinterpret_cast<void*>(s->cl),
                    s->q && s->q.isInErrorState() ? 1 : 0);
   s->q.submitCommands(s->cl);
-  if(perf_)perf_->recordPresentedFrame();
+  if(advanced_to_new_frame&&perf_)perf_->recordNewFrameSubmit();
   hardwareProbeLog(frame_id, "queue-submit-after",
                    "slice=%zu queue_error=%d", submitted_index,
                    s->q && s->q.isInErrorState() ? 1 : 0);
