@@ -47,7 +47,12 @@ def main():
         "VideoRtpJitterBuffer::kMinHoldMs" in peer_manager
         and "smoothed_rtt_ms_" in peer_manager
         and "kHomeMaxJitterHoldMs = 48" in peer_manager
-        and "kCloudMaxJitterHoldMs = 120" in peer_manager
+        and "kCloudMaxJitterHoldMs = 180" in peer_manager
+        and "kCloudRecoveryHoldMs = 300" in peer_manager
+        and "smoothed_rtt_ms_ + 40" in peer_manager
+        and "smoothed_rtt_ms_ + 30" in peer_manager
+        and "smoothed_rtt_ms_ * 2" in peer_manager
+        and "cloud ? 6 : 2" in peer_manager
         and "setHeadBlockedPolicy" in jitter_header
         and "kMediaStatsCacheInterval{250}" in peer_manager
         and "networkStatsSnapshot" in peer_manager
