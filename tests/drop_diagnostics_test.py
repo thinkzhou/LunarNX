@@ -29,10 +29,9 @@ def main() -> None:
     media_stats_start = peer.index("PeerMediaStats PeerManager::getMediaStats() const")
     media_stats_end = peer.index("void PeerManager::processEvents()", media_stats_start)
     media_stats = peer[media_stats_start:media_stats_end]
-    diagnostic_guard = media_stats.index("#if LUNARNX_DROP_DIAGNOSTIC_LOG")
     recovery_state = media_stats.index(
         "stats.video_waiting_keyframe = video_jitter_.waitingForKeyframe();")
-    require(recovery_state < diagnostic_guard,
+    require(recovery_state >= 0,
             "Xbox keyframe recovery state must remain available with DROP_DIAG=0")
     require("dropDiagnosticLog" in diagnostics and "[drop-diag t=" in diagnostics,
             "drop events need a searchable timestamped log prefix")

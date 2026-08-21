@@ -5,6 +5,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 VIEW = (ROOT / "src/ui/stream_view.cpp").read_text()
 XBOX_SESSION = (ROOT / "src/app/xbox_stream_session.cpp").read_text()
+XBOX_CHANNEL = (ROOT / "src/app/xbox_channel_manager.cpp").read_text()
+DATA_CHANNELS = (ROOT / "src/webrtc/xstreaming_data_channels.h").read_text()
+PEER_MANAGER = (ROOT / "src/webrtc/peer_manager.cpp").read_text()
 PS_CONTROLLER = (ROOT / "src/ps/ps_stream_controller.cpp").read_text()
 RENDERER = (ROOT / "src/stream/video_renderer.cpp").read_text()
 
@@ -14,10 +17,41 @@ def require(condition, message):
         raise SystemExit(f"FAIL: {message}")
 
 
-require("kInputPollInterval{16}" in XBOX_SESSION and
-        "next_input_tick += kInputPollInterval" in XBOX_SESSION and
-        "gamepad_state = gamepad_.read()" in XBOX_SESSION,
-        "Xbox input must be sampled by its protocol loop at normal gamepad cadence")
+input_loop_start = XBOX_SESSION.index("void XboxStreamSession::startInputLoop(")
+input_loop_end = XBOX_SESSION.index(
+    "void XboxStreamSession::prepareInputForReconnect(", input_loop_start)
+input_loop = XBOX_SESSION[input_loop_start:input_loop_end]
+run_loop_start = XBOX_SESSION.index("void XboxStreamSession::runLoop(")
+run_loop_end = XBOX_SESSION.index("void XboxStreamSession::controlLoop(")
+run_loop = XBOX_SESSION[run_loop_start:run_loop_end]
+
+require("kInputSampleInterval{8}" in XBOX_SESSION and
+        "input_thread_ = std::thread" in XBOX_SESSION and
+        "gamepad_state = gamepad_.read()" in input_loop and
+        "input_router_.route(gamepad_state)" in input_loop,
+        "Xbox must sample and route controller input on its dedicated 8 ms producer")
+require("transport_" not in input_loop,
+        "the Xbox input producer must not call WebRTC/libpeer")
+require("transport_.processEvents()" in run_loop and
+        "xinput_.encodeFrames(input_batch->frames)" in run_loop and
+        "channels_.sendInputPacket" in run_loop,
+        "the Xbox WebRTC owner loop must encode and send sampled frames")
+require("input_accumulator_.peekBatch()" in run_loop and
+        "input_accumulator_.commitBatch(*input_batch)" in run_loop and
+        "input_batch->reliable" in run_loop and
+        "pending_input_batch" in run_loop and
+        "input-transition-overflow" in run_loop,
+        "Xbox input must keep transition batches pending until their send result")
+require("{\"input\", \"1.0\", 0, true, -1}" in DATA_CHANNELS and
+        "ch.ordered ? DATA_CHANNEL_RELIABLE" in PEER_MANAGER and
+        "sendInputTransitionData(data, len)" in XBOX_CHANNEL and
+        "sendLatestInputData(data, len)" in XBOX_CHANNEL,
+        "Xbox input must split reliable transitions from replaceable snapshots")
+require("kInputHeartbeatInterval{250}" in XBOX_SESSION and
+        "heartbeat_due" in XBOX_SESSION and
+        "sameEncodedState(last_snapshot_state_, state)" in
+            (ROOT / "src/input/xbox_input_accumulator.cpp").read_text(),
+        "unchanged reliable input must be suppressed with a 250 ms heartbeat")
 require("kPsInputInterval{8}" in PS_CONTROLLER and
         "input_thread_ = std::thread" in PS_CONTROLLER and
         "update();" in PS_CONTROLLER,

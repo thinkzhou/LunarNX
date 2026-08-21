@@ -3767,3 +3767,11 @@ index 801133b..c0f9618 100644
    char message_integrity[20];
    char username[128];
    char realm[64];
+
+diff --git a/src/peer_connection.c b/src/peer_connection.c
+--- a/src/peer_connection.c
++++ b/src/peer_connection.c
+@@ -463,2 +463,3 @@
+   msg[0] = DATA_CHANNEL_OPEN;
++  msg[1] = (char)channel_type;
+   memcpy(msg + 2, &priority_big_endian, sizeof(uint16_t));

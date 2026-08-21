@@ -6,6 +6,7 @@
 #include <climits>
 #include <cstdio>
 #include <cstring>
+#include <cstdint>
 
 #ifdef __SWITCH__
 #include <malloc.h>
@@ -222,6 +223,34 @@ bool AudioPlayer::play(const AudioFrame& frame) {
 #endif
 }
 
+void AudioPlayer::flush() {
+    std::lock_guard<std::mutex> lock(mutex_);
+#ifdef __SWITCH__
+    if (!driver_initialized_) return;
+
+    audrvVoiceStop(&driver_, kAudrenVoiceId);
+    mutexLock(&update_lock_);
+    audrvUpdate(&driver_);
+    mutexUnlock(&update_lock_);
+    // Stop and drain the voice, but keep each descriptor's data pointer,
+    // capacity, and sample offsets intact so the next source can reuse the
+    // existing Audren voice and memory pool.
+    for (auto& wavebuf : wavebufs_) {
+        wavebuf.state = AudioDriverWaveBufState_Free;
+        wavebuf.next = nullptr;
+        wavebuf.sequence_id = UINT32_MAX;
+    }
+    current_wavebuf_ = nullptr;
+    current_pool_ = nullptr;
+    current_size_ = 0;
+    total_queued_samples_ = 0;
+    wavebuf_enqueue_failed_ = false;
+#else
+    if (audio_dev_) SDL_ClearQueuedAudio(audio_dev_);
+#endif
+    if (perf_) perf_->recordAudioQueuedBuffers(0);
+}
+
 size_t AudioPlayer::queuedSampleCount() {
     std::lock_guard<std::mutex> lock(mutex_);
 #ifdef __SWITCH__
@@ -304,7 +333,24 @@ size_t AudioPlayer::appendAudio(const void* data, size_t size) {
 
     if (current_size_ == buffer_size_) {
         logAudioPlayerDetail("append queue wavebuf begin");
-        audrvVoiceAddWaveBuf(&driver_, kAudrenVoiceId, current_wavebuf_);
+        if (!audrvVoiceAddWaveBuf(&driver_, kAudrenVoiceId, current_wavebuf_)) {
+            lunar::persistentEventLog("audio-player", "wave-buffer enqueue failed");
+            const size_t buffer_samples = current_size_ /
+                (static_cast<size_t>(channels_) * sizeof(int16_t));
+            if (total_queued_samples_ >= buffer_samples) {
+                total_queued_samples_ -= buffer_samples;
+            } else {
+                total_queued_samples_ = 0;
+            }
+            current_wavebuf_->state = AudioDriverWaveBufState_Free;
+            current_wavebuf_->next = nullptr;
+            current_wavebuf_->sequence_id = UINT32_MAX;
+            current_wavebuf_ = nullptr;
+            current_pool_ = nullptr;
+            current_size_ = 0;
+            wavebuf_enqueue_failed_ = true;
+            return 0;
+        }
         mutexLock(&update_lock_);
         audrvUpdate(&driver_);
         mutexUnlock(&update_lock_);
@@ -322,6 +368,8 @@ size_t AudioPlayer::appendAudio(const void* data, size_t size) {
 
 bool AudioPlayer::writeAudio(const void* data, size_t size) {
     if (!driver_initialized_ || !data || size == 0) return false;
+
+    wavebuf_enqueue_failed_ = false;
 
     logAudioPlayerDetail("write begin size=%zu", size);
     mutexLock(&update_lock_);
@@ -351,6 +399,7 @@ bool AudioPlayer::writeAudio(const void* data, size_t size) {
                                   size - written);
         logAudioPlayerDetail("write append step=%zu", step);
         if (step == 0) {
+            if (wavebuf_enqueue_failed_) return false;
             mutexLock(&update_lock_);
             audrvUpdate(&driver_);
             mutexUnlock(&update_lock_);

@@ -11,6 +11,7 @@ struct EncodedAudioPacket {
     uint16_t sequence = 0;
     uint64_t timestamp = 0;
     uint32_t generation = 0;
+    uint32_t source_epoch = 0;
 };
 
 struct AudioReorderAction {

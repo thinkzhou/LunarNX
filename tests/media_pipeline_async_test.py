@@ -68,6 +68,10 @@ def main():
     require("hasVideoRecoveryRequest" in header and
             "clearVideoRecoveryRequest" in header,
             "MediaPipeline should expose throttled keyframe recovery state")
+    require("prepareForNewMediaSource" in header and
+            "audio_source_epoch_" in header and
+            "audio_source_reset_pending_" in header,
+            "A fresh media source must own an explicit audio source epoch")
 
     video_body = method_body(
         impl,
@@ -136,6 +140,13 @@ def main():
     require("std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns))" not in impl,
             "The video decode worker should not sleep for A/V lead time")
 
+    health_body = method_body(
+        impl, "MediaHealthStats MediaPipeline::getHealthStats() const")
+    require("lifecycle_mutex_" not in health_body and
+            "last_presented_video_ns_" in health_body and
+            "consecutive_render_faults_" in health_body,
+            "Media health reads must use an atomic present snapshot, not the renderer lifetime lock")
+
     audio_handler = method_body(
         impl,
         "void MediaPipeline::handleAudioFrame(const AudioFrame& frame,")
@@ -147,6 +158,20 @@ def main():
         impl, "bool MediaPipeline::submitDecodedAudio(const AudioFrame& frame,")
     require("audio_player_->play(frame)" in submit_decoded,
             "Only the media audio worker should submit decoded PCM")
+
+    source_reset = method_body(
+        impl, "void MediaPipeline::prepareForNewMediaSource(")
+    require("audio_source_epoch_.fetch_add" in source_reset and
+            "audio_queue_.clear()" in source_reset and
+            "decoded_audio_queue_.clear()" in source_reset and
+            "audio_queue_cv_.notify_one()" in impl,
+            "A fresh media source must clear queued audio and wake its worker")
+    audio_worker = method_body(impl, "void MediaPipeline::audioWorkerLoop()")
+    require("reorder.reset()" in audio_worker and
+            "audio_decoder_->reset()" in audio_worker and
+            "audio_player_->flush()" in audio_worker and
+            "source_epoch" in audio_worker,
+            "The audio worker must reset reorder, decoder, and playback state")
 
     initialize_body = method_body(
         impl,

@@ -10,8 +10,12 @@ namespace {
 
 class DefaultStreamBackendProvider final : public StreamBackendProvider {
 public:
-    std::unique_ptr<VideoDecoder> createVideoDecoder() override {
-        return std::make_unique<VideoDecoder>();
+    std::unique_ptr<VideoDecoder> createVideoDecoder(
+        VideoPipelinePath path) override {
+        if (path == VideoPipelinePath::PlayStation) {
+            return std::make_unique<PsVideoDecoder>();
+        }
+        return std::make_unique<XboxVideoDecoder>();
     }
 
     std::unique_ptr<VideoRenderer> createVideoRenderer() override {

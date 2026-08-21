@@ -4,6 +4,7 @@
 #include "../input/rumble_controller.h"
 #include "../input/stream_input_router.h"
 #include "../input/xinput_encoder.h"
+#include "../input/xbox_input_accumulator.h"
 #include "../stream/media_pipeline.h"
 #include "../stream/perf_stats.h"
 #include "stream_profile.h"
@@ -18,6 +19,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace lunar::app {
 
@@ -31,7 +33,9 @@ public:
         std::function<void(const std::string&)> on_session_id;
         std::function<bool()> external_cancel;
         std::function<bool()> consume_guide_button;
-        std::function<bool()> refresh_tokens;
+        // force=true is used only after a keep-alive 401/403. It bypasses
+        // the normal expiry throttle and obtains a fresh streaming token.
+        std::function<bool(bool force)> refresh_tokens;
     };
 
     XboxStreamSession(XboxSessionClient& session_client,
@@ -62,11 +66,24 @@ private:
     bool negotiateWebRtc(const StreamProfile& profile,
                          const std::string& session_id,
                          const RuntimeCallbacks& callbacks);
+    bool reconnectWithFreshSession(const StreamProfile& profile,
+                                   std::string& session_id,
+                                   int& keep_alive_seconds,
+                                   const RuntimeCallbacks& callbacks);
     webrtc::PeerCallbacks createPeerCallbacks();
     void runLoop(StreamProfile profile,
                  std::string session_id,
                  int keep_alive_seconds,
                  RuntimeCallbacks callbacks);
+    void startInputLoop(RuntimeCallbacks callbacks);
+    void stopInputLoop();
+    void sampleInput(const RuntimeCallbacks& callbacks,
+                     int& guide_pulse_frames_remaining,
+                     bool& guide_release_pending,
+                     std::chrono::steady_clock::time_point& next_snapshot,
+                     std::chrono::steady_clock::time_point& next_heartbeat,
+                     input::StreamInputOwner& last_input_owner);
+    void prepareInputForReconnect();
     void controlLoop(std::string session_id,
                      int keep_alive_seconds,
                      RuntimeCallbacks callbacks);
@@ -86,12 +103,17 @@ private:
 
     std::atomic<bool> streaming_{false};
     std::atomic<bool> stop_requested_{false};
+    std::atomic<bool> input_loop_stop_{true};
+    std::atomic<bool> input_delivery_ready_{false};
+    std::atomic<bool> control_recovery_requested_{false};
     mutable std::mutex state_mutex_;
     std::mutex session_api_mutex_;
     std::mutex control_mutex_;
     std::condition_variable control_cv_;
     std::thread stream_thread_;
     std::thread control_thread_;
+    std::thread input_thread_;
+    input::XboxInputAccumulator input_accumulator_;
     std::string session_id_;
 };
 

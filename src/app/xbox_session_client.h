@@ -55,6 +55,8 @@ public:
         const CancelCallback& cancel,
         const SleepCallback& sleep);
 
+    api::KeepAliveResult keepAliveDetailed(const std::string& session_id,
+                                           const CancelCallback& cancel);
     bool keepAlive(const std::string& session_id, const CancelCallback& cancel);
     void updateTokens(const std::string& web_token, const std::string& gssv_token);
     void deleteSessionAsync(const std::string& session_id);

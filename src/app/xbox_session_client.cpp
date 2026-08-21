@@ -312,9 +312,17 @@ bool XboxSessionClient::cleanupStaleSessions(const StreamProfile& profile,
                                        cancel);
 }
 
+api::KeepAliveResult XboxSessionClient::keepAliveDetailed(
+    const std::string& session_id, const CancelCallback& cancel) {
+    if (!api_) {
+        return {};
+    }
+    return api_->sendKeepAliveDetailed(session_id, cancel);
+}
+
 bool XboxSessionClient::keepAlive(const std::string& session_id,
                                   const CancelCallback& cancel) {
-    return api_ && api_->sendKeepAlive(session_id, cancel);
+    return keepAliveDetailed(session_id, cancel).ok;
 }
 
 void XboxSessionClient::updateTokens(const std::string& web_token,

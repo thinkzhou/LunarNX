@@ -12,10 +12,16 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <optional>
 
 namespace lunar::webrtc {
 
 struct PeerManagerQueueTestAccess;
+
+struct InputDeliveryResult {
+    uint64_t ticket = 0;
+    bool sent = false;
+};
 
 struct IceCandidate {
     std::string sdp;          // Full candidate line
@@ -31,6 +37,7 @@ struct PeerMediaStats : PeerConnectionMediaStats {
     uint32_t video_rtp_nacks = 0;
     uint32_t video_rtp_nack_retries = 0;
     uint32_t video_rtp_resyncs = 0;
+    uint32_t video_rtp_timestamp_discontinuities = 0;
     uint32_t video_rtp_last_gap_packets = 0;
     uint32_t video_rtp_ssrc = 0;
     uint32_t video_rtp_ssrc_changes = 0;
@@ -40,10 +47,12 @@ struct PeerMediaStats : PeerConnectionMediaStats {
     uint32_t video_jitter_buffered_packets = 0;
     uint32_t video_jitter_buffered_frames = 0;
     uint32_t video_jitter_buffered_bytes = 0;
-    uint32_t video_jitter_estimate_ms = 0;
-    uint32_t video_jitter_hold_ms = 0;
-    uint32_t video_jitter_recovery_hold_ms = 0;
     bool video_waiting_keyframe = true;
+};
+
+enum class VideoJitterMode {
+    Home,
+    Cloud,
 };
 
 struct PeerCallbacks {
@@ -59,6 +68,9 @@ struct PeerCallbacks {
     // keeps fenced/displayed frames alive and asks the sender for a fresh IDR;
     // decoder flushes remain reserved for actual decoder/queue failures.
     std::function<void(bool reset_decoder)> on_video_recovery;
+    // Called before the first access unit from a new SSRC/timestamp source is
+    // mapped onto the media clock.
+    std::function<void(uint32_t ssrc)> on_video_source_discontinuity;
 
     // Xbox 4-motor rumble. Called when Xbox sends vibration data.
     // Parameters match XStreaming: {leftMotor, rightMotor, leftTrigger, rightTrigger} 0.0-1.0
@@ -88,15 +100,18 @@ public:
     // Locally initiated DTLS-client channels use XStreaming's even SID order.
     bool createDataChannels();
     bool sendInputData(const uint8_t* data, size_t len);
+    uint64_t sendInputTransitionData(const uint8_t* data, size_t len);
     bool sendLatestInputData(const uint8_t* data, size_t len);
+    std::optional<InputDeliveryResult> consumeInputDeliveryResult();
     bool sendControlData(const uint8_t* data, size_t len);
     bool sendMessageData(const uint8_t* data, size_t len);
     bool requestVideoKeyframe();
     bool sendReceiverFeedback(uint32_t bitrate_bps);
     bool hasPendingReliableData() const;
-    bool consumeReliableSendFailure();
+    bool consumeDataChannelFailure();
     bool isDataChannelReady() const;
     void setMediaEnabled(bool enabled);
+    void setVideoJitterMode(VideoJitterMode mode);
     PeerMediaStats getMediaStats() const;
 
     // Connection
@@ -108,6 +123,7 @@ private:
     friend struct PeerManagerQueueTestAccess;
     enum class OutboundType {
         InputReliable,
+        InputTransition,
         InputLatest,
         Control,
         Message,
@@ -126,14 +142,15 @@ private:
         uint32_t highest_sequence = 0;
         uint32_t bitrate_bps = 0;
         uint64_t id = 0;
-        uint8_t attempts = 0;
+        uint64_t input_ticket = 0;
+        uint32_t attempts = 0;
+        std::chrono::steady_clock::time_point first_attempt_at{};
         std::chrono::steady_clock::time_point expires_at{};
     };
 
     static constexpr size_t kMaxOutboundCommands = 64;
     static constexpr size_t kMaxOutboundPayloadBytes = 1024;
     static constexpr uint8_t kMaxPliSendAttempts = 3;
-    static constexpr uint32_t kMaxConsecutiveSctpSendFailures = 64;
     PeerConnection* pc_ = nullptr;
     PeerCallbacks callbacks_;
     std::atomic<bool> connected_{false};
@@ -160,25 +177,54 @@ private:
     RtpClockMapper video_clock_{90000};
     RtpClockMapper audio_clock_{48000};
     VideoRtpJitterBuffer video_jitter_;
+    VideoJitterMode video_jitter_mode_ = VideoJitterMode::Home;
+    uint64_t smoothed_rtt_ms_ = 0;
+    uint64_t last_rtt_sample_ms_ = 0;
+    // The owner loop needs transport statistics far less often than it pumps
+    // RTP/SCTP. Keep the last libpeer snapshot so processEvents() and the
+    // session watchdog do not both call into the stats collector every 2 ms.
+    mutable std::mutex media_stats_mutex_;
+    mutable PeerConnectionMediaStats media_stats_cache_{};
+    mutable std::chrono::steady_clock::time_point media_stats_cache_at_{};
+    mutable bool media_stats_cache_valid_ = false;
     mutable std::mutex outbound_mutex_;
     std::deque<OutboundCommand> outbound_commands_;
+    std::deque<InputDeliveryResult> input_delivery_results_;
     uint64_t next_outbound_command_id_ = 1;
-    bool prefer_latest_input_once_ = false;
-    std::atomic<bool> reliable_send_failed_{false};
+    uint64_t next_input_delivery_ticket_ = 1;
+    uint32_t next_input_sequence_ = 0;
     std::atomic<bool> data_channel_failed_{false};
-    std::atomic<uint32_t> consecutive_sctp_send_failures_{0};
+    std::atomic<bool> data_channel_failure_event_{false};
+    uint32_t consecutive_sctp_send_failures_ = 0;
+    std::chrono::steady_clock::time_point first_sctp_send_failure_{};
     std::atomic<uint32_t> outbound_drop_events_{0};
 
     bool enqueueData(OutboundType type,
                      const uint8_t* data,
                      size_t len,
-                     bool replace_existing);
+                     bool replace_existing,
+                     uint64_t input_ticket = 0,
+                     bool invalidate_pending_snapshot = false);
     bool enqueueNack(uint16_t pid, uint16_t blp);
     bool enqueueSimple(OutboundCommand command, bool high_priority);
     void drainOutboundCommands(std::chrono::steady_clock::time_point deadline);
     bool completeOutboundCommand(const OutboundCommand& command, int result);
     int sendOutboundCommand(const OutboundCommand& command);
+    int sendInputCommand(const OutboundCommand& command);
+    bool prepareSequencedInputPayload(const OutboundCommand& command,
+                                      std::vector<uint8_t>& packet) const;
+    void commitSequencedInputResult(int result);
+    void observeSctpSendResult(OutboundType type,
+                               int result,
+                               uint32_t attempts);
+    void markDataChannelFailed(const char* reason,
+                               OutboundType type,
+                               int result,
+                               uint32_t attempts);
+    void resetDataChannelHealth();
     void clearOutboundCommands();
+    PeerConnectionMediaStats networkStatsSnapshot() const;
+    void invalidateMediaStatsCache();
     static bool isReliableCommand(OutboundType type);
     static bool isSctpCommand(OutboundType type);
     static int outboundPriority(OutboundType type);

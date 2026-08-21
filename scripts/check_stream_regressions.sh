@@ -211,7 +211,8 @@ if ! rg -n 'getStr\("lunarnx/stream/stop_action_plus"\)' src/ui/stream_view.cpp 
   fail "Stop stream combo must listen on both Plus and Minus while ignoring single-button presses"
 fi
 
-if ! rg -n 'setInputSuppressed|input_suppressed_' src/app/stream_controller.* src/ui/stream_view.cpp >/dev/null; then
+if ! rg -n 'StreamInputOwner::Ui|inputRouter\(\)\.setOwner' src/ui/stream_view.cpp >/dev/null ||
+   ! rg -n 'input_router_\.route\(gamepad_state\)' src/app/xbox_stream_session.cpp >/dev/null; then
   fail "Exit overlay/combo must suppress reserved View/Menu input frames sent to Xbox"
 fi
 

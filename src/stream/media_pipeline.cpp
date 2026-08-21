@@ -34,6 +34,12 @@ std::atomic<int> g_media_worker_logs{0};
 std::atomic<int> g_video_sync_logs{0};
 std::atomic<uint64_t> g_cloud_1080_render_frames{0};
 
+uint64_t monotonicNowNs() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<
+        std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 bool shouldLogMediaQueue() {
     return g_media_queue_logs.fetch_add(1) < kMediaQueueLogLimit;
 }
@@ -55,6 +61,12 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
                                const MediaPipelineOptions& options) {
     running_ = false;
     video_recovery_request_ = false;
+    video_new_source_pending_ = false;
+    last_decoded_video_ns_ = 0;
+    decoded_video_frames_ = 0;
+    render_fault_count_ = 0;
+    last_presented_video_ns_ = 0;
+    consecutive_render_faults_ = 0;
     stopWorkers();
 
     uint32_t worker_generation = 0;
@@ -69,8 +81,6 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         const uint32_t generation = generation_.fetch_add(1) + 1;
         video_ready_notified_ = false;
         perf_.store(perf, std::memory_order_release);
-        video_codec_ = options.video_codec;
-        video_path_ = options.video_path;
         video_scheduling_.store(options.video_scheduling,
                                 std::memory_order_release);
         video_queue_limits_ = options.video_queue_limits;
@@ -79,7 +89,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
             lunar::diagnosticLog("media", "create components begin backend=%s",
                                  videoBackendName(options.video_backend));
             lunar::diagnosticLog("media", "create video decoder begin");
-            video_decoder_ = provider_.createVideoDecoder();
+            video_decoder_ = provider_.createVideoDecoder(options.video_path);
             lunar::diagnosticLog("media", "create video decoder done ptr=%p",
                                  video_decoder_.get());
             lunar::diagnosticLog("media", "create video renderer begin");
@@ -120,7 +130,6 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
 
         video_decoder_->setVideoBackend(options.video_backend);
         video_decoder_->setVideoCodec(options.video_codec);
-        video_decoder_->setVideoPath(options.video_path);
         video_decoder_->setPerfStats(perf);
         lunar::diagnosticLog("media", "video decoder init begin");
         if (!video_decoder_->initialize(width, height)) {
@@ -144,7 +153,8 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         }
         lunar::diagnosticLog("media", "audio decoder init done");
         audio_decoder_->setCallback([this, generation](const AudioFrame& frame) {
-            handleAudioFrame(frame, generation);
+            handleAudioFrame(frame, generation,
+                             audio_decode_epoch_.load(std::memory_order_acquire));
         });
         lunar::diagnosticLog("media", "audio decoder callback set generation=%u",
                              generation);
@@ -211,9 +221,15 @@ void MediaPipeline::shutdownUnlocked() {
     running_ = false;
     video_recovery_request_ = false;
     video_decoder_reset_pending_ = false;
+    video_new_source_pending_ = false;
     video_waiting_for_keyframe_ = false;
     video_recovery_epoch_ = 0;
     video_ready_notified_ = false;
+    last_decoded_video_ns_ = 0;
+    decoded_video_frames_ = 0;
+    render_fault_count_ = 0;
+    last_presented_video_ns_ = 0;
+    consecutive_render_faults_ = 0;
     if (video_renderer_) {
         lunar::diagnosticLog("media", "shutdown video renderer begin");
         video_renderer_->shutdown();
@@ -313,6 +329,44 @@ void MediaPipeline::requestVideoRecovery(const char* reason,
     }
 }
 
+void MediaPipeline::prepareForNewVideoSource(const char* reason) {
+    std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
+    if (!running_.load()) return;
+
+    video_new_source_pending_ = true;
+    last_decoded_video_ns_ = 0;
+    decoded_video_frames_ = 0;
+    render_fault_count_ = 0;
+    last_presented_video_ns_ = 0;
+    consecutive_render_faults_ = 0;
+    if (video_renderer_) video_renderer_->resetLiveness();
+    if (av_sync_) {
+        av_sync_->reset();
+        av_sync_->start();
+    }
+    beginHardVideoRecovery(reason ? reason : "new video source", true);
+}
+
+void MediaPipeline::prepareForNewMediaSource(const char* reason) {
+    {
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
+        if (!running_.load()) return;
+
+        audio_source_epoch_.fetch_add(1, std::memory_order_acq_rel);
+        audio_source_reset_pending_.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> audio_lock(audio_queue_mutex_);
+            audio_queue_.clear();
+            decoded_audio_queue_.clear();
+            queued_audio_bytes_ = 0;
+            queued_decoded_audio_bytes_ = 0;
+            last_decoded_audio_end_ns_.store(0, std::memory_order_release);
+        }
+    }
+    audio_queue_cv_.notify_one();
+    prepareForNewVideoSource(reason ? reason : "new media source");
+}
+
 bool MediaPipeline::beginHardVideoRecoveryLocked(bool force_new_epoch,
                                                  size_t& dropped_packets,
                                                  size_t& dropped_bytes) {
@@ -394,9 +448,9 @@ bool MediaPipeline::enqueueVideoPacket(const uint8_t* data,
     QueuedVideoPacket packet;
     packet.timestamp = timestamp;
     packet.generation = generation_.load();
-    packet.access_unit = video_path_ == VideoPipelinePath::Xbox
-        ? inspectXboxH264AccessUnit(data, len)
-        : inspectVideoAccessUnit(video_codec_, data, len);
+    packet.access_unit = video_decoder_
+        ? video_decoder_->inspectAccessUnit(data, len)
+        : VideoAccessUnitInfo{};
     packet.contains_idr = packet.access_unit.has_random_access;
     packet.contains_vcl = packet.access_unit.has_vcl;
     packet.enqueued_at = std::chrono::steady_clock::now();
@@ -689,6 +743,7 @@ bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,
     packet.sequence = sequence;
     packet.timestamp = timestamp;
     packet.generation = generation_.load();
+    packet.source_epoch = audio_source_epoch_.load(std::memory_order_acquire);
     try {
         packet.data.assign(data, data + len);
     } catch (...) {
@@ -733,6 +788,7 @@ bool MediaPipeline::playDecodedAudio(const AudioFrame& frame) {
 
     QueuedDecodedAudio queued;
     queued.generation = generation_.load();
+    queued.source_epoch = audio_source_epoch_.load(std::memory_order_acquire);
     try {
         queued.frame = frame;
     } catch (...) {
@@ -791,6 +847,7 @@ bool MediaPipeline::startWorkers(uint32_t generation) {
 #endif
         video_recovery_request_ = false;
         video_decoder_reset_pending_ = false;
+        video_new_source_pending_ = false;
         video_waiting_for_keyframe_ = false;
         video_recovery_epoch_ = 0;
         video_decoder_reset_wakeup_ = false;
@@ -805,7 +862,11 @@ bool MediaPipeline::startWorkers(uint32_t generation) {
         decoded_audio_queue_.clear();
         queued_audio_bytes_ = 0;
         queued_decoded_audio_bytes_ = 0;
-        last_decoded_audio_end_ns_ = 0;
+        last_decoded_audio_end_ns_.store(0, std::memory_order_release);
+        audio_source_reset_pending_.store(false, std::memory_order_release);
+        audio_decode_epoch_.store(audio_source_epoch_.load(
+                                       std::memory_order_acquire),
+                                   std::memory_order_release);
     }
     g_media_queue_logs = 0;
     g_media_worker_logs = 0;
@@ -859,6 +920,7 @@ void MediaPipeline::stopWorkers() {
         video_worker_generation_ = 0;
         video_worker_stop_ = false;
         video_decoder_reset_pending_ = false;
+        video_new_source_pending_ = false;
         video_waiting_for_keyframe_ = false;
         video_recovery_epoch_ = 0;
         video_decoder_reset_wakeup_ = false;
@@ -871,7 +933,11 @@ void MediaPipeline::stopWorkers() {
         queued_decoded_audio_bytes_ = 0;
         audio_worker_generation_ = 0;
         audio_worker_stop_ = false;
-        last_decoded_audio_end_ns_ = 0;
+        last_decoded_audio_end_ns_.store(0, std::memory_order_release);
+        audio_source_reset_pending_.store(false, std::memory_order_release);
+        audio_decode_epoch_.store(audio_source_epoch_.load(
+                                       std::memory_order_acquire),
+                                   std::memory_order_release);
     }
 }
 
@@ -882,6 +948,7 @@ void MediaPipeline::videoWorkerLoop() {
         QueuedVideoPacket packet;
         bool have_packet = false;
         bool reset_requested = false;
+        bool reset_new_source = false;
         uint32_t reset_epoch = 0;
         {
             std::unique_lock<std::mutex> lock(video_queue_mutex_);
@@ -918,6 +985,7 @@ void MediaPipeline::videoWorkerLoop() {
             reset_requested = boundedVideoResetMustPrecedeDecode(
                 video_decoder_reset_pending_.load(), reset_wakeup,
                 have_packet && packet.contains_idr);
+            reset_new_source = video_new_source_pending_.load();
             reset_epoch = video_recovery_epoch_.load();
             if (have_packet) {
                 packet.queue_age_us = static_cast<uint64_t>(
@@ -932,7 +1000,9 @@ void MediaPipeline::videoWorkerLoop() {
 #endif
         }
         if (reset_requested) {
-            const bool reset = video_decoder_ && resetVideoDecoderForKeyframe();
+            const bool reset = video_decoder_ && (reset_new_source
+                ? resetVideoDecoderForKeyframe(true)
+                : resetVideoDecoderForKeyframe());
             if (!reset) {
                 lunar::diagnosticLog("media", "video decoder reset for keyframe failed");
                 video_recovery_request_ = true;
@@ -941,6 +1011,7 @@ void MediaPipeline::videoWorkerLoop() {
                 std::lock_guard<std::mutex> lock(video_queue_mutex_);
                 if (video_recovery_epoch_.load() == reset_epoch) {
                     video_decoder_reset_pending_ = false;
+                    if (reset_new_source) video_new_source_pending_ = false;
                 }
             }
         }
@@ -966,38 +1037,50 @@ void MediaPipeline::videoWorkerLoop() {
     lunar::diagnosticLog("media", "video worker loop end");
 }
 
-bool MediaPipeline::resetVideoDecoderForKeyframe() {
+bool MediaPipeline::resetVideoDecoderForKeyframe(bool new_source) {
     if (!video_decoder_) return false;
     if (video_renderer_ && !video_renderer_->prepareDecoderReset()) {
         lunar::dropDiagnosticLog(
             "video-reset", "phase=gpu-handoff-failed action=defer-decoder-flush");
         return false;
     }
-    return video_decoder_->resetForKeyframe();
+    return new_source ? video_decoder_->resetForNewSource()
+                      : video_decoder_->resetForKeyframe();
 }
 
 void MediaPipeline::audioWorkerLoop() {
     lunar::diagnosticLog("media", "audio worker loop begin generation=%u",
                          audio_worker_generation_);
     AudioPacketReorder reorder;
+    uint32_t audio_worker_source_epoch =
+        audio_source_epoch_.load(std::memory_order_acquire);
     while (true) {
         EncodedAudioPacket packet;
         QueuedDecodedAudio decoded;
         bool have_encoded = false;
         bool have_decoded = false;
+        bool reset_audio = false;
+        uint32_t current_source_epoch = audio_worker_source_epoch;
         {
             std::unique_lock<std::mutex> lock(audio_queue_mutex_);
             audio_queue_cv_.wait(lock, [this]() {
                 return audio_worker_stop_ || !audio_queue_.empty() ||
-                       !decoded_audio_queue_.empty();
+                       !decoded_audio_queue_.empty() ||
+                       audio_source_reset_pending_.load(
+                           std::memory_order_acquire);
             });
             if (audio_worker_stop_) break;
-            if (!decoded_audio_queue_.empty()) {
+            current_source_epoch =
+                audio_source_epoch_.load(std::memory_order_acquire);
+            reset_audio = audio_source_reset_pending_.exchange(
+                false, std::memory_order_acq_rel) ||
+                current_source_epoch != audio_worker_source_epoch;
+            if (!reset_audio && !decoded_audio_queue_.empty()) {
                 decoded = std::move(decoded_audio_queue_.front());
                 decoded_audio_queue_.pop_front();
                 queued_decoded_audio_bytes_ -= decoded.frame.pcm_data.size();
                 have_decoded = true;
-            } else {
+            } else if (!reset_audio && !audio_queue_.empty()) {
                 packet = std::move(audio_queue_.front());
                 audio_queue_.pop_front();
                 queued_audio_bytes_ -= packet.data.size();
@@ -1005,24 +1088,48 @@ void MediaPipeline::audioWorkerLoop() {
             }
         }
 
+        if (reset_audio) {
+            reorder.reset();
+            if (audio_decoder_) audio_decoder_->reset();
+            if (audio_player_) audio_player_->flush();
+            audio_worker_source_epoch = current_source_epoch;
+            audio_decode_epoch_.store(audio_worker_source_epoch,
+                                      std::memory_order_release);
+            last_decoded_audio_end_ns_.store(0, std::memory_order_release);
+            continue;
+        }
+
         if (have_decoded) {
-            submitDecodedAudio(decoded.frame, decoded.generation);
+            if (decoded.source_epoch == audio_worker_source_epoch &&
+                decoded.source_epoch ==
+                    audio_source_epoch_.load(std::memory_order_acquire)) {
+                submitDecodedAudio(decoded.frame,
+                                   decoded.generation,
+                                   decoded.source_epoch);
+            }
             continue;
         }
         if (!have_encoded) continue;
 
         if (packet.generation != audio_worker_generation_ ||
+            packet.source_epoch != audio_worker_source_epoch ||
+            packet.source_epoch !=
+                audio_source_epoch_.load(std::memory_order_acquire) ||
             !isGenerationActive(packet.generation)) {
             continue;
         }
+        audio_decode_epoch_.store(audio_worker_source_epoch,
+                                  std::memory_order_release);
         for (auto& action : reorder.push(std::move(packet))) {
             if (!audio_decoder_ || !isGenerationActive(audio_worker_generation_)) break;
             if (action.type == AudioReorderAction::Type::Missing) {
-                if (last_decoded_audio_end_ns_ == 0) {
+                const uint64_t last_audio_end =
+                    last_decoded_audio_end_ns_.load(std::memory_order_acquire);
+                if (last_audio_end == 0) {
                     if (auto* perf = perfStats()) perf->recordAudioDrop();
                     continue;
                 }
-                audio_decoder_->decodeMissing(last_decoded_audio_end_ns_);
+                audio_decoder_->decodeMissing(last_audio_end);
             } else {
                 audio_decoder_->decode(action.packet.data.data(),
                                        action.packet.data.size(),
@@ -1145,6 +1252,9 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
         std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
         if (!isGenerationActive(generation) || !av_sync_ || !video_renderer_) return;
 
+        last_decoded_video_ns_ = monotonicNowNs();
+        decoded_video_frames_.fetch_add(1, std::memory_order_relaxed);
+
         av_sync_->updateVideoPts(frame.timestamp);
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         const auto timing = av_sync_->getVideoTiming(frame.timestamp);
@@ -1214,12 +1324,17 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
 }
 
 void MediaPipeline::handleAudioFrame(const AudioFrame& frame,
-                                     uint32_t generation) {
-    if (!isGenerationActive(generation)) return;
+                                     uint32_t generation,
+                                     uint32_t source_epoch) {
+    if (!isGenerationActive(generation) ||
+        source_epoch != audio_source_epoch_.load(std::memory_order_acquire)) {
+        return;
+    }
 
-    last_decoded_audio_end_ns_ =
+    last_decoded_audio_end_ns_.store(
         frame.timestamp + audioSamplesToNanoseconds(frame.sample_count,
-                                                    frame.sample_rate);
+                                                    frame.sample_rate),
+        std::memory_order_release);
     if (!audio_player_ || !av_sync_) return;
     if (!audio_player_->play(frame)) return;
 
@@ -1232,8 +1347,11 @@ void MediaPipeline::handleAudioFrame(const AudioFrame& frame,
 }
 
 bool MediaPipeline::submitDecodedAudio(const AudioFrame& frame,
-                                       uint32_t generation) {
-    if (!isGenerationActive(generation) || !audio_player_ || !av_sync_) return false;
+                                       uint32_t generation,
+                                       uint32_t source_epoch) {
+    if (!isGenerationActive(generation) ||
+        source_epoch != audio_source_epoch_.load(std::memory_order_acquire) ||
+        !audio_player_ || !av_sync_) return false;
     if (!audio_player_->play(frame)) return false;
     if (auto* perf = perfStats()) perf->recordAudioFrame();
     const uint64_t playback_ts = estimateAudioPlaybackTimestamp(
@@ -1247,7 +1365,42 @@ void MediaPipeline::presentVideoFrame() {
     std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
     if (running_.load() && video_renderer_) {
         video_renderer_->present();
+        const auto fault = video_renderer_->consumeRenderFault();
+        last_presented_video_ns_.store(
+            video_renderer_->lastSuccessfulPresentNs(),
+            std::memory_order_release);
+        consecutive_render_faults_.store(
+            video_renderer_->consecutiveRenderFaults(),
+            std::memory_order_release);
+        if (fault != RenderFault::None) {
+            render_fault_count_.fetch_add(1, std::memory_order_relaxed);
+            beginHardVideoRecovery(renderFaultName(fault), true);
+        }
     }
+}
+
+MediaHealthStats MediaPipeline::getHealthStats() const {
+    MediaHealthStats stats;
+    const uint64_t now_ns = monotonicNowNs();
+    const uint64_t decoded_ns = last_decoded_video_ns_.load(
+        std::memory_order_acquire);
+    stats.has_decoded_video = decoded_video_frames_.load(
+        std::memory_order_acquire) > 0 && decoded_ns != 0;
+    if (stats.has_decoded_video && now_ns >= decoded_ns) {
+        stats.decoded_video_age_ms = (now_ns - decoded_ns) / 1'000'000u;
+    }
+
+    const uint64_t presented_ns = last_presented_video_ns_.load(
+        std::memory_order_acquire);
+    stats.has_presented_video = presented_ns != 0;
+    if (stats.has_presented_video && now_ns >= presented_ns) {
+        stats.presented_video_age_ms = (now_ns - presented_ns) / 1'000'000u;
+    }
+    stats.consecutive_render_faults = consecutive_render_faults_.load(
+        std::memory_order_acquire);
+    stats.render_fault_count = render_fault_count_.load(
+        std::memory_order_acquire);
+    return stats;
 }
 
 } // namespace lunar::stream

@@ -261,6 +261,7 @@ private:
         provider_ = lunar::stream::StreamBackendProvider::createDefault();
         media_ = std::make_unique<lunar::stream::MediaPipeline>(*provider_);
         lunar::stream::MediaPipelineOptions options;
+        options.video_path = lunar::stream::VideoPipelinePath::PlayStation;
         options.video_codec = video_codec;
         options.video_backend = kVideoBackend;
         perf_.reset();
