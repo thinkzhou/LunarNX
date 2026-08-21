@@ -19,20 +19,31 @@ audio = (ROOT / "src/stream/audio_player.cpp").read_text()
 
 require("enum class VideoSchedulingMode" in header,
         "media pipeline must expose a protocol-neutral scheduling mode")
-require("RealtimeQueued" in header and "DirectLowLatency" in header,
-        "scheduling contract must describe queued realtime and direct low-latency behavior")
+require("RealtimeQueued" in header and "DirectLowLatency" in header and
+        "BoundedLowLatency" in header,
+        "scheduling contract must describe queued, direct, and bounded behavior")
 require("VideoSchedulingMode video_scheduling" in header,
         "media options must carry the selected video scheduling mode")
 require("VideoSchedulingMode::RealtimeQueued" in xbox,
         "Xbox controller must explicitly select isolated realtime queue scheduling")
-require("VideoSchedulingMode::DirectLowLatency" in ps,
-        "PlayStation controller must explicitly select direct low-latency scheduling")
+require("VideoSchedulingMode::BoundedLowLatency" in ps,
+        "PlayStation controller must default to bounded low-latency scheduling")
+require("LUNARNX_PS_DIRECT_VIDEO" in ps and
+        "VideoSchedulingMode::DirectLowLatency" in ps,
+        "PlayStation direct scheduling must remain available for development A/B")
+require("std::clamp<size_t>" in ps and "(fps_ + 9) / 10" in ps and
+        "8 * 1024 * 1024" in ps and
+        "std::chrono::milliseconds(100)" in ps,
+        "PlayStation bounded scheduling must select a frame-rate-scaled AU/8 MiB/100 ms budget")
 require("#include <chiaki/" not in header and "libpeer/" not in header,
         "shared scheduling contract must not expose transport-library types")
 require("constexpr size_t kMaxVideoQueuePackets = 2048" in pipeline,
         "Xbox access-unit queue must retain its established 2048-packet safety limit")
-require("video_queue_.size() >= kMaxVideoQueuePackets" in pipeline,
-        "queued video ingress must enforce the established safety limit")
+require("? video_queue_limits_.max_packets" in pipeline and
+        ": kMaxVideoQueuePackets" in pipeline and
+        "evaluateBoundedVideoAdmission(" in pipeline and
+        "realtimeVideoCapacityExceeded(" in pipeline,
+        "queued video ingress must preserve Xbox limits and select bounded limits by mode")
 require("return enqueueVideoPacket(data, len, timestamp);" in pipeline,
         "queued scheduling must preserve asynchronous network/decode isolation")
 require("video_scheduling_.load(std::memory_order_acquire) ==" in pipeline and
@@ -52,11 +63,18 @@ require("bool decodeVideoDirect(" in header,
 require("reset = resetVideoDecoderForKeyframe()" in pipeline and
         "requestVideoRecovery(\"direct video decoder error\")" in pipeline,
         "direct decode failure must reset synchronously and request an IDR")
-require("if(s->pending_frame)av_frame_free(&s->pending_frame);" in renderer and
-        "s->pending_frame=keep;" in renderer,
-        "shared renderer must replace its pending frame instead of buffering decoded frames")
+require("kPendingFrameCapacity=2" in renderer and
+        "enqueuePendingFrame(*s,keep);" in renderer and
+        "if(s.pending_count==s.pending_frames.size())" in renderer,
+        "shared renderer must retain a bounded two-frame decoded queue")
 require("VideoSchedulingMode" not in renderer and
         "VideoSchedulingMode" not in audio,
         "decoder sinks must remain independent of protocol scheduling policy")
+require("decoded_pending_drop_oldest" in (ROOT / "src/stream/perf_stats.h").read_text() and
+        "unique_video_frames_submitted" in (ROOT / "src/stream/perf_stats.h").read_text() and
+        "new_frame_submit_gap_max_us" in (ROOT / "src/stream/perf_stats.h").read_text() and
+        "10s decoded_queue_drop_oldest" in (ROOT / "src/ps/ps_stream_controller.cpp").read_text() and
+        "video_summary_at_" not in (ROOT / "src/ps/ps_media_bridge.cpp").read_text(),
+        "decoded-to-present visibility must be exposed through low-frequency counters")
 
 print("media pipeline scheduling contract passed")

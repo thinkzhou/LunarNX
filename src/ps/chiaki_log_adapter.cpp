@@ -73,7 +73,8 @@ static void logCallback(ChiakiLogLevel level, const char* msg, void* user) {
     // even when APP_DIAG=0; never perform SD I/O on the Takion thread.
     if (std::strncmp(msg, "LUNARNX-PSRX ", 13) == 0 ||
         std::strncmp(msg, "LUNARNX-PSVIDEO ", 16) == 0 ||
-        std::strncmp(msg, "LUNARNX-PSKEY ", 14) == 0) {
+        std::strncmp(msg, "LUNARNX-PSKEY ", 14) == 0 ||
+        std::strncmp(msg, "LUNARNX-PS-SOCKET ", 18) == 0) {
         lunar::dropDiagnosticLog("ps-transport", "%s", msg);
         return;
     }

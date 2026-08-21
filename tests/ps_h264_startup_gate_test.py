@@ -26,6 +26,15 @@ require("if (playstation_path && !au.has_vcl)" in decode_gate and
 require("parameter_sets_pending_" in decoder and
         "startup_access_unit" in decoder,
         "cached codec parameter sets must be prepended to the first VCL access unit")
+require("bool packet_accepted = false" in decoder and
+        "if (!packet_accepted)" in decoder and
+        "submitted_timestamps_.push_back(timestamp)" in decoder,
+        "NVDEC decode must distinguish accepted packets from drained output and "
+        "track timestamps only for accepted access units")
+require("if (prepended_parameter_sets) parameter_sets_pending_ = false" in decoder and
+        decoder.index("if (prepended_parameter_sets) parameter_sets_pending_ = false") >
+        decoder.index("bool packet_accepted = false"),
+        "cached parameter sets must remain pending until the AU is accepted")
 
 require("last_recovery_request_" in controller and
         "requestRecoveryIDR" in controller and
@@ -36,7 +45,7 @@ reset_start = renderer.index("bool VideoRenderer::prepareDecoderReset()")
 reset_end = renderer.index("bool VideoRenderer::pollEvents()", reset_start)
 reset = renderer[reset_start:reset_end]
 require("submitted_frames" in reset and
-        "!s->pending_frame" in reset and
+        "s->pending_count==0" in reset and
         "!s->current_frame" in reset and
         "return true" in reset,
         "hardware decoder reset before the first frame must not wait for a UI "

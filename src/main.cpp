@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include "diagnostics.h"
 #include "app/runtime_context.h"
+#include "ps/chiaki_crypto_init.h"
 #include "ui/platform_activity.h"
 #include "ui/i18n.h"
 #include "ui/ui_style.h"
@@ -51,6 +52,8 @@ void preferSwitchCore(int ordinal) {
 int main(int argc, char* argv[]) {
     if (argc > 0) lunar::app::setRunningNroPath(argv[0]);
     lunar::diagnosticLog("main", "begin argc=%d version=%s", argc, LUNARNX_VERSION);
+
+    lunar::ps::initializeChiakiCrypto();
 
     // Keep the Switch startup path aligned with Moonlight-Switch.
     appletInitializeGamePlayRecording();

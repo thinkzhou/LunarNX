@@ -112,8 +112,11 @@ def main():
         impl,
         "bool MediaPipeline::beginHardVideoRecoveryLocked(bool force_new_epoch,")
     require("video_queue_.clear()" in hard_recovery and
-            "video_recovery_epoch_.fetch_add(1)" in hard_recovery and
-            "video_waiting_for_keyframe_ = true" in hard_recovery,
+            ("video_recovery_epoch_.fetch_add(1)" in hard_recovery or
+             "applyBoundedVideoRecovery" in impl) and
+            ("video_waiting_for_keyframe_ = true" in hard_recovery or
+             "video_waiting_for_keyframe_ = recovery_state.waiting_for_keyframe"
+             in hard_recovery),
             "Hard recovery must discard stale queued video before advancing the epoch")
     worker = method_body(impl, "void MediaPipeline::videoWorkerLoop()")
     require("resetVideoDecoderForKeyframe()" in worker and
@@ -121,9 +124,15 @@ def main():
             "Only the video worker may reset the decoder before a recovery IDR")
     process_video = method_body(
         impl, "void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet)")
-    require("packet.recovery_epoch != video_recovery_epoch_.load()" in process_video and
-            "video_waiting_for_keyframe_.load() && !packet.contains_idr" in process_video,
+    require("boundedVideoPacketIsCurrent" in process_video and
+            "boundedVideoMayDecodeWhileRecovering" in process_video,
             "Stale epochs and non-IDR recovery packets must not reach the decoder")
+    require('beginHardVideoRecovery("video decoder error", true)' in process_video,
+            "A recovery IDR decode failure must force a fresh decoder reset epoch")
+    require("pre_copy_admission" in impl and
+            impl.index("pre_copy_admission") <
+            impl.index("packet.data.assign(data, data + len);"),
+            "Bounded admission must reject known drops before copying the AU")
     require("std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns))" not in impl,
             "The video decode worker should not sleep for A/V lead time")
 

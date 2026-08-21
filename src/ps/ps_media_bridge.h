@@ -10,7 +10,6 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
-#include <chrono>
 #include <vector>
 
 namespace lunar::ps {
@@ -47,12 +46,6 @@ private:
     // Video PTS tracking
     uint64_t video_frame_count_ = 0;
     std::atomic<uint64_t> next_video_pts_ns_{0};
-    uint64_t video_samples_since_summary_ = 0;
-    uint64_t video_sample_bytes_ = 0;
-    uint64_t video_lost_frames_ = 0;
-    uint64_t video_enqueue_failures_ = 0;
-    std::chrono::steady_clock::time_point video_summary_at_ =
-        std::chrono::steady_clock::now();
 
     // Audio clock
     int audio_sample_rate_ = 48000;

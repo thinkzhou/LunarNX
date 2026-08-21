@@ -62,6 +62,13 @@ jobs:
           python3 tests/datachannel_ppid_test.py
           python3 tests/switch_nro_bss_test.py
           python3 tests/github_actions_switch_build_test.py
+          python3 tests/bounded_video_queue_policy_test.py
+          python3 tests/chiaki_pmull_runtime_test.py
+          python3 tests/media_pipeline_async_test.py
+          python3 tests/media_pipeline_scheduling_test.py
+          python3 tests/ps_bounded_video_queue_test.py
+          python3 tests/ps_high_bitrate_contract_test.py
+          python3 tests/ps_media_queue_simulation_test.py
           git diff --check
 
       - name: Package build artifact
