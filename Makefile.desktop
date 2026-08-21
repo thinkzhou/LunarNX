@@ -209,7 +209,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 RHO_SRCS = src/rho/rho_main.cpp
 RHO_OBJS = $(RHO_SRCS:%.cpp=$(BUILD)/%.o)
 
-.PHONY: xcloud_session_support_test all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests xbox_input_accumulator_tests stream_input_router_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
+.PHONY: xcloud_session_support_test ps_console_route_freshness_test ps_pairing_account_codec_test all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests xbox_input_accumulator_tests stream_input_router_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
 
 all:  $(TARGET)
 	@echo "=== Desktop Build Complete ==="
@@ -247,6 +247,12 @@ psn_auth_tests: $(PSN_AUTH_TEST_OBJS)
 xcloud_session_support_test: $(XCLOUD_TEST_OBJS)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/$@ $(XCLOUD_TEST_OBJS)
 	$(BUILD)/$@
+
+ps_console_route_freshness_test:
+	python3 tests/ps_console_route_freshness_test.py
+
+ps_pairing_account_codec_test:
+	python3 tests/ps_pairing_account_codec_test.py
 
 stream_tests: $(STREAM_TEST_OBJS) h264_rtp_tests xcloud_session_support_test
 	@mkdir -p $(BUILD)

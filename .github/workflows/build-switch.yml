@@ -92,6 +92,11 @@ jobs:
           python3 tests/libpeer_video_jitter_test.py
           python3 tests/libpeer_dtls_read_loop_test.py
           python3 tests/datachannel_ppid_test.py
+          python3 tests/ps_local_pairing_flow_test.py
+          python3 tests/ps_phone_pairing_test.py
+          python3 tests/ps_activity_lifecycle_test.py
+          make -f Makefile.desktop ps_console_route_freshness_test
+          make -f Makefile.desktop ps_pairing_account_codec_test
           python3 tests/audio_player_reset_test.py
           python3 tests/switch_nro_bss_test.py
           python3 tests/github_actions_switch_build_test.py
