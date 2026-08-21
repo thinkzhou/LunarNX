@@ -98,6 +98,7 @@ jobs:
           python3 tests/media_pipeline_scheduling_test.py
           python3 tests/ps_bounded_video_queue_test.py
           python3 tests/ps_high_bitrate_contract_test.py
+          python3 tests/ps_media_queue_simulation_test.py
           git diff --check
 
       - name: Package build artifact

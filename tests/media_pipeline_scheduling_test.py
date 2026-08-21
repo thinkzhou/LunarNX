@@ -31,9 +31,10 @@ require("VideoSchedulingMode::BoundedLowLatency" in ps,
 require("LUNARNX_PS_DIRECT_VIDEO" in ps and
         "VideoSchedulingMode::DirectLowLatency" in ps,
         "PlayStation direct scheduling must remain available for development A/B")
-require("max_packets = 3" in ps and "8 * 1024 * 1024" in ps and
-        "std::chrono::milliseconds(50)" in ps,
-        "PlayStation bounded scheduling must select the 3 AU/8 MiB/50 ms budget")
+require("std::clamp<size_t>" in ps and "(fps_ + 9) / 10" in ps and
+        "8 * 1024 * 1024" in ps and
+        "std::chrono::milliseconds(100)" in ps,
+        "PlayStation bounded scheduling must select a frame-rate-scaled AU/8 MiB/100 ms budget")
 require("#include <chiaki/" not in header and "libpeer/" not in header,
         "shared scheduling contract must not expose transport-library types")
 require("constexpr size_t kMaxVideoQueuePackets = 2048" in pipeline,
@@ -62,9 +63,10 @@ require("bool decodeVideoDirect(" in header,
 require("reset = resetVideoDecoderForKeyframe()" in pipeline and
         "requestVideoRecovery(\"direct video decoder error\")" in pipeline,
         "direct decode failure must reset synchronously and request an IDR")
-require("if(s->pending_frame)av_frame_free(&s->pending_frame);" in renderer and
-        "s->pending_frame=keep;" in renderer,
-        "shared renderer must replace its pending frame instead of buffering decoded frames")
+require("kPendingFrameCapacity=2" in renderer and
+        "enqueuePendingFrame(*s,keep);" in renderer and
+        "if(s.pending_count==s.pending_frames.size())" in renderer,
+        "shared renderer must retain a bounded two-frame decoded queue")
 require("VideoSchedulingMode" not in renderer and
         "VideoSchedulingMode" not in audio,
         "decoder sinks must remain independent of protocol scheduling policy")

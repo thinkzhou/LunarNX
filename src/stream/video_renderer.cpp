@@ -494,7 +494,10 @@ struct Deko3DRenderContext {
   VideoResolutionTransition resolution_transition;
   AVFrame* resolution_transition_frame=nullptr;
   size_t resolution_transition_drain_steps=0;
-  AVFrame* pending_frame=nullptr;
+  static constexpr size_t kPendingFrameCapacity=2;
+  std::array<AVFrame*,kPendingFrameCapacity> pending_frames{};
+  size_t pending_head=0;
+  size_t pending_count=0;
   AVFrame* current_frame=nullptr;
   std::array<AVFrame*, brls::FRAMEBUFFERS_COUNT> submitted_frames{};
   size_t next_submitted_frame=0;
@@ -555,12 +558,45 @@ void hardwareProbeLog(uint64_t frame_id, const char* stage,
 
 void releaseRetainedFrames(Deko3DRenderContext& s) {
   if(s.resolution_transition_frame)av_frame_free(&s.resolution_transition_frame);
-  if(s.pending_frame)av_frame_free(&s.pending_frame);
+  for(auto*& frame:s.pending_frames){
+    if(frame)av_frame_free(&frame);
+  }
+  s.pending_head=0;
+  s.pending_count=0;
   if(s.current_frame)av_frame_free(&s.current_frame);
   for(auto*& frame:s.submitted_frames){
     if(frame)av_frame_free(&frame);
   }
   s.next_submitted_frame=0;
+}
+
+void clearPendingFrames(Deko3DRenderContext& s) {
+  for(auto*& frame:s.pending_frames){
+    if(frame)av_frame_free(&frame);
+  }
+  s.pending_head=0;
+  s.pending_count=0;
+}
+
+void enqueuePendingFrame(Deko3DRenderContext& s, AVFrame* frame) {
+  if(!frame)return;
+  if(s.pending_count==s.pending_frames.size()){
+    av_frame_free(&s.pending_frames[s.pending_head]);
+    s.pending_head=(s.pending_head+1)%s.pending_frames.size();
+    s.pending_count--;
+  }
+  const size_t tail=(s.pending_head+s.pending_count)%s.pending_frames.size();
+  s.pending_frames[tail]=frame;
+  s.pending_count++;
+}
+
+AVFrame* dequeuePendingFrame(Deko3DRenderContext& s) {
+  if(s.pending_count==0)return nullptr;
+  AVFrame* frame=s.pending_frames[s.pending_head];
+  s.pending_frames[s.pending_head]=nullptr;
+  s.pending_head=(s.pending_head+1)%s.pending_frames.size();
+  s.pending_count--;
+  return frame;
 }
 
 uint64_t renderNowMs() {
@@ -1599,8 +1635,7 @@ bool VideoRenderer::render(const VideoFrame&frame){
   }
   if(s->resolution_transition_frame)
     av_frame_free(&s->resolution_transition_frame);
-  if(s->pending_frame)av_frame_free(&s->pending_frame);
-  s->pending_frame=keep;
+  enqueuePendingFrame(*s,keep);
   if(shouldLogRender())lunar::diagnosticLog("render","render queued width=%d height=%d",f->width,f->height);
   return true;
 }
@@ -1652,7 +1687,7 @@ void VideoRenderer::present(){
       s->mapped_luma_w=0;
       s->mapped_luma_h=0;
       s->static_state_dirty=true;
-      if(s->pending_frame)av_frame_free(&s->pending_frame);
+      clearPendingFrames(*s);
       if(s->current_frame)av_frame_free(&s->current_frame);
       if(s->resolution_transition_frame)
         av_frame_free(&s->resolution_transition_frame);
@@ -1668,8 +1703,8 @@ void VideoRenderer::present(){
     return;
   }
   if(s->resolution_transition.startupCandidateReady(renderNowMs())){
-    if(s->pending_frame)av_frame_free(&s->pending_frame);
-    s->pending_frame=s->resolution_transition_frame;
+    clearPendingFrames(*s);
+    enqueuePendingFrame(*s,s->resolution_transition_frame);
     s->resolution_transition_frame=nullptr;
     s->resolution_transition.promoteStartupCandidate();
     lunar::dropDiagnosticLog(
@@ -1710,9 +1745,9 @@ void VideoRenderer::present(){
       s->mapped_luma_w=0;
       s->mapped_luma_h=0;
       s->static_state_dirty=true;
-      if(s->pending_frame)av_frame_free(&s->pending_frame);
+      clearPendingFrames(*s);
       if(s->current_frame)av_frame_free(&s->current_frame);
-      s->pending_frame=s->resolution_transition_frame;
+      enqueuePendingFrame(*s,s->resolution_transition_frame);
       s->resolution_transition_frame=nullptr;
       s->resolution_transition.completeTransition();
       s->resolution_transition_drain_steps=0;
@@ -1723,18 +1758,17 @@ void VideoRenderer::present(){
     }
     return;
   }
-  if(!s->pending_frame&&!s->current_frame){
+  if(s->pending_count==0&&!s->current_frame){
     return;
   }
   const uint64_t frame_id=++s->present_frame_id;
   hardwareProbeLog(frame_id, "present-entry",
-                   "pending=%d current=%d queue_error=%d",
-                   s->pending_frame ? 1 : 0, s->current_frame ? 1 : 0,
+                   "pending=%zu current=%d queue_error=%d",
+                   s->pending_count, s->current_frame ? 1 : 0,
                    s->q && s->q.isInErrorState() ? 1 : 0);
-  if(s->pending_frame){
+  if(s->pending_count>0){
     if(s->current_frame)av_frame_free(&s->current_frame);
-    s->current_frame=s->pending_frame;
-    s->pending_frame=nullptr;
+    s->current_frame=dequeuePendingFrame(*s);
   }
   if(!updateFrameMapping(*s,s->current_frame)){
     hardwareProbeLog(frame_id, "mapping-rejected",
@@ -1836,7 +1870,7 @@ bool VideoRenderer::prepareDecoderReset(){
   for(auto* frame:s->submitted_frames){
     if(frame){has_submitted_frames=true;break;}
   }
-  if(!s->pending_frame&&!s->current_frame&&!has_submitted_frames&&
+  if(s->pending_count==0&&!s->current_frame&&!has_submitted_frames&&
      !s->present_slice_active){
     return true;
   }
