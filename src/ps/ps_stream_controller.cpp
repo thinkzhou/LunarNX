@@ -365,16 +365,25 @@ void PsStreamController::startVideoMonitor() {
     video_monitor_thread_ = std::thread([this]() {
         std::chrono::steady_clock::time_point waiting_started{};
         bool waiting_notice_sent = false;
+        auto last_video_summary = std::chrono::steady_clock::now();
+        auto last_video_detail_summary = last_video_summary;
+        uint32_t previous_video_packets = 0;
+        uint64_t previous_video_bytes = 0;
         while (!video_monitor_stop_.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             if (video_monitor_stop_.load()) break;
-            if (state_.load() == app::StreamState::Streaming) break;
             if (!stream_transport_connected_.load()) continue;
+            const auto now = std::chrono::steady_clock::now();
+            const bool streaming = state_.load() == app::StreamState::Streaming;
+            if (streaming) {
+                waiting_started = {};
+                waiting_notice_sent = false;
+            }
             if (waiting_started.time_since_epoch().count() == 0) {
-                waiting_started = std::chrono::steady_clock::now();
+                waiting_started = now;
             }
 
-            if (media_ && media_->hasVideoRecoveryRequest() &&
+            if (!streaming && media_ && media_->hasVideoRecoveryRequest() &&
                 requestRecoveryIDR()) {
                 media_->clearVideoRecoveryRequest();
                 diagnosticLog("ps-controller",
@@ -382,7 +391,7 @@ void PsStreamController::startVideoMonitor() {
             }
 
             if (!waiting_notice_sent &&
-                std::chrono::steady_clock::now() - waiting_started >=
+                    now - waiting_started >=
                     std::chrono::seconds(10)) {
                 waiting_notice_sent = true;
                 const bool received_access_units = perf_.video_packets.load() > 0;
@@ -394,6 +403,34 @@ void PsStreamController::startVideoMonitor() {
                               perf_.video_packets.load(),
                               perf_.video_decode_errors.load());
                 setState(app::StreamState::Connecting, info);
+            }
+
+            if (now - last_video_summary >= std::chrono::seconds(1)) {
+                const uint32_t packets = perf_.video_packets.load();
+                const uint64_t bytes = perf_.encoded_video_bytes.load();
+                diagnosticLog(
+                    "ps-media",
+                    "1s video packets=%u bytes=%llu frames_lost=%u "
+                    "enqueue_running=%d",
+                    packets - previous_video_packets,
+                    static_cast<unsigned long long>(bytes - previous_video_bytes),
+                    perf_.ps_frames_lost.load(),
+                    media_ && media_->isRunning() ? 1 : 0);
+                previous_video_packets = packets;
+                previous_video_bytes = bytes;
+                last_video_summary = now;
+            }
+            if (now - last_video_detail_summary >= std::chrono::seconds(10)) {
+                diagnosticLog(
+                    "ps-media",
+                    "10s decoded_queue_drop_oldest=%u decoded_queue_depth_high=%u "
+                    "unique_submitted=%u new_frame_gap_max_us=%llu",
+                    perf_.decoded_pending_drop_oldest.load(),
+                    perf_.decoded_pending_depth_high.load(),
+                    perf_.unique_video_frames_submitted.load(),
+                    static_cast<unsigned long long>(
+                        perf_.new_frame_submit_gap_max_us.load()));
+                last_video_detail_summary = now;
             }
         }
     });

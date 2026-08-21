@@ -45,9 +45,9 @@ struct PerfStats {
     // queue pressure from encoded admission and decoder drops.
     std::atomic<uint32_t> decoded_pending_drop_oldest{0};
     std::atomic<uint32_t> decoded_pending_depth_high{0};
-    std::atomic<uint32_t> unique_video_frames_presented{0};
-    std::atomic<uint64_t> present_gap_max_us{0};
-    std::atomic<int64_t> last_present_ns{0};
+    std::atomic<uint32_t> unique_video_frames_submitted{0};
+    std::atomic<uint64_t> new_frame_submit_gap_max_us{0};
+    std::atomic<int64_t> last_new_frame_submit_ns{0};
     // Monotonic timestamp of the first frame successfully submitted for this
     // stream session. Zero means that playback has not started yet.
     std::atomic<uint64_t> stream_started_ns{0};
@@ -178,9 +178,9 @@ struct PerfStats {
         video_decode_errors = 0;
         decoded_pending_drop_oldest = 0;
         decoded_pending_depth_high = 0;
-        unique_video_frames_presented = 0;
-        present_gap_max_us = 0;
-        last_present_ns = 0;
+        unique_video_frames_submitted = 0;
+        new_frame_submit_gap_max_us = 0;
+        last_new_frame_submit_ns = 0;
         stream_started_ns = 0;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         video_queue_packets = 0; video_queue_bytes = 0;
@@ -366,16 +366,16 @@ struct PerfStats {
         while (depth > current &&
                !decoded_pending_depth_high.compare_exchange_weak(current, depth)) {}
     }
-    void recordPresentedFrame() {
-        unique_video_frames_presented++;
+    void recordNewFrameSubmit() {
+        unique_video_frames_submitted++;
         const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        const int64_t previous = last_present_ns.exchange(now_ns);
+        const int64_t previous = last_new_frame_submit_ns.exchange(now_ns);
         if (previous <= 0 || now_ns <= previous) return;
         const uint64_t gap_us = static_cast<uint64_t>((now_ns - previous) / 1000);
-        uint64_t current = present_gap_max_us.load();
+        uint64_t current = new_frame_submit_gap_max_us.load();
         while (gap_us > current &&
-               !present_gap_max_us.compare_exchange_weak(current, gap_us)) {}
+               !new_frame_submit_gap_max_us.compare_exchange_weak(current, gap_us)) {}
     }
     void recordVideoQueue(uint32_t packets, uint64_t bytes,
                           uint32_t oldest_age_ms) {

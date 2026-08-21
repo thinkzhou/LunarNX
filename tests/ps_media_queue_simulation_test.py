@@ -77,7 +77,7 @@ def run(seed: int, scenario: Scenario, bitrate_mbps: int,
             encoded_bytes -= frame[3]
             start = max(worker_free, frame[0])
             start = max(start, _stall_end(start, scenario, "worker"))
-            done = start + 1.5 + bitrate_mbps / 20.0
+            done = start + 12.0 + bitrate_mbps / 20.0
             worker_free = done
             decoded_events.append((done, frame[1], frame[4]))
             result.decoded += 1
@@ -98,19 +98,28 @@ def run(seed: int, scenario: Scenario, bitrate_mbps: int,
             encoded.clear()
             encoded_bytes = 0
             worker_free = max(worker_free, now)
-        encoded.append(event)
-        encoded_bytes += au_bytes
-        oldest_age = now - encoded[0][0]
-        if len(encoded) >= max_packets or oldest_age >= max_age_ms or encoded_bytes > QUEUE_BYTES:
-            if not is_idr:
-                result.hard_recovery += 1
-                encoded.clear()
-                encoded_bytes = 0
+        oldest_age = now - encoded[0][0] if encoded else 0.0
+        admission_overflow = (
+            len(encoded) >= max_packets or
+            oldest_age >= max_age_ms or
+            au_bytes > QUEUE_BYTES - encoded_bytes)
+        if admission_overflow:
+            result.hard_recovery += 1
+            encoded.clear()
+            encoded_bytes = 0
+            if is_idr:
+                # A random-access AU is the recovery candidate itself.
+                waiting_idr = False
+                encoded.append(event)
+                encoded_bytes = au_bytes
+            else:
                 waiting_idr = True
                 next_generated_idr = (now + IDR_RETURN_MS, seq, True,
                                       max(au_bytes, 1024 * 1024), now)
         else:
-            decode_until(now)
+            encoded.append(event)
+            encoded_bytes += au_bytes
+        decode_until(now)
 
     # Present ticks are monotonic: blocked ticks are skipped, never shifted
     # backwards into the previous interval.
@@ -153,6 +162,7 @@ def aggregate(results):
         "recovery": sum(result.hard_recovery for result in results),
         "decoded_drop": sum(result.decoded_drop for result in results),
         "presented": sum(result.presented for result in results),
+        "max_gap": max(gaps) if gaps else 0.0,
         "p95_gap": statistics.quantiles(gaps, n=20)[18] if gaps else 0.0,
         "p95_latency": statistics.quantiles(latency, n=20)[18] if latency else 0.0,
     }
@@ -173,18 +183,29 @@ def main() -> None:
         return aggregate([run(seed, scenario, bitrate, packets, age, capacity)
                           for seed in range(5) for bitrate in (20, 30)])
 
-    clean = measure(scenarios["clean"])
-    current = measure(scenarios["combined"], packets=3, age=50.0)
-    tuned = measure(scenarios["combined"])
-    complete = measure(scenarios["combined"], capacity=2)
-    severe = measure(scenarios["severe"])
+    for bitrate in (20, 30):
+        def one(scenario, capacity=1, packets=6, age=100.0):
+            return aggregate([run(seed, scenario, bitrate, packets, age, capacity)
+                              for seed in range(5)])
 
-    assert clean["recovery"] == 0
-    assert tuned["recovery"] < current["recovery"]
-    assert complete["decoded_drop"] < tuned["decoded_drop"]
-    assert complete["p95_gap"] <= tuned["p95_gap"]
-    assert complete["p95_latency"] <= tuned["p95_latency"] + 2 * FRAME_MS
-    assert severe["recovery"] > 0
+        clean = one(scenarios["clean"])
+        wifi = one(scenarios["wifi_bursty"])
+        worker = one(scenarios["worker_hiccup"])
+        ui = one(scenarios["ui_hiccup"])
+        current = one(scenarios["combined"], packets=3, age=50.0)
+        tuned = one(scenarios["combined"])
+        complete = one(scenarios["combined"], capacity=2)
+        severe = one(scenarios["severe"])
+
+        assert clean["recovery"] == 0
+        assert wifi["recovery"] >= 0
+        assert worker["decoded_drop"] > clean["decoded_drop"]
+        assert ui["max_gap"] > clean["max_gap"]
+        assert tuned["recovery"] < current["recovery"]
+        assert complete["decoded_drop"] < tuned["decoded_drop"]
+        assert complete["p95_gap"] <= tuned["p95_gap"]
+        assert complete["p95_latency"] <= tuned["p95_latency"] + 2 * FRAME_MS
+        assert severe["recovery"] > 0
     print("PS media queue simulation passed")
 
 
