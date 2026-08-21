@@ -1351,12 +1351,11 @@ void XboxStreamSession::controlLoop(std::string session_id,
                                     int keep_alive_seconds,
                                     RuntimeCallbacks callbacks) {
     const auto keep_alive_interval =
-        std::chrono::seconds(std::max(1, keep_alive_seconds / 2));
+        std::chrono::seconds(std::max(1, keep_alive_seconds));
     constexpr auto token_refresh_interval = std::chrono::minutes(15);
     auto next_keep_alive = std::chrono::steady_clock::now() + keep_alive_interval;
     auto next_token_refresh =
         std::chrono::steady_clock::now() + token_refresh_interval;
-    uint32_t keep_alive_failures = 0;
     auto cancel = [this, callbacks]() {
         return !streaming_.load() || isCancelled(callbacks);
     };
@@ -1381,7 +1380,7 @@ void XboxStreamSession::controlLoop(std::string session_id,
             if (now >= next_keep_alive && streaming_.load() &&
                 !isCancelled(callbacks)) {
                 const auto keep_alive_started = std::chrono::steady_clock::now();
-                bool keep_alive_ok = false;
+                api::KeepAliveResult keep_alive_result;
                 try {
                     std::lock_guard<std::mutex> api_lock(session_api_mutex_);
                     std::string active_session_id;
@@ -1393,10 +1392,33 @@ void XboxStreamSession::controlLoop(std::string session_id,
                         // The stream worker is between fresh session
                         // associations. Do not send keep-alive for the old
                         // session while it is being replaced.
-                        keep_alive_ok = true;
+                        keep_alive_result.ok = true;
                     } else if (streaming_.load() && !isCancelled(callbacks)) {
-                        keep_alive_ok = session_client_.keepAlive(
+                        keep_alive_result = session_client_.keepAliveDetailed(
                             active_session_id, cancel);
+                        if (!keep_alive_result.ok && keep_alive_result.isAuthError() &&
+                            callbacks.refresh_tokens && streaming_.load() &&
+                            !isCancelled(callbacks)) {
+                            lunar::diagnosticLog(
+                                "xbox-stream",
+                                "Keep-alive auth failure status=%d; refreshing streaming token",
+                                keep_alive_result.status_code);
+                            const bool refreshed = callbacks.refresh_tokens(true);
+                            if (refreshed && streaming_.load() &&
+                                !isCancelled(callbacks)) {
+                                keep_alive_result =
+                                    session_client_.keepAliveDetailed(active_session_id, cancel);
+                                lunar::diagnosticLog(
+                                    "xbox-stream",
+                                    "Keep-alive retry after token refresh result=%s status=%d",
+                                    keep_alive_result.ok ? "success" : "failed",
+                                    keep_alive_result.status_code);
+                            } else {
+                                lunar::diagnosticLog(
+                                    "xbox-stream",
+                                    "Keep-alive token refresh failed; preserving media session");
+                            }
+                        }
                     }
                 } catch (const std::exception& e) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
@@ -1417,16 +1439,19 @@ void XboxStreamSession::controlLoop(std::string session_id,
                         std::chrono::steady_clock::now() - keep_alive_started).count();
                 perf_.recordKeepAlive(
                     static_cast<uint32_t>(std::max<int64_t>(0, keep_alive_duration)),
-                    keep_alive_ok);
-                if (keep_alive_ok) {
-                    keep_alive_failures = 0;
-                } else if (++keep_alive_failures >= 2) {
-                    lunar::persistentEventLog(
+                    keep_alive_result.ok);
+                if (!keep_alive_result.ok &&
+                    keep_alive_result.isTerminalSessionError()) {
+                    lunar::diagnosticLog(
                         "xbox-stream",
-                        "keep-alive failed consecutive=%u action=reconnect",
-                        keep_alive_failures);
-                    control_recovery_requested_ = true;
-                    control_cv_.notify_all();
+                        "Keep-alive reports session terminal status=%d; waiting for media liveness before reconnect",
+                        keep_alive_result.status_code);
+                } else if (!keep_alive_result.ok && !keep_alive_result.isAuthError()) {
+                    lunar::diagnosticLog(
+                        "xbox-stream",
+                        "Keep-alive failed status=%d network=%s; preserving WebRTC media",
+                        keep_alive_result.status_code,
+                        keep_alive_result.network_error ? "true" : "false");
                 }
                 next_keep_alive = now + keep_alive_interval;
             }
@@ -1437,7 +1462,7 @@ void XboxStreamSession::controlLoop(std::string session_id,
                     try {
                         std::lock_guard<std::mutex> api_lock(session_api_mutex_);
                         if (streaming_.load() && !isCancelled(callbacks)) {
-                            refresh_ok = callbacks.refresh_tokens();
+                            refresh_ok = callbacks.refresh_tokens(false);
                         }
                     } catch (const std::exception& e) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG

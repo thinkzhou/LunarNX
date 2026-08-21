@@ -1106,12 +1106,15 @@ bool StreamController::startStreamWithProfile(
         lunar::diagnosticLog("stream-controller", "Stream error: %s", reason.c_str());
         setState(StreamState::Error, reason);
     };
-    callbacks.refresh_tokens = [this]() {
+    callbacks.refresh_tokens = [this](bool force) {
         if (mock_mode_.load()) {
             return true;
         }
         auto& auth_ref = auth();
-        if (!auth_ref.refreshTokensIfNeeded()) {
+        const bool refreshed = force
+            ? auth_ref.refreshStreamingTokens(true)
+            : auth_ref.refreshTokensIfNeeded();
+        if (!refreshed) {
             return false;
         }
         auth_ref.saveTokens(lunar::get_token_path());

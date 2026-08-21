@@ -57,13 +57,22 @@ def main() -> None:
             "the media/WebRTC pump loop must never perform synchronous keep-alive HTTP")
     require("refresh_tokens" not in run_loop,
             "the media/WebRTC pump loop must never perform synchronous token refresh")
-    require("session_client_.keepAlive" in control_loop,
+    require("session_client_.keepAliveDetailed" in control_loop,
             "the control loop must own keep-alive HTTP")
     require("callbacks.refresh_tokens" in control_loop,
             "the control loop must serialize token refresh with keep-alive")
-    require(control_loop.index("session_client_.keepAlive") <
+    require(control_loop.index("session_client_.keepAliveDetailed") <
             control_loop.index("callbacks.refresh_tokens"),
             "preserve the original keep-alive-before-token-refresh order")
+    require("std::chrono::seconds(std::max(1, keep_alive_seconds))" in control_loop,
+            "keep-alive cadence must use the server-provided interval")
+    require("keep_alive_result.isAuthError()" in control_loop and
+            "callbacks.refresh_tokens(true)" in control_loop and
+            control_loop.count("keepAliveDetailed(session_id, cancel)") >= 2,
+            "401/403 keep-alive failures must force token refresh and retry once")
+    require("preserving WebRTC media" in control_loop and
+            "transport_.disconnect()" not in control_loop,
+            "keep-alive failures must not directly tear down healthy WebRTC")
     require("next_keep_alive = now + keep_alive_interval;" in control_loop,
             "keep-alive cadence must remain anchored to its pre-request time")
     require("next_token_refresh = now + token_refresh_interval;" in control_loop,
