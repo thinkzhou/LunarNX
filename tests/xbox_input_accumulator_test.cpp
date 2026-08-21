@@ -29,6 +29,7 @@ int main() {
     input.publish(neutral, true, true);
     auto transitions = input.peekBatch();
     assert(transitions);
+    assert(transitions->reliable);
     assert(transitions->frames.size() == 2);
     assert(transitions->frames[0].a);
     assert(!transitions->frames[1].a);
@@ -97,6 +98,7 @@ int main() {
     input.publish(stick, true, true);
     auto analog = input.peekBatch();
     assert(analog);
+    assert(!analog->reliable);
 
     input.commitBatch(*analog);
     input.publish(neutral, true, false, true);

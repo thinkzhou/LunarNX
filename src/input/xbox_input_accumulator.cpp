@@ -57,6 +57,7 @@ std::optional<XboxInputAccumulator::Batch> XboxInputAccumulator::peekBatch() con
     }
 
     Batch batch;
+    batch.reliable = !transitions_.empty() || force_snapshot_;
     const size_t transition_count = std::min(
         transitions_.size(), XInputEncoder::kMaxGamepadFrames);
     batch.frames.reserve(XInputEncoder::kMaxGamepadFrames);

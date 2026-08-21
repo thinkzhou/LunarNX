@@ -68,6 +68,10 @@ def main():
     require("xinput_.encodeFrames(input_batch->frames)" in run_loop and
             "channels_.sendInputPacket" in run_loop,
             "the WebRTC owner loop must encode and send queued input frames")
+    require("input_batch->reliable" in run_loop and
+            "pending_input_batch" in run_loop and
+            "consumeInputDeliveryResult" in run_loop,
+            "transition batches must remain pending until the owner pump reports send completion")
     require("xinput_.reset()" not in source,
             "input sequence must reset with a new WebRTC association, not encoder state")
     loop_process_pos = run_loop.index("transport_.processEvents();")

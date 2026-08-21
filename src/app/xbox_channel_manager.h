@@ -13,6 +13,11 @@ namespace lunar::app {
 
 class XboxChannelManager {
 public:
+    struct InputPacketSubmission {
+        bool accepted = false;
+        uint64_t ticket = 0;
+    };
+
     explicit XboxChannelManager(WebRtcTransport& transport);
 
     void reset();
@@ -21,7 +26,9 @@ public:
                        const uint8_t* metadata,
                        size_t metadata_len,
                        const CancelCallback& cancel);
-    bool sendInputPacket(const uint8_t* data, size_t len);
+    InputPacketSubmission sendInputPacket(const uint8_t* data,
+                                          size_t len,
+                                          bool reliable);
     bool sendControlMessage(std::string_view json);
     bool sendMessageHandshake();
     bool requestVideoKeyframe(bool ifr_requested);

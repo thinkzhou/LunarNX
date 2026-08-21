@@ -211,10 +211,17 @@ bool XboxChannelManager::startProtocol(const StreamProfile& profile,
     return flushed;
 }
 
-bool XboxChannelManager::sendInputPacket(const uint8_t* data, size_t len) {
-    // Gamepad packets contain a complete state. Never put a stale transition
-    // on the reliable retry path; the next snapshot supersedes it.
-    return transport_.sendLatestInputData(data, len);
+XboxChannelManager::InputPacketSubmission
+XboxChannelManager::sendInputPacket(const uint8_t* data,
+                                    size_t len,
+                                    bool reliable) {
+    if (reliable) {
+        const uint64_t ticket = transport_.sendInputTransitionData(data, len);
+        return {ticket != 0, ticket};
+    }
+    // A snapshot contains only the current absolute state, so an unsent older
+    // snapshot can safely be replaced by the newest one.
+    return {transport_.sendLatestInputData(data, len), 0};
 }
 
 bool XboxChannelManager::sendControlMessage(std::string_view json) {
