@@ -41,6 +41,16 @@ struct PerfStats {
     std::atomic<float> ps_packet_loss_fraction{0.0f};
     std::atomic<uint32_t> ps_frames_lost{0};
     std::atomic<uint32_t> video_decode_errors{0};
+    // Decoded-frame handoff visibility. These counters distinguish renderer
+    // queue pressure from encoded admission and decoder drops.
+    std::atomic<uint32_t> decoded_pending_drop_oldest{0};
+    std::atomic<uint32_t> decoded_pending_depth_high{0};
+    std::atomic<uint32_t> unique_video_frames_presented{0};
+    std::atomic<uint64_t> present_gap_max_us{0};
+    std::atomic<int64_t> last_present_ns{0};
+    // Monotonic timestamp of the first frame successfully submitted for this
+    // stream session. Zero means that playback has not started yet.
+    std::atomic<uint64_t> stream_started_ns{0};
 
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     // Sparse drop-diagnostic context. These are cheap rolling samples; file
@@ -166,6 +176,12 @@ struct PerfStats {
         video_frame_drops = 0; video_sync_drops = 0; video_queue_drops = 0;
         video_jitter_us = 0; network_rtt_ms = 0;
         video_decode_errors = 0;
+        decoded_pending_drop_oldest = 0;
+        decoded_pending_depth_high = 0;
+        unique_video_frames_presented = 0;
+        present_gap_max_us = 0;
+        last_present_ns = 0;
+        stream_started_ns = 0;
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         video_queue_packets = 0; video_queue_bytes = 0;
         video_queue_oldest_age_ms = 0; video_queue_high_watermark_packets = 0;
@@ -344,6 +360,23 @@ struct PerfStats {
         video_queue_drops += count;
     }
     void recordVideoDecodeError() { video_decode_errors++; }
+    void recordDecodedPendingDropOldest() { decoded_pending_drop_oldest++; }
+    void recordDecodedPendingDepth(uint32_t depth) {
+        uint32_t current = decoded_pending_depth_high.load();
+        while (depth > current &&
+               !decoded_pending_depth_high.compare_exchange_weak(current, depth)) {}
+    }
+    void recordPresentedFrame() {
+        unique_video_frames_presented++;
+        const int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const int64_t previous = last_present_ns.exchange(now_ns);
+        if (previous <= 0 || now_ns <= previous) return;
+        const uint64_t gap_us = static_cast<uint64_t>((now_ns - previous) / 1000);
+        uint64_t current = present_gap_max_us.load();
+        while (gap_us > current &&
+               !present_gap_max_us.compare_exchange_weak(current, gap_us)) {}
+    }
     void recordVideoQueue(uint32_t packets, uint64_t bytes,
                           uint32_t oldest_age_ms) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG

@@ -2,6 +2,7 @@
 
 #include "ps_media_bridge.h"
 #include "../diagnostics.h"
+#include "../stream/perf_stats.h"
 #include <cstring>
 #include <algorithm>
 #include <chrono>
@@ -59,6 +60,20 @@ bool PsMediaBridge::onVideoSample(uint8_t* data, size_t size, int32_t frames_los
         video_lost_frames_ = 0;
         video_enqueue_failures_ = 0;
         video_summary_at_ = now;
+    }
+    if (now - video_detail_summary_at_ >= std::chrono::seconds(10)) {
+        const auto* perf = media_.diagnosticsPerfStats();
+        if (perf) {
+            lunar::diagnosticLog(
+                "ps-media",
+                "10s decoded_queue_drop_oldest=%u decoded_queue_depth_high=%u "
+                "unique_presented=%u present_gap_max_us=%llu",
+                perf->decoded_pending_drop_oldest.load(),
+                perf->decoded_pending_depth_high.load(),
+                perf->unique_video_frames_presented.load(),
+                static_cast<unsigned long long>(perf->present_gap_max_us.load()));
+        }
+        video_detail_summary_at_ = now;
     }
     return queued;
 }

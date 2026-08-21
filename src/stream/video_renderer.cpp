@@ -453,6 +453,7 @@ namespace {
 }
 
 struct Deko3DRenderContext {
+  PerfStats* perf=nullptr;
   bool ok=false;
   dk::Device dev=nullptr;
   dk::Queue q=nullptr;
@@ -581,6 +582,7 @@ void clearPendingFrames(Deko3DRenderContext& s) {
 void enqueuePendingFrame(Deko3DRenderContext& s, AVFrame* frame) {
   if(!frame)return;
   if(s.pending_count==s.pending_frames.size()){
+    if(s.perf) s.perf->recordDecodedPendingDropOldest();
     av_frame_free(&s.pending_frames[s.pending_head]);
     s.pending_head=(s.pending_head+1)%s.pending_frames.size();
     s.pending_count--;
@@ -588,6 +590,8 @@ void enqueuePendingFrame(Deko3DRenderContext& s, AVFrame* frame) {
   const size_t tail=(s.pending_head+s.pending_count)%s.pending_frames.size();
   s.pending_frames[tail]=frame;
   s.pending_count++;
+  if(s.perf) s.perf->recordDecodedPendingDepth(
+      static_cast<uint32_t>(s.pending_count));
 }
 
 AVFrame* dequeuePendingFrame(Deko3DRenderContext& s) {
@@ -1369,6 +1373,7 @@ bool VideoRenderer::initialize(const char*,int w,int h){
     lunar::diagnosticLog("render","context alloc done ptr=%p",ctx_);
   }
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);
+  s->perf=perf_;
   if(s->ok)shutdown();
   s->pending_render_fault=&pending_render_fault_;
 
@@ -1845,6 +1850,7 @@ void VideoRenderer::present(){
                    "cmdlist=%p queue_error=%d", reinterpret_cast<void*>(s->cl),
                    s->q && s->q.isInErrorState() ? 1 : 0);
   s->q.submitCommands(s->cl);
+  if(perf_)perf_->recordPresentedFrame();
   hardwareProbeLog(frame_id, "queue-submit-after",
                    "slice=%zu queue_error=%d", submitted_index,
                    s->q && s->q.isInErrorState() ? 1 : 0);
