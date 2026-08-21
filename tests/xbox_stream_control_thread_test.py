@@ -110,8 +110,8 @@ def main() -> None:
     )
     require("api_lock(session_api_mutex_)" in reconnect_section,
             "reconnect signaling must exclude control-plane API operations")
-    require("media_.prepareForNewVideoSource" in reconnect_section,
-            "a fresh WebRTC association must reset the media source epoch")
+    require("media_.prepareForNewMediaSource" in reconnect_section,
+            "a fresh WebRTC association must reset the complete media source epoch")
 
     print("Xbox stream control thread tests passed")
 

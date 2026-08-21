@@ -21,6 +21,9 @@ public:
 
     bool initialize(int sample_rate = 48000, int channels = 2);
     bool play(const AudioFrame& frame);
+    // Drop queued samples without tearing down the audio device. This is used
+    // when a new WebRTC association becomes the active media source.
+    void flush();
     size_t queuedSampleCount();
     void setPerfStats(PerfStats* stats) { perf_ = stats; }
     void setVolume(float volume);

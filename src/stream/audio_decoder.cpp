@@ -95,6 +95,16 @@ bool AudioDecoder::decodeMissing(uint64_t timestamp) {
                           true);
 }
 
+void AudioDecoder::reset() {
+    if (!initialized_ || !decoder_) return;
+    const int result = opus_multistream_decoder_ctl(
+        static_cast<OpusMSDecoder*>(decoder_), OPUS_RESET_STATE);
+    if (result != OPUS_OK) {
+        lunar::diagnosticLog("audio-decoder", "opus reset failed ret=%d", result);
+    }
+    last_frame_samples_ = kSamplesPerFrame;
+}
+
 bool AudioDecoder::decodeInternal(const uint8_t* data,
                                   size_t len,
                                   int frame_size,

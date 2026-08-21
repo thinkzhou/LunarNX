@@ -609,7 +609,7 @@ bool XboxStreamSession::reconnectWithFreshSession(
 
     const std::string old_session_id = session_id;
     prepareInputForReconnect();
-    media_.prepareForNewVideoSource("fresh WebRTC association");
+    media_.prepareForNewMediaSource("fresh WebRTC association");
     transport_.disconnect();
     channels_.reset();
     session_id.clear();

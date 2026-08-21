@@ -14,8 +14,10 @@ namespace lunar::webrtc {
 
 namespace {
 constexpr uint32_t kMaxReliableSendAttempts = 128;
+constexpr uint32_t kMaxLatestSendAttempts = 4;
 constexpr uint32_t kMaxConsecutiveSctpSendFailures = 128;
 constexpr std::chrono::milliseconds kMaxSctpTransientFailureAge{500};
+constexpr std::chrono::milliseconds kMaxLatestTransientFailureAge{32};
 constexpr std::chrono::milliseconds kMediaStatsCacheInterval{250};
 constexpr uint64_t kHomeMaxJitterHoldMs = 48;
 constexpr uint64_t kCloudMaxJitterHoldMs = 120;
@@ -531,6 +533,9 @@ bool PeerManager::enqueueData(OutboundType type,
                 if (command.type == type) {
                     command.payload.assign(data, data + len);
                     command.id = next_outbound_command_id_++;
+                    command.attempts = 0;
+                    command.first_attempt_at = {};
+                    command.expires_at = {};
                     return true;
                 }
             }
@@ -894,9 +899,14 @@ bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
     const bool reliable_budget_available =
         command.attempts + 1 < kMaxReliableSendAttempts &&
         now - first_attempt < kMaxSctpTransientFailureAge;
+    const bool latest_budget_available =
+        command.attempts + 1 < kMaxLatestSendAttempts &&
+        now - first_attempt < kMaxLatestTransientFailureAge;
     const bool keep_for_retry =
         (transient && isReliableCommand(command.type) &&
          reliable_budget_available) ||
+        (transient && command.type == OutboundType::InputLatest &&
+         latest_budget_available) ||
         (result < 0 && command.type == OutboundType::Nack &&
          command.attempts == 0) ||
         (result < 0 && command.type == OutboundType::Pli &&
@@ -913,6 +923,7 @@ bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
             outbound_commands_.erase(queued);
         } else if (queued != outbound_commands_.end() &&
                    (isReliableCommand(command.type) ||
+                    command.type == OutboundType::InputLatest ||
                     command.type == OutboundType::Nack ||
                     command.type == OutboundType::Pli)) {
             queued->attempts++;

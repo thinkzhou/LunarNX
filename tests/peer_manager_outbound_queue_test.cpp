@@ -247,6 +247,34 @@ int main() {
     assert(!Access::complete(peer, new_input, kWantWrite));
     assert(Access::size(peer) == 0);
 
+    // A latest snapshot may be briefly backpressured, but it must remain
+    // available for a short retry window instead of waiting for heartbeat.
+    PeerManager latest_retry;
+    Access::connect(latest_retry);
+    assert(latest_retry.sendLatestInputData(latest_input,
+                                             sizeof(latest_input)));
+    auto latest_retry_command = Access::front(latest_retry);
+    assert(Access::complete(latest_retry, latest_retry_command, kWantWrite));
+    assert(Access::size(latest_retry) == 1);
+    latest_retry_command = Access::front(latest_retry);
+    assert(latest_retry_command.attempts == 1);
+    assert(!Access::complete(latest_retry, latest_retry_command,
+                             static_cast<int>(sizeof(latest_input))));
+    assert(Access::size(latest_retry) == 0);
+
+    // Replacing a backpressured snapshot starts a fresh retry budget for the
+    // newer absolute state.
+    PeerManager latest_retry_reset;
+    Access::connect(latest_retry_reset);
+    assert(latest_retry_reset.sendLatestInputData(input_draft_a,
+                                                  sizeof(input_draft_a)));
+    auto old_retry = Access::front(latest_retry_reset);
+    assert(Access::complete(latest_retry_reset, old_retry, kWantWrite));
+    assert(latest_retry_reset.sendLatestInputData(input_draft_b,
+                                                  sizeof(input_draft_b)));
+    const auto new_retry = Access::front(latest_retry_reset);
+    assert(new_retry.attempts == 0);
+
     PeerManager latest_failure;
     Access::connect(latest_failure);
     for (int attempt = 0; attempt < 127; ++attempt) {
