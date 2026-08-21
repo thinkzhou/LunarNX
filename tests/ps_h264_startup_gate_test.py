@@ -52,10 +52,12 @@ require("bool packet_accepted = false" in decoder and
         "submitted_timestamps_.push_back(timestamp)" in decoder,
         "NVDEC decode must distinguish accepted packets from drained output and "
         "track timestamps only for accepted access units")
-require("if (prepended_parameter_sets) parameter_sets_pending_ = false" in decoder and
-        decoder.index("if (prepended_parameter_sets) parameter_sets_pending_ = false") >
-        decoder.index("bool packet_accepted = false"),
-        "cached parameter sets must remain pending until the AU is accepted")
+# Parameter-set ownership now belongs to PsVideoDecoder rather than the
+# shared FFmpeg/NVDEC plumbing.  The shared decoder only receives a complete
+# access unit after the PS-specific gate and prepend logic has run.
+require("if (parameter_sets_pending_ && !parameter_sets_.empty())" in ps_decode and
+        "parameter_sets_pending_ = false" in ps_decode,
+        "PS decoder must prepend and consume cached parameter sets in its own path")
 
 require("last_recovery_request_" in controller and
         "requestRecoveryIDR" in controller and
