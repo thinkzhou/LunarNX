@@ -832,7 +832,11 @@ void AuthManager::setForceRegionIp(const std::string& ip) {
 
 bool AuthManager::refreshStreamingTokens(bool force) {
     if (msal_refresh_token_.empty()) {
-        return hasUsableStreamingTokens();
+        // A forced refresh is an authentication operation, not a token
+        // availability check.  Do not report success just because an older
+        // token is still cached; callers use this result before retrying an
+        // authenticated request.
+        return !force && hasUsableStreamingTokens();
     }
     if (force) {
         // Cloud /connect uses MSAL access token ("lpt"). Even if gsToken is still
@@ -841,7 +845,14 @@ bool AuthManager::refreshStreamingTokens(bool force) {
         tokens_.data().expires_at_ms = 1; // force shouldRefreshTokens() true
         cloud_token_ = {};
     }
-    if (!refreshTokensIfNeeded() && !hasUsableStreamingTokens()) {
+    const bool refreshed = refreshTokensIfNeeded();
+    if (force) {
+        // Never substitute stale web/gs tokens for the result of the forced
+        // refresh.  A failed refresh must prevent a keep-alive retry with
+        // credentials that may already be expired.
+        return refreshed && hasUsableStreamingTokens();
+    }
+    if (!refreshed && !hasUsableStreamingTokens()) {
         return false;
     }
     return hasUsableStreamingTokens();

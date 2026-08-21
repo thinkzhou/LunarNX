@@ -11,6 +11,8 @@ def main():
     reader = Path("src/input/gamepad_reader.cpp").read_text()
     rumble = Path("src/input/rumble_controller.cpp").read_text()
     session = Path("src/app/xbox_stream_session.cpp").read_text()
+    encoder = Path("src/input/xinput_encoder.h").read_text()
+    peer = Path("src/webrtc/peer_manager.cpp").read_text()
 
     initialize_start = reader.index("bool GamepadReader::initialize()")
     initialize_end = reader.index("GamepadState GamepadReader::read()")
@@ -20,10 +22,21 @@ def main():
     require("pad_state_ = nullptr;" in initialize,
             "initialize must clear the old PadState pointer")
 
-    reset_pos = session.index("xinput_.reset();")
-    metadata_pos = session.index("encodeMetadata(0)")
-    require(reset_pos < metadata_pos,
-            "encoder reset must happen before metadata")
+    require("xinput_.reset()" not in session,
+            "input sequence lifecycle must not be tied to the encoder")
+    require("sequence_" not in encoder and "void reset()" not in encoder,
+            "XInputEncoder must remain stateless")
+    initialize_start = peer.index("bool PeerManager::initialize()")
+    initialize_end = peer.index("void PeerManager::setCallbacks", initialize_start)
+    require("next_input_sequence_ = 0;" in peer[initialize_start:initialize_end],
+            "a new PeerManager association must reset input sequence to zero")
+    require(peer.count("++next_input_sequence_;") == 1 and
+            "void PeerManager::commitSequencedInputResult(int result)" in peer,
+            "input sequence may advance only in the send-result commit helper")
+    commit_start = peer.index("void PeerManager::commitSequencedInputResult")
+    commit_end = peer.index("int PeerManager::sendInputCommand", commit_start)
+    require("if (result >= 0)" in peer[commit_start:commit_end],
+            "failed input sends must not consume a sequence")
 
     rumble_start = rumble.index("bool RumbleController::initialize()")
     rumble_end = rumble.index("void RumbleController::setRumble")

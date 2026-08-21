@@ -44,13 +44,21 @@ def main():
         "Jitter recovery must coalesce PLI through the session request path",
     )
     require(
-        "updateAdaptiveTiming" in Path(
-            "src/webrtc/video_rtp_jitter_buffer.cpp"
-        ).read_text()
-        and "estimated_jitter_ms" in jitter_header
-        and "video_jitter_.setNetworkRttMs" in peer_manager
-        and "video_jitter_.setHoldMs" not in peer_manager,
-        "Adaptive jitter hold must use measured frame variation and RTT only for recovery",
+        "VideoRtpJitterBuffer::kMinHoldMs" in peer_manager
+        and "smoothed_rtt_ms_" in peer_manager
+        and "kHomeMaxJitterHoldMs = 48" in peer_manager
+        and "kCloudMaxJitterHoldMs = 180" in peer_manager
+        and "kCloudRecoveryHoldMs = 300" in peer_manager
+        and "smoothed_rtt_ms_ + 40" in peer_manager
+        and "smoothed_rtt_ms_ + 30" in peer_manager
+        and "smoothed_rtt_ms_ * 2" in peer_manager
+        and "cloud ? 6 : 2" in peer_manager
+        and "setHeadBlockedPolicy" in jitter_header
+        and "kMediaStatsCacheInterval{250}" in peer_manager
+        and "networkStatsSnapshot" in peer_manager
+        and "last_rtt_sample_ms_" in peer_manager
+        and "setVideoJitterMode" in peer_manager,
+        "Adaptive jitter hold must use smoothed, profile-specific low-latency bounds",
     )
     require(
         "on_video_recovery" in peer_header

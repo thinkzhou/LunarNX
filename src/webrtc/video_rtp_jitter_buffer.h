@@ -29,23 +29,19 @@ struct VideoRtpJitterStats {
     uint32_t nacks = 0;
     uint32_t nack_retries = 0;
     uint32_t resyncs = 0;
+    uint32_t timestamp_discontinuities = 0;
     uint32_t assembly_attempts = 0;
     uint32_t payload_storage_reallocations = 0;
     size_t buffered_bytes = 0;
     size_t buffered_packets = 0;
     size_t buffered_frames = 0;
     uint32_t highest_sequence = 0;
-    uint32_t estimated_jitter_ms = 0;
-    uint32_t adaptive_hold_ms = 0;
-    uint32_t adaptive_recovery_hold_ms = 0;
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
     uint32_t last_gap_packets = 0;
     uint32_t ssrc = 0;
     uint32_t ssrc_changes = 0;
     uint64_t last_arrival_ms = 0;
     uint64_t last_arrival_gap_ms = 0;
     uint64_t max_arrival_gap_ms = 0;
-#endif
 };
 
 class VideoRtpJitterBuffer {
@@ -54,17 +50,18 @@ public:
         std::function<void(const uint8_t*, size_t, uint16_t, uint32_t)>;
     using NackCallback = std::function<bool(uint16_t, uint16_t)>;
     using RecoveryCallback = std::function<void(bool)>;
+    using SourceDiscontinuityCallback = std::function<void(uint32_t)>;
 
-    static constexpr uint64_t kMinHoldMs = 8;
-    static constexpr uint64_t kInitialAdaptiveHoldMs = 120;
-    static constexpr uint64_t kDefaultHoldMs = 120;
+    // The transport selects a Home/Cloud latency profile. These are safety
+    // floors, not the normal hold for every network RTT sample.
+    static constexpr uint64_t kMinHoldMs = 16;
+    static constexpr uint64_t kDefaultHoldMs = 60;
     // A progressing access unit may legitimately span the ordinary idle
     // deadline when the receiver thread is briefly descheduled. This is only
     // a final memory-safety bound; normal latency is governed by hold_ms.
     static constexpr uint64_t kMaxFrameHoldMs = 1000;
-    static constexpr uint64_t kDefaultRecoveryHoldMs = 300;
-    static constexpr uint64_t kMinAdaptiveRecoveryHoldMs = 120;
-    static constexpr uint64_t kMaxRecoveryHoldMs = 800;
+    static constexpr uint64_t kDefaultRecoveryHoldMs = 180;
+    static constexpr uint64_t kMaxRecoveryHoldMs = 500;
     static constexpr size_t kMaxBufferedFrames = 32;
     static constexpr size_t kMaxBufferedPackets = 2048;
     static constexpr size_t kMaxBufferedBytes = 3 * 1024 * 1024;
@@ -78,6 +75,9 @@ public:
     void reset();
     void setHoldMs(uint64_t hold_ms);
     void setNetworkRttMs(uint64_t rtt_ms);
+    // Bound head-of-line waiting independently from the ordinary incomplete
+    // frame hold. Home LAN streams use a smaller budget than cloud streams.
+    void setHeadBlockedPolicy(size_t max_frames, uint64_t min_hold_ms);
     // This longer window applies only to a candidate IDR while recovering.
     // Ordinary P-frames keep the low-latency hold above.
     void setRecoveryHoldMs(uint64_t hold_ms);
@@ -86,7 +86,8 @@ public:
                  uint64_t now_ms,
                  const EmitCallback& emit,
                  const NackCallback& nack,
-                 const RecoveryCallback& recovery);
+                 const RecoveryCallback& recovery,
+                 const SourceDiscontinuityCallback& source_discontinuity = {});
 
     VideoRtpJitterStats stats() const;
     VideoRtpReceiverReport receiverReport();

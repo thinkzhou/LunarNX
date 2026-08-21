@@ -50,7 +50,7 @@ def main() -> None:
     require("s->fms.size() >= 8" not in renderer,
             "NvMap mappings should follow Moonlight and remain cached for the bounded decoder pool")
 
-    reset_start = pipeline.index("bool MediaPipeline::resetVideoDecoderForKeyframe()")
+    reset_start = pipeline.index("bool MediaPipeline::resetVideoDecoderForKeyframe(")
     reset_end = pipeline.index("void MediaPipeline::processVideoPacket", reset_start)
     reset = pipeline[reset_start:reset_end]
     require(reset.index("video_renderer_->prepareDecoderReset()") <

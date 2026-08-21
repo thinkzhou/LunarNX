@@ -42,6 +42,20 @@ struct SessionConfig {
     int keep_alive_seconds = 300;
 };
 
+struct KeepAliveResult {
+    bool ok = false;
+    int status_code = 0;
+    bool network_error = false;
+
+    bool isAuthError() const {
+        return status_code == 401 || status_code == 403;
+    }
+
+    bool isTerminalSessionError() const {
+        return status_code == 404 || status_code == 410;
+    }
+};
+
 struct CreateSessionRequest {
     GssvSessionKind kind = GssvSessionKind::Home;
     std::string server_id;   // home
@@ -95,6 +109,8 @@ public:
     std::string getIceCandidates(const std::string& session_id, HttpClient::CancelCallback cancel = {});
 
     // Session lifecycle
+    KeepAliveResult sendKeepAliveDetailed(const std::string& session_id,
+                                          HttpClient::CancelCallback cancel = {});
     bool sendKeepAlive(const std::string& session_id, HttpClient::CancelCallback cancel = {});
     bool deleteSession(const std::string& session_id, HttpClient::CancelCallback cancel = {});
     bool cleanupActiveSessions(GssvSessionKind kind,

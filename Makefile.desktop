@@ -14,6 +14,9 @@ COMMON_INCLUDES = -isysroot $(SDK_PATH) \
 		           -I/opt/homebrew/include \
 	           -I/opt/homebrew/include/SDL2 \
 		           -Isrc -Ilib \
+		           -Ilib/libpeer/third_party/mbedtls/include \
+		           -Ilib/libpeer/third_party/libsrtp/include \
+		           -Ilib/libpeer/third_party/libsrtp/crypto/include \
 		           -idirafter lib/libpeer/include -idirafter lib/libpeer/include/sys \
 		           -Ilib/libpeer/src \
 	           -Ilib/libpeer/build/dist/include \
@@ -30,12 +33,19 @@ endif
 CXXFLAGS = -std=gnu++17 -O2 -g -Wall $(COMMON_INCLUDES) $(COMMON_DEFINES)
 CFLAGS   = -O2 $(COMMON_INCLUDES) $(COMMON_DEFINES)
 
-LDFLAGS  = -L/opt/homebrew/lib -Llib/libpeer/build/dist/lib \
+LDFLAGS  = -Llib/libpeer/third_party/mbedtls/build_host/library \
+	           -Llib/libpeer/third_party/libsrtp/build_host \
+	           -L/opt/homebrew/lib -Llib/libpeer/build/dist/lib \
 	           -lSDL2 -lavcodec -lavutil -lswresample \
 	           -lopus -lcurl -lmbedtls -lmbedcrypto -lmbedx509 -lsrtp2 \
 	           -lssl -lcrypto \
            -framework CoreFoundation -framework CoreVideo \
            -framework Cocoa -framework IOKit
+
+WEBRTC_TEST_LDFLAGS = \
+	-Llib/libpeer/third_party/mbedtls/build_host/library \
+	-Llib/libpeer/third_party/libsrtp/build_host \
+	-lmbedtls -lmbedx509 -lmbedcrypto -lsrtp2
 
 BUILD    = build/pc
 TARGET   = $(BUILD)/LunarNX_Desktop
@@ -74,7 +84,8 @@ CXX_SRCS = src/platform/desktop_main.cpp lib/qrcodegen/qrcodegen.cpp \
            src/stream/video_decoder.cpp src/stream/audio_decoder.cpp \
            src/stream/video_renderer.cpp src/stream/audio_player.cpp src/stream/av_sync.cpp \
            src/stream/software_video_frame.cpp \
-           src/input/gamepad_reader.cpp src/input/xinput_encoder.cpp src/input/rumble_controller.cpp
+           src/input/gamepad_reader.cpp src/input/xinput_encoder.cpp \
+           src/input/xbox_input_accumulator.cpp src/input/rumble_controller.cpp
 
 C_OBJS   = $(C_SRCS:%.c=$(BUILD)/%.o)
 CXX_OBJS = $(CXX_SRCS:%.cpp=$(BUILD)/%.o)
@@ -87,6 +98,7 @@ XCLOUD_HANDSHAKE_PROBE_OBJS = $(BUILD)/src/platform/desktop_xcloud_handshake_pro
                     $(BUILD)/src/app/xbox_session_client.o \
                     $(BUILD)/src/app/ice_candidate_processor.o \
                     $(BUILD)/src/webrtc/peer_manager.o \
+	                    $(BUILD)/src/input/xinput_encoder.o \
 	                    $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
                     $(BUILD)/src/webrtc/xbox_input_feedback.o \
                     $(BUILD)/src/platform/network_worker.o \
@@ -120,6 +132,10 @@ VIDEO_CODEC_TEST_OBJS = $(BUILD)/tests/video_codec_test.o
 XINPUT_TEST_OBJS = $(BUILD)/tests/xinput_encoder_test.o \
 	                 $(BUILD)/src/input/xinput_encoder.o
 
+XBOX_INPUT_ACCUMULATOR_TEST_OBJS = \
+	$(BUILD)/tests/xbox_input_accumulator_test.o \
+	$(BUILD)/src/input/xbox_input_accumulator.o
+
 STREAM_INPUT_ROUTER_TEST_OBJS = $(BUILD)/tests/stream_input_router_test.o
 
 FEEDBACK_TEST_OBJS = $(BUILD)/tests/xbox_input_feedback_test.o \
@@ -135,12 +151,14 @@ VIDEO_JITTER_TEST_OBJS = $(BUILD)/tests/video_rtp_jitter_buffer_test.o \
 
 OUTBOUND_QUEUE_TEST_OBJS = $(BUILD)/tests/peer_manager_outbound_queue_test.o \
 	                          $(BUILD)/src/webrtc/peer_manager.o \
+	                          $(BUILD)/src/input/xinput_encoder.o \
 	                          $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
 	                          $(BUILD)/src/webrtc/xbox_input_feedback.o \
 	                          $(C_OBJS)
 
 STREAM_RESILIENCE_TEST_OBJS = $(BUILD)/tests/stream_resilience_scenarios_test.o \
 	                             $(BUILD)/src/webrtc/peer_manager.o \
+	                             $(BUILD)/src/input/xinput_encoder.o \
 	                             $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
 	                             $(BUILD)/src/webrtc/xbox_input_feedback.o \
 	                             $(C_OBJS)
@@ -183,6 +201,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 	                 $(BUILD)/src/api/xbox_api_client.o $(BUILD)/src/api/http_client.o \
 	                 $(BUILD)/src/app/ice_candidate_processor.o \
 	                 $(BUILD)/src/webrtc/peer_manager.o \
+	                 $(BUILD)/src/input/xinput_encoder.o \
 	                 $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
 	                 $(BUILD)/src/webrtc/xbox_input_feedback.o \
                  $(C_OBJS)
@@ -190,7 +209,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 RHO_SRCS = src/rho/rho_main.cpp
 RHO_OBJS = $(RHO_SRCS:%.cpp=$(BUILD)/%.o)
 
-.PHONY: xcloud_session_support_test ps_console_route_freshness_test ps_pairing_account_codec_test all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests stream_input_router_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
+.PHONY: xcloud_session_support_test ps_console_route_freshness_test ps_pairing_account_codec_test all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests xbox_input_accumulator_tests stream_input_router_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
 
 all:  $(TARGET)
 	@echo "=== Desktop Build Complete ==="
@@ -255,6 +274,11 @@ input_tests: $(XINPUT_TEST_OBJS)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/xinput_encoder_test $(XINPUT_TEST_OBJS)
 	./$(BUILD)/xinput_encoder_test
 
+xbox_input_accumulator_tests: $(XBOX_INPUT_ACCUMULATOR_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/xbox_input_accumulator_test $(XBOX_INPUT_ACCUMULATOR_TEST_OBJS)
+	./$(BUILD)/xbox_input_accumulator_test
+
 stream_input_router_tests: $(STREAM_INPUT_ROUTER_TEST_OBJS)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/stream_input_router_test $(STREAM_INPUT_ROUTER_TEST_OBJS)
@@ -282,12 +306,12 @@ video_jitter_tests: $(VIDEO_JITTER_TEST_OBJS)
 
 outbound_queue_tests: $(OUTBOUND_QUEUE_TEST_OBJS)
 	@mkdir -p $(BUILD)
-	$(CXX) $(CXXFLAGS) -o $(BUILD)/peer_manager_outbound_queue_test $(OUTBOUND_QUEUE_TEST_OBJS) $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/peer_manager_outbound_queue_test $(OUTBOUND_QUEUE_TEST_OBJS) $(WEBRTC_TEST_LDFLAGS)
 	./$(BUILD)/peer_manager_outbound_queue_test
 
 stream_resilience_tests: $(STREAM_RESILIENCE_TEST_OBJS)
 	@mkdir -p $(BUILD)
-	$(CXX) $(CXXFLAGS) -o $(BUILD)/stream_resilience_scenarios_test $(STREAM_RESILIENCE_TEST_OBJS) $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/stream_resilience_scenarios_test $(STREAM_RESILIENCE_TEST_OBJS) $(WEBRTC_TEST_LDFLAGS)
 	./$(BUILD)/stream_resilience_scenarios_test
 
 video_resolution_transition_tests: $(VIDEO_RESOLUTION_TRANSITION_TEST_OBJS)

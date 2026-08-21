@@ -54,6 +54,9 @@ def main():
     require("if (sctp->stream_table[i].sid == sid)" in sctp and
             "return;" in sctp[sctp.index("void sctp_add_stream_mapping"):sctp.index("void sctp_parse_data_channel_open")],
             "SCTP stream mapping should ignore duplicate SID registrations")
+    require("msg[1] = (char)channel_type" in peer_connection or
+            "msg[1] = (char)channel_type" in tracked_patch,
+            "DCEP OPEN must serialize the negotiated channel type byte")
 
     require("pc->agent.binding_request_time > 0" in peer_connection,
             "WebRTC keepalive timeout must not close a fresh connection with timestamp 0")

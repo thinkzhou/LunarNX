@@ -197,8 +197,18 @@ bool WebRtcTransport::sendInputData(const uint8_t* data, size_t len) {
     return peer_ && peer_->sendInputData(data, len);
 }
 
+uint64_t WebRtcTransport::sendInputTransitionData(const uint8_t* data,
+                                                  size_t len) {
+    return peer_ ? peer_->sendInputTransitionData(data, len) : 0;
+}
+
 bool WebRtcTransport::sendLatestInputData(const uint8_t* data, size_t len) {
     return peer_ && peer_->sendLatestInputData(data, len);
+}
+
+std::optional<webrtc::InputDeliveryResult>
+WebRtcTransport::consumeInputDeliveryResult() {
+    return peer_ ? peer_->consumeInputDeliveryResult() : std::nullopt;
 }
 
 bool WebRtcTransport::sendControlData(const uint8_t* data, size_t len) {
@@ -237,8 +247,8 @@ bool WebRtcTransport::hasPendingReliableData() const {
     return peer_ && peer_->hasPendingReliableData();
 }
 
-bool WebRtcTransport::consumeReliableSendFailure() {
-    return peer_ && peer_->consumeReliableSendFailure();
+bool WebRtcTransport::consumeDataChannelFailure() {
+    return peer_ && peer_->consumeDataChannelFailure();
 }
 
 bool WebRtcTransport::isDataChannelReady() const {
@@ -248,6 +258,12 @@ bool WebRtcTransport::isDataChannelReady() const {
 void WebRtcTransport::setMediaEnabled(bool enabled) {
     if (peer_) {
         peer_->setMediaEnabled(enabled);
+    }
+}
+
+void WebRtcTransport::setVideoJitterMode(webrtc::VideoJitterMode mode) {
+    if (peer_) {
+        peer_->setVideoJitterMode(mode);
     }
 }
 
