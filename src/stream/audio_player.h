@@ -58,6 +58,7 @@ private:
     size_t samples_per_buffer_ = 0;
     size_t current_size_ = 0;
     size_t total_queued_samples_ = 0;
+    bool wavebuf_enqueue_failed_ = false;
     bool audren_initialized_ = false;
     bool driver_initialized_ = false;
 #else
