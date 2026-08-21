@@ -796,7 +796,9 @@ std::string XboxApiClient::getIceCandidates(const std::string& session_id,
 // =============================================================================
 // Delete Session
 // =============================================================================
-bool XboxApiClient::sendKeepAlive(const std::string& session_id, HttpClient::CancelCallback cancel) {
+KeepAliveResult XboxApiClient::sendKeepAliveDetailed(
+    const std::string& session_id, HttpClient::CancelCallback cancel) {
+    KeepAliveResult result;
     std::string url = sessionBasePath() + "/" + session_id + "/keepalive";
 
     std::map<std::string, std::string> headers;
@@ -806,8 +808,10 @@ bool XboxApiClient::sendKeepAlive(const std::string& session_id, HttpClient::Can
 
     auto resp = http_.post(url, "{}", headers, cancel);
     traceXboxResponse("keepalive", url, resp);
-    const bool ok = isHttpSuccess(resp.status_code);
-    if (!ok) {
+    result.ok = isHttpSuccess(resp.status_code);
+    result.status_code = resp.status_code;
+    result.network_error = resp.network_error;
+    if (!result.ok) {
         last_error_ = resp.network_error
             ? "Could not send Xbox session keepalive. Check WiFi and try again."
             : "Xbox session keepalive failed. HTTP " + std::to_string(resp.status_code) + ".";
@@ -816,7 +820,12 @@ bool XboxApiClient::sendKeepAlive(const std::string& session_id, HttpClient::Can
                              resp.network_error ? "true" : "false",
                              resp.error_message.c_str());
     }
-    return ok;
+    return result;
+}
+
+bool XboxApiClient::sendKeepAlive(const std::string& session_id,
+                                  HttpClient::CancelCallback cancel) {
+    return sendKeepAliveDetailed(session_id, cancel).ok;
 }
 
 bool XboxApiClient::deleteSession(const std::string& session_id, HttpClient::CancelCallback cancel) {

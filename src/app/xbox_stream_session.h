@@ -31,7 +31,9 @@ public:
         std::function<void(const std::string&)> on_session_id;
         std::function<bool()> external_cancel;
         std::function<bool()> consume_guide_button;
-        std::function<bool()> refresh_tokens;
+        // force=true is used only after a keep-alive 401/403. It bypasses
+        // the normal expiry throttle and obtains a fresh streaming token.
+        std::function<bool(bool force)> refresh_tokens;
     };
 
     XboxStreamSession(XboxSessionClient& session_client,
