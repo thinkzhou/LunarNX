@@ -642,7 +642,6 @@ bool VideoDecoder::decodeAccessUnit(const uint8_t* data, size_t len,
             if (ret >= 0) {
                 packet_accepted = true;
                 submitted_timestamps_.push_back(timestamp);
-                if (prepended_parameter_sets) parameter_sets_pending_ = false;
                 break;
             }
             if (ret != AVERROR(EAGAIN)) {
