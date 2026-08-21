@@ -148,9 +148,6 @@ public:
     MediaHealthStats getHealthStats() const;
 
     bool isRunning() const { return running_.load(); }
-    PerfStats* diagnosticsPerfStats() const {
-        return perf_.load(std::memory_order_relaxed);
-    }
 
 private:
     struct QueuedVideoPacket {
