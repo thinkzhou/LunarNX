@@ -58,8 +58,6 @@ public:
     bool loadCredentials();
     bool hasCredentialsFor(const std::string& host_id) const;
     std::optional<RegisteredCredential> getCredential(const std::string& host_id) const;
-    bool updateDiscoveredHostAddress(const std::string& server_mac,
-                                     const std::string& address);
 
     // Registration
     void registerHost(const std::string& host_addr, uint32_t pin, int target,

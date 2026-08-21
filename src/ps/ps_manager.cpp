@@ -32,18 +32,7 @@ PsManager::~PsManager() {
 
 bool PsManager::startDiscovery(HostListCallback cb) {
     diagnosticLog("ps-manager", "startDiscovery");
-    const bool ok = repository_->startDiscovery(
-        [this, cb = std::move(cb)](const std::vector<PsConsole>& hosts) {
-            for (const auto& host : hosts) {
-                if (host.server_mac.empty() || !host.local.has_value() ||
-                    !host.local->verified || host.local->ip.empty()) continue;
-                auto credential = credentials_.findByMac(host.server_mac);
-                if (credential && credential->last_known_addr != host.local->ip) {
-                    updateDiscoveredHostAddress(host.server_mac, host.local->ip);
-                }
-            }
-            if (cb) cb(hosts);
-        });
+    const bool ok = repository_->startDiscovery(std::move(cb));
     diagnosticLog("ps-manager", "startDiscovery ok=%d", ok ? 1 : 0);
     return ok;
 }
@@ -112,23 +101,6 @@ bool PsManager::loadCredentials() {
 
 bool PsManager::hasCredentialsFor(const std::string& host_id) const {
     return credentials_.findByMac(host_id).has_value();
-}
-
-bool PsManager::updateDiscoveredHostAddress(const std::string& server_mac,
-                                            const std::string& address) {
-    auto credential = credentials_.findByMac(server_mac);
-    if (!credential || credential->last_known_addr == address) return false;
-    if (!credentials_.updateLastKnownAddrAndSave(
-            server_mac, address, get_ps_credentials_path())) {
-        diagnosticLog("ps-manager",
-                      "failed to persist discovered LAN address mac=%s",
-                      server_mac.c_str());
-        return false;
-    }
-    repository_->setRegisteredCredentials(credentials_.getRegisteredHosts());
-    diagnosticLog("ps-manager", "updated persisted LAN address mac=%s",
-                  server_mac.c_str());
-    return true;
 }
 
 std::optional<RegisteredCredential> PsManager::getCredential(
