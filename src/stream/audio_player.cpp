@@ -222,6 +222,27 @@ bool AudioPlayer::play(const AudioFrame& frame) {
 #endif
 }
 
+void AudioPlayer::flush() {
+    std::lock_guard<std::mutex> lock(mutex_);
+#ifdef __SWITCH__
+    if (!driver_initialized_) return;
+
+    audrvVoiceStop(&driver_, kAudrenVoiceId);
+    audrvVoiceDrop(&driver_, kAudrenVoiceId);
+    mutexLock(&update_lock_);
+    audrvUpdate(&driver_);
+    mutexUnlock(&update_lock_);
+    for (auto& wavebuf : wavebufs_) wavebuf = {};
+    current_wavebuf_ = nullptr;
+    current_pool_ = nullptr;
+    current_size_ = 0;
+    total_queued_samples_ = 0;
+#else
+    if (audio_dev_) SDL_ClearQueuedAudio(audio_dev_);
+#endif
+    if (perf_) perf_->recordAudioQueuedBuffers(0);
+}
+
 size_t AudioPlayer::queuedSampleCount() {
     std::lock_guard<std::mutex> lock(mutex_);
 #ifdef __SWITCH__

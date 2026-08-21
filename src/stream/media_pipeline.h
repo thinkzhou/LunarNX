@@ -137,6 +137,9 @@ public:
     // drains GPU-owned frames, flushes decoder/parser state, and re-anchors
     // AV sync before accepting the next IDR.
     void prepareForNewVideoSource(const char* reason);
+    // Treat a new WebRTC association as a complete media source change. This
+    // resets both video and audio RTP/decode/playback state.
+    void prepareForNewMediaSource(const char* reason);
     void presentVideoFrame();
     MediaHealthStats getHealthStats() const;
 
@@ -159,6 +162,7 @@ private:
     struct QueuedDecodedAudio {
         AudioFrame frame;
         uint32_t generation = 0;
+        uint32_t source_epoch = 0;
     };
 
     bool enqueueVideoPacket(const uint8_t* data, size_t len, uint64_t timestamp);
@@ -184,8 +188,12 @@ private:
 
     bool isGenerationActive(uint32_t generation) const;
     void handleVideoFrame(const VideoFrame& frame, uint32_t generation);
-    void handleAudioFrame(const AudioFrame& frame, uint32_t generation);
-    bool submitDecodedAudio(const AudioFrame& frame, uint32_t generation);
+    void handleAudioFrame(const AudioFrame& frame,
+                          uint32_t generation,
+                          uint32_t source_epoch);
+    bool submitDecodedAudio(const AudioFrame& frame,
+                            uint32_t generation,
+                            uint32_t source_epoch);
     void shutdownUnlocked();
     PerfStats* perfStats() const {
         return perf_.load(std::memory_order_relaxed);
@@ -242,7 +250,10 @@ private:
     size_t queued_audio_bytes_ = 0;
     size_t queued_decoded_audio_bytes_ = 0;
     uint32_t audio_worker_generation_ = 0;
-    uint64_t last_decoded_audio_end_ns_ = 0;
+    std::atomic<uint64_t> last_decoded_audio_end_ns_{0};
+    std::atomic<uint32_t> audio_source_epoch_{0};
+    std::atomic<bool> audio_source_reset_pending_{false};
+    std::atomic<uint32_t> audio_decode_epoch_{0};
 };
 
 } // namespace lunar::stream

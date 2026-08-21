@@ -79,5 +79,13 @@ int main() {
     actions = discontinuity.push(packet(100));
     assert(actions.size() == 1);
     requirePacket(actions[0], 100);
+
+    // A new WebRTC association must not inherit the old RTP sequence anchor.
+    AudioPacketReorder new_source;
+    requirePacket(new_source.push(packet(40000))[0], 40000);
+    new_source.reset();
+    actions = new_source.push(packet(10000));
+    assert(actions.size() == 1);
+    requirePacket(actions[0], 10000);
     return 0;
 }

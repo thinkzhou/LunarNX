@@ -25,6 +25,7 @@ public:
     bool initialize();
     bool decode(const uint8_t* data, size_t len, uint64_t timestamp);
     bool decodeMissing(uint64_t timestamp);
+    void reset();
     size_t lastFrameSamples() const { return last_frame_samples_; }
     void setCallback(FrameCallback cb);
     void setPerfStats(struct PerfStats* stats) { perf_ = stats; }

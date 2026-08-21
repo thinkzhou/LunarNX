@@ -152,7 +152,8 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         }
         lunar::diagnosticLog("media", "audio decoder init done");
         audio_decoder_->setCallback([this, generation](const AudioFrame& frame) {
-            handleAudioFrame(frame, generation);
+            handleAudioFrame(frame, generation,
+                             audio_decode_epoch_.load(std::memory_order_acquire));
         });
         lunar::diagnosticLog("media", "audio decoder callback set generation=%u",
                              generation);
@@ -345,6 +346,26 @@ void MediaPipeline::prepareForNewVideoSource(const char* reason) {
     beginHardVideoRecovery(reason ? reason : "new video source", true);
 }
 
+void MediaPipeline::prepareForNewMediaSource(const char* reason) {
+    {
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
+        if (!running_.load()) return;
+
+        audio_source_epoch_.fetch_add(1, std::memory_order_acq_rel);
+        audio_source_reset_pending_.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> audio_lock(audio_queue_mutex_);
+            audio_queue_.clear();
+            decoded_audio_queue_.clear();
+            queued_audio_bytes_ = 0;
+            queued_decoded_audio_bytes_ = 0;
+            last_decoded_audio_end_ns_.store(0, std::memory_order_release);
+        }
+    }
+    audio_queue_cv_.notify_one();
+    prepareForNewVideoSource(reason ? reason : "new media source");
+}
+
 bool MediaPipeline::beginHardVideoRecoveryLocked(bool force_new_epoch,
                                                  size_t& dropped_packets,
                                                  size_t& dropped_bytes) {
@@ -519,6 +540,7 @@ bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,
     packet.sequence = sequence;
     packet.timestamp = timestamp;
     packet.generation = generation_.load();
+    packet.source_epoch = audio_source_epoch_.load(std::memory_order_acquire);
     try {
         packet.data.assign(data, data + len);
     } catch (...) {
@@ -563,6 +585,7 @@ bool MediaPipeline::playDecodedAudio(const AudioFrame& frame) {
 
     QueuedDecodedAudio queued;
     queued.generation = generation_.load();
+    queued.source_epoch = audio_source_epoch_.load(std::memory_order_acquire);
     try {
         queued.frame = frame;
     } catch (...) {
@@ -634,7 +657,11 @@ bool MediaPipeline::startWorkers(uint32_t generation) {
         decoded_audio_queue_.clear();
         queued_audio_bytes_ = 0;
         queued_decoded_audio_bytes_ = 0;
-        last_decoded_audio_end_ns_ = 0;
+        last_decoded_audio_end_ns_.store(0, std::memory_order_release);
+        audio_source_reset_pending_.store(false, std::memory_order_release);
+        audio_decode_epoch_.store(audio_source_epoch_.load(
+                                       std::memory_order_acquire),
+                                   std::memory_order_release);
     }
     g_media_queue_logs = 0;
     g_media_worker_logs = 0;
@@ -701,7 +728,11 @@ void MediaPipeline::stopWorkers() {
         queued_decoded_audio_bytes_ = 0;
         audio_worker_generation_ = 0;
         audio_worker_stop_ = false;
-        last_decoded_audio_end_ns_ = 0;
+        last_decoded_audio_end_ns_.store(0, std::memory_order_release);
+        audio_source_reset_pending_.store(false, std::memory_order_release);
+        audio_decode_epoch_.store(audio_source_epoch_.load(
+                                       std::memory_order_acquire),
+                                   std::memory_order_release);
     }
 }
 
@@ -782,24 +813,35 @@ void MediaPipeline::audioWorkerLoop() {
     lunar::diagnosticLog("media", "audio worker loop begin generation=%u",
                          audio_worker_generation_);
     AudioPacketReorder reorder;
+    uint32_t audio_worker_source_epoch =
+        audio_source_epoch_.load(std::memory_order_acquire);
     while (true) {
         EncodedAudioPacket packet;
         QueuedDecodedAudio decoded;
         bool have_encoded = false;
         bool have_decoded = false;
+        bool reset_audio = false;
+        uint32_t current_source_epoch = audio_worker_source_epoch;
         {
             std::unique_lock<std::mutex> lock(audio_queue_mutex_);
             audio_queue_cv_.wait(lock, [this]() {
                 return audio_worker_stop_ || !audio_queue_.empty() ||
-                       !decoded_audio_queue_.empty();
+                       !decoded_audio_queue_.empty() ||
+                       audio_source_reset_pending_.load(
+                           std::memory_order_acquire);
             });
             if (audio_worker_stop_) break;
-            if (!decoded_audio_queue_.empty()) {
+            current_source_epoch =
+                audio_source_epoch_.load(std::memory_order_acquire);
+            reset_audio = audio_source_reset_pending_.exchange(
+                false, std::memory_order_acq_rel) ||
+                current_source_epoch != audio_worker_source_epoch;
+            if (!reset_audio && !decoded_audio_queue_.empty()) {
                 decoded = std::move(decoded_audio_queue_.front());
                 decoded_audio_queue_.pop_front();
                 queued_decoded_audio_bytes_ -= decoded.frame.pcm_data.size();
                 have_decoded = true;
-            } else {
+            } else if (!reset_audio && !audio_queue_.empty()) {
                 packet = std::move(audio_queue_.front());
                 audio_queue_.pop_front();
                 queued_audio_bytes_ -= packet.data.size();
@@ -807,24 +849,48 @@ void MediaPipeline::audioWorkerLoop() {
             }
         }
 
+        if (reset_audio) {
+            reorder.reset();
+            if (audio_decoder_) audio_decoder_->reset();
+            if (audio_player_) audio_player_->flush();
+            audio_worker_source_epoch = current_source_epoch;
+            audio_decode_epoch_.store(audio_worker_source_epoch,
+                                      std::memory_order_release);
+            last_decoded_audio_end_ns_.store(0, std::memory_order_release);
+            continue;
+        }
+
         if (have_decoded) {
-            submitDecodedAudio(decoded.frame, decoded.generation);
+            if (decoded.source_epoch == audio_worker_source_epoch &&
+                decoded.source_epoch ==
+                    audio_source_epoch_.load(std::memory_order_acquire)) {
+                submitDecodedAudio(decoded.frame,
+                                   decoded.generation,
+                                   decoded.source_epoch);
+            }
             continue;
         }
         if (!have_encoded) continue;
 
         if (packet.generation != audio_worker_generation_ ||
+            packet.source_epoch != audio_worker_source_epoch ||
+            packet.source_epoch !=
+                audio_source_epoch_.load(std::memory_order_acquire) ||
             !isGenerationActive(packet.generation)) {
             continue;
         }
+        audio_decode_epoch_.store(audio_worker_source_epoch,
+                                  std::memory_order_release);
         for (auto& action : reorder.push(std::move(packet))) {
             if (!audio_decoder_ || !isGenerationActive(audio_worker_generation_)) break;
             if (action.type == AudioReorderAction::Type::Missing) {
-                if (last_decoded_audio_end_ns_ == 0) {
+                const uint64_t last_audio_end =
+                    last_decoded_audio_end_ns_.load(std::memory_order_acquire);
+                if (last_audio_end == 0) {
                     if (auto* perf = perfStats()) perf->recordAudioDrop();
                     continue;
                 }
-                audio_decoder_->decodeMissing(last_decoded_audio_end_ns_);
+                audio_decoder_->decodeMissing(last_audio_end);
             } else {
                 audio_decoder_->decode(action.packet.data.data(),
                                        action.packet.data.size(),
@@ -998,12 +1064,17 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
 }
 
 void MediaPipeline::handleAudioFrame(const AudioFrame& frame,
-                                     uint32_t generation) {
-    if (!isGenerationActive(generation)) return;
+                                     uint32_t generation,
+                                     uint32_t source_epoch) {
+    if (!isGenerationActive(generation) ||
+        source_epoch != audio_source_epoch_.load(std::memory_order_acquire)) {
+        return;
+    }
 
-    last_decoded_audio_end_ns_ =
+    last_decoded_audio_end_ns_.store(
         frame.timestamp + audioSamplesToNanoseconds(frame.sample_count,
-                                                    frame.sample_rate);
+                                                    frame.sample_rate),
+        std::memory_order_release);
     if (!audio_player_ || !av_sync_) return;
     if (!audio_player_->play(frame)) return;
 
@@ -1016,8 +1087,11 @@ void MediaPipeline::handleAudioFrame(const AudioFrame& frame,
 }
 
 bool MediaPipeline::submitDecodedAudio(const AudioFrame& frame,
-                                       uint32_t generation) {
-    if (!isGenerationActive(generation) || !audio_player_ || !av_sync_) return false;
+                                       uint32_t generation,
+                                       uint32_t source_epoch) {
+    if (!isGenerationActive(generation) ||
+        source_epoch != audio_source_epoch_.load(std::memory_order_acquire) ||
+        !audio_player_ || !av_sync_) return false;
     if (!audio_player_->play(frame)) return false;
     if (auto* perf = perfStats()) perf->recordAudioFrame();
     const uint64_t playback_ts = estimateAudioPlaybackTimestamp(

@@ -68,6 +68,10 @@ def main():
     require("hasVideoRecoveryRequest" in header and
             "clearVideoRecoveryRequest" in header,
             "MediaPipeline should expose throttled keyframe recovery state")
+    require("prepareForNewMediaSource" in header and
+            "audio_source_epoch_" in header and
+            "audio_source_reset_pending_" in header,
+            "A fresh media source must own an explicit audio source epoch")
 
     video_body = method_body(
         impl,
@@ -145,6 +149,20 @@ def main():
         impl, "bool MediaPipeline::submitDecodedAudio(const AudioFrame& frame,")
     require("audio_player_->play(frame)" in submit_decoded,
             "Only the media audio worker should submit decoded PCM")
+
+    source_reset = method_body(
+        impl, "void MediaPipeline::prepareForNewMediaSource(")
+    require("audio_source_epoch_.fetch_add" in source_reset and
+            "audio_queue_.clear()" in source_reset and
+            "decoded_audio_queue_.clear()" in source_reset and
+            "audio_queue_cv_.notify_one()" in impl,
+            "A fresh media source must clear queued audio and wake its worker")
+    audio_worker = method_body(impl, "void MediaPipeline::audioWorkerLoop()")
+    require("reorder.reset()" in audio_worker and
+            "audio_decoder_->reset()" in audio_worker and
+            "audio_player_->flush()" in audio_worker and
+            "source_epoch" in audio_worker,
+            "The audio worker must reset reorder, decoder, and playback state")
 
     initialize_body = method_body(
         impl,
