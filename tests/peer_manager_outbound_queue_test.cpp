@@ -245,7 +245,11 @@ int main() {
     assert(new_input.id != old_input.id);
     assert(new_input.payload == std::vector<uint8_t>(latest_input,
                                                       latest_input + 2));
-    assert(!Access::complete(peer, new_input, kWantWrite));
+    assert(Access::complete(peer, new_input, kWantWrite));
+    assert(Access::size(peer) == 1);
+    const auto retried_input = Access::front(peer);
+    assert(!Access::complete(peer, retried_input,
+                             static_cast<int>(sizeof(latest_input))));
     assert(Access::size(peer) == 0);
 
     // A latest snapshot may be briefly backpressured, but it must remain
