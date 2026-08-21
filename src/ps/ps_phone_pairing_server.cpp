@@ -33,7 +33,6 @@ struct PairingText {
     const char* hex_option;
     const char* decimal_option;
     const char* lookup_instruction;
-    const char* lookup_link;
     const char* format_hint;
     const char* pin;
     const char* submit;
@@ -41,50 +40,62 @@ struct PairingText {
     const char* sent;
     const char* invalid;
     const char* invalid_base64;
+    const char* invalid_hex;
+    const char* invalid_decimal;
+    const char* invalid_account_type;
     const char* invalid_pin;
 };
 
 const PairingText& pairingText(const std::string& locale) {
     static const PairingText english{
         "en", "LunarNX local pairing",
-        "Paste the console user's Base64 Account ID, then enter the 8-digit PIN shown by the console.",
-        "Base64 Account ID", "Paste the Encoded ID, for example AbCdEf12345=",
-        "Account ID format", "Base64 Account ID", "Apollo Hex (little-endian)",
-        "Decimal Account ID",
-        "Choose the format shown by your local pairing tool. No online lookup is used.", "",
-        "Base64 decodes to 8 bytes. Apollo Hex is converted locally in little-endian order.", "8-digit PIN",
+        "Enter the local console user's Account ID, choose its format, and enter the 8-digit PIN shown by the console. All conversion happens locally; PSN sign-in is not required.",
+        "Account ID", "Enter the selected Account ID format",
+        "Account ID format", "Base64 Account ID",
+        "Apollo 16-digit Hex (paste as shown)", "Decimal Account ID",
+        "Choose the format provided by your offline pairing tool.",
+        "Apollo users: paste the 16-digit hexadecimal value exactly as shown. LunarNX converts it to Chiaki's little-endian bytes; do not reverse the bytes manually.", "8-digit PIN",
         "Send to Switch", "Account ID and PIN are sent only to LunarNX on your local network.",
         "Sent. Check your Switch for the pairing result.",
         "Invalid Account ID or PIN.",
         "Invalid Base64 Account ID. It must decode to exactly 8 bytes.",
+        "Invalid Apollo Hex Account ID. Paste exactly 16 hexadecimal digits.",
+        "Invalid decimal Account ID. Enter an unsigned 64-bit decimal value.",
+        "Invalid Account ID format.",
         "PIN must contain exactly 8 digits."
     };
     static const PairingText simplified{
         "zh-CN", "LunarNX 本地配对",
-        "请粘贴主机用户的 Base64 Account ID，然后输入主机画面显示的 8 位 PIN 码。",
-        "Base64 Account ID", "粘贴 Encoded ID，例如 AbCdEf12345=",
-        "Account ID 格式", "Base64 Account ID", "Apollo 十六进制（小端序）",
-        "十进制 Account ID",
-        "请选择离线工具显示的格式。不会进行在线查询。", "",
-        "Base64 解码后必须为 8 字节；Apollo 十六进制会在本机按小端序转换。", "8 位 PIN 码",
+        "请输入主机本地用户的 Account ID，选择对应格式，然后输入主机显示的 8 位 PIN。所有转换都在本机完成，无需登录 PSN。",
+        "Account ID", "请输入所选格式的 Account ID",
+        "Account ID 格式", "Base64 Account ID",
+        "Apollo 16 位十六进制（按原样粘贴）", "十进制 Account ID",
+        "请选择离线配对工具提供的格式。",
+        "Apollo 用户请将工具显示的 16 位十六进制原样粘贴。LunarNX 会自动转换为 Chiaki 所需的小端 8 字节格式，请勿手动反转字节。", "8 位 PIN 码",
         "发送到 Switch", "Account ID 和 PIN 只会通过当前局域网发送给 LunarNX。",
         "已发送，请查看 Switch 上的配对结果。",
         "Account ID 或 PIN 无效。",
         "Base64 Account ID 无效。解码后必须正好为 8 字节。",
+        "Apollo 十六进制 Account ID 无效。请输入原样的 16 位十六进制值。",
+        "十进制 Account ID 无效。请输入无符号 64 位十进制值。",
+        "Account ID 格式无效。",
         "PIN 必须正好包含 8 位数字。"
     };
     static const PairingText traditional{
         "zh-TW", "LunarNX 本機配對",
-        "請貼上主機使用者的 Base64 Account ID，然後輸入主機畫面顯示的 8 位 PIN 碼。",
-        "Base64 Account ID", "貼上 Encoded ID，例如 AbCdEf12345=",
-        "Account ID 格式", "Base64 Account ID", "Apollo 十六進位（小端序）",
-        "十進位 Account ID",
-        "請選擇離線工具顯示的格式。不會進行線上查詢。", "",
-        "Base64 解碼後必須為 8 位元組；Apollo 十六進位會在本機按小端序轉換。", "8 位 PIN 碼",
+        "請輸入主機本機使用者的 Account ID，選擇對應格式，然後輸入主機畫面顯示的 8 位 PIN。所有轉換都在本機完成，無需登入 PSN。",
+        "Account ID", "請輸入所選格式的 Account ID",
+        "Account ID 格式", "Base64 Account ID",
+        "Apollo 16 位十六進位（按原樣貼上）", "十進位 Account ID",
+        "請選擇離線配對工具提供的格式。",
+        "Apollo 使用者請將工具顯示的 16 位十六進位原樣貼上。LunarNX 會自動轉換為 Chiaki 所需的小端 8 位元組格式，請勿手動反轉位元組。", "8 位 PIN 碼",
         "傳送至 Switch", "Account ID 和 PIN 只會透過目前區域網路傳送給 LunarNX。",
         "已傳送，請查看 Switch 上的配對結果。",
         "Account ID 或 PIN 無效。",
         "Base64 Account ID 無效。解碼後必須正好為 8 位元組。",
+        "Apollo 十六進位 Account ID 無效。請輸入原樣的 16 位十六進位值。",
+        "十進位 Account ID 無效。請輸入無符號 64 位十進位值。",
+        "Account ID 格式無效。",
         "PIN 必須正好包含 8 位數字。"
     };
     if (locale == "zh-Hans") return simplified;
@@ -142,9 +153,8 @@ std::string pairingPage(const std::string& submit_path, const PairingText& text)
         "<title>" + text.title + "</title><style>"
         "body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;margin:0;background:#f4f5f7;color:#17191c}"
         "main{max-width:520px;margin:auto;padding:30px 20px}h1{font-size:25px}p{line-height:1.55}"
-        "label{display:block;font-weight:600;margin:20px 0 7px}input,button{box-sizing:border-box;width:100%;padding:14px;"
-        "border-radius:7px;font-size:17px}input{border:1px solid #aeb4bd;background:white}button{margin-top:24px;border:0;background:#1769e0;color:white;font-weight:600}"
-        "a{color:#1769e0;font-weight:600}"
+        "label{display:block;font-weight:600;margin:20px 0 7px}input,select,button{box-sizing:border-box;width:100%;padding:14px;"
+        "border-radius:7px;font-size:17px}input,select{border:1px solid #aeb4bd;background:white}button{margin-top:24px;border:0;background:#1769e0;color:white;font-weight:600}"
         ".note{color:#59616d;font-size:13px}</style></head><body><main><h1>" + text.title +
         "</h1><p>" + text.detail + "</p><form method=post action=\"" + submit_path +
         "\"><p>" + text.lookup_instruction + "</p>"
@@ -340,14 +350,17 @@ void PsPhonePairingServer::run(std::string session_path, std::string locale,
             if (valid) {
                 if (account_type == "base64_id") {
                     valid = normalizeBase64PsnAccountId(account_input, account_id);
+                    if (!valid) validation_error = text.invalid_base64;
                 } else if (account_type == "hex_id") {
                     valid = hexPsnAccountIdToBase64(account_input, account_id);
+                    if (!valid) validation_error = text.invalid_hex;
                 } else if (account_type == "decimal_id") {
                     valid = decimalPsnAccountIdToBase64(account_input, account_id);
+                    if (!valid) validation_error = text.invalid_decimal;
                 } else {
                     valid = false;
+                    validation_error = text.invalid_account_type;
                 }
-                if (!valid) validation_error = text.invalid_base64;
             }
             uint32_t pin = valid ? static_cast<uint32_t>(std::strtoul(pin_text.c_str(), nullptr, 10)) : 0;
             sendResponse(client, valid ? 200 : 400,

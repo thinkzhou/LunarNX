@@ -12,7 +12,10 @@ int main() {
     assert(route.type == ResolvedRouteType::None);
     assert(route.error == "Console is not paired for local play");
 
-    console.credentials = RegisteredCredential{};
+    RegisteredCredential credential{};
+    credential.rp_regist_key[0] = 1;
+    credential.rp_key[0] = 1;
+    console.credentials = credential;
     route = PsConsoleResolver::resolve(console, false);
     assert(route.type == ResolvedRouteType::Local);
     assert(route.origin == ResolvedRouteOrigin::LanPersisted);

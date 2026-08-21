@@ -116,8 +116,13 @@ bool PsManager::hasCredentialsFor(const std::string& host_id) const {
 
 bool PsManager::updateDiscoveredHostAddress(const std::string& server_mac,
                                             const std::string& address) {
+    auto credential = credentials_.findByMac(server_mac);
+    if (!credential || credential->last_known_addr == address) return false;
     if (!credentials_.updateLastKnownAddrAndSave(
             server_mac, address, get_ps_credentials_path())) {
+        diagnosticLog("ps-manager",
+                      "failed to persist discovered LAN address mac=%s",
+                      server_mac.c_str());
         return false;
     }
     repository_->setRegisteredCredentials(credentials_.getRegisteredHosts());

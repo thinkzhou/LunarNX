@@ -34,6 +34,7 @@ public:
     // Decide route for a console based on available endpoints and PSN token.
     // Design doc §6.3: fresh LAN first, remote fallback.
     static ResolvedRoute resolve(const PsConsole& console, bool has_psn_token);
+    static bool hasUsableLocalRoute(const PsConsole& console);
 
     // Get human-readable route description for UI loading phases
     static std::string routeDescription(const ResolvedRoute& route);

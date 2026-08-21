@@ -17,14 +17,20 @@ bool isValidIpv4Literal(const std::string& value) {
 
 } // namespace
 
+bool PsConsoleResolver::hasUsableLocalRoute(const PsConsole& console) {
+    in_addr address{};
+    return console.local.has_value() && console.credentials.has_value() &&
+        !console.local->ip.empty() &&
+        inet_pton(AF_INET, console.local->ip.c_str(), &address) == 1;
+}
+
 ResolvedRoute PsConsoleResolver::resolve(const PsConsole& console, bool has_psn_token) {
     ResolvedRoute route;
 
     // A saved RP credential and a numeric local address are sufficient to
     // attempt a normal LAN session. Discovery state is informational and is
     // not proof that a persisted address is unusable.
-    if (console.local.has_value() && console.credentials.has_value() &&
-        isValidIpv4Literal(console.local->ip)) {
+    if (hasUsableLocalRoute(console)) {
         route.type = ResolvedRouteType::Local;
         route.origin = console.local->verified
             ? ResolvedRouteOrigin::LanDiscovered
