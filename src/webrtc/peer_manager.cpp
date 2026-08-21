@@ -20,9 +20,10 @@ constexpr std::chrono::milliseconds kMaxSctpTransientFailureAge{500};
 constexpr std::chrono::milliseconds kMaxLatestTransientFailureAge{32};
 constexpr std::chrono::milliseconds kMediaStatsCacheInterval{250};
 constexpr uint64_t kHomeMaxJitterHoldMs = 48;
-constexpr uint64_t kCloudMaxJitterHoldMs = 120;
+constexpr uint64_t kCloudMaxJitterHoldMs = 180;
 constexpr uint64_t kHomeRecoveryHoldMs = 96;
-constexpr uint64_t kCloudRecoveryHoldMs = 180;
+constexpr uint64_t kCloudRecoveryHoldMs = 300;
+constexpr uint64_t kCloudRecoveryBaseHoldMs = 180;
 
 uint64_t elapsedNs(std::chrono::steady_clock::time_point start) {
     if (start.time_since_epoch().count() == 0) return 0;
@@ -1038,9 +1039,9 @@ void PeerManager::setVideoJitterMode(VideoJitterMode mode) {
     smoothed_rtt_ms_ = 0;
     last_rtt_sample_ms_ = 0;
     const bool cloud = mode == VideoJitterMode::Cloud;
-    video_jitter_.setHeadBlockedPolicy(cloud ? 4 : 2,
-                                       cloud ? 60 : 32);
-    video_jitter_.setHoldMs(cloud ? VideoRtpJitterBuffer::kDefaultHoldMs
+    video_jitter_.setHeadBlockedPolicy(cloud ? 6 : 2,
+                                       cloud ? 80 : 32);
+    video_jitter_.setHoldMs(cloud ? 80
                                  : VideoRtpJitterBuffer::kMinHoldMs * 2);
     video_jitter_.setRecoveryHoldMs(cloud ? kCloudRecoveryHoldMs
                                           : kHomeRecoveryHoldMs);
@@ -1174,22 +1175,24 @@ void PeerManager::processEvents() {
                 smoothed_rtt_ms_ = (smoothed_rtt_ms_ * 7 + bounded_sample) / 8;
             }
             const bool cloud = video_jitter_mode_ == VideoJitterMode::Cloud;
-            const uint64_t min_hold_ms = cloud ? 32
-                                               : VideoRtpJitterBuffer::kMinHoldMs;
-            const uint64_t max_hold_ms = cloud ? kCloudMaxJitterHoldMs
-                                               : kHomeMaxJitterHoldMs;
-            const uint64_t rtt_component = cloud
-                ? smoothed_rtt_ms_ / 2
-                : smoothed_rtt_ms_ / 4;
-            const uint64_t hold_ms = std::max<uint64_t>(
-                min_hold_ms,
-                std::min<uint64_t>(max_hold_ms,
-                                   (cloud ? 32 : 16) + rtt_component));
+            const uint64_t hold_ms = cloud
+                ? std::clamp<uint64_t>(smoothed_rtt_ms_ + 40,
+                                       80, kCloudMaxJitterHoldMs)
+                : std::clamp<uint64_t>(16 + smoothed_rtt_ms_ / 4,
+                                       VideoRtpJitterBuffer::kMinHoldMs,
+                                       kHomeMaxJitterHoldMs);
+            const uint64_t head_blocked_hold_ms = cloud
+                ? std::clamp<uint64_t>(smoothed_rtt_ms_ + 30, 80, 140)
+                : 32;
             video_jitter_.setHoldMs(hold_ms);
             video_jitter_.setNetworkRttMs(smoothed_rtt_ms_);
+            video_jitter_.setHeadBlockedPolicy(cloud ? 6 : 2,
+                                               head_blocked_hold_ms);
             const uint64_t recovery_hold_ms = cloud
-                ? std::min<uint64_t>(VideoRtpJitterBuffer::kMaxRecoveryHoldMs,
-                                     kCloudRecoveryHoldMs + smoothed_rtt_ms_ / 2)
+                ? std::clamp<uint64_t>(
+                      kCloudRecoveryBaseHoldMs + smoothed_rtt_ms_ * 2,
+                      kCloudRecoveryHoldMs,
+                      VideoRtpJitterBuffer::kMaxRecoveryHoldMs)
                 : std::min<uint64_t>(VideoRtpJitterBuffer::kMaxRecoveryHoldMs,
                                      kHomeRecoveryHoldMs + smoothed_rtt_ms_ / 2);
             video_jitter_.setRecoveryHoldMs(recovery_hold_ms);

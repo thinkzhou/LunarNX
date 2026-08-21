@@ -44,6 +44,7 @@ jobs:
           make -f Makefile.desktop xbox_input_accumulator_tests
           make -f Makefile.desktop outbound_queue_tests
           make -f Makefile.desktop stream_resilience_tests
+          make -f Makefile.desktop video_jitter_tests
 
   build-switch:
     runs-on: ubuntu-latest
@@ -88,6 +89,7 @@ jobs:
         run: |
           python3 tests/xbox_stream_session_order_test.py
           python3 tests/libpeer_sctp_config_test.py
+          python3 tests/libpeer_video_jitter_test.py
           python3 tests/libpeer_dtls_read_loop_test.py
           python3 tests/datachannel_ppid_test.py
           python3 tests/audio_player_reset_test.py
