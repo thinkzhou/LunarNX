@@ -9,6 +9,31 @@
 
 #include <switch.h>
 #include <algorithm>
+#include <chrono>
+#include <string>
+
+namespace {
+
+std::string formatDownloadRate(long long bytes_per_second) {
+    if (bytes_per_second <= 0) return "--";
+    if (bytes_per_second >= 1024 * 1024) {
+        return std::to_string(bytes_per_second / (1024 * 1024)) + " MiB/s";
+    }
+    return std::to_string(std::max(1LL, bytes_per_second / 1024)) + " KiB/s";
+}
+
+std::string formatDownloadEta(long long remaining_bytes, long long bytes_per_second) {
+    if (remaining_bytes <= 0) return "";
+    if (bytes_per_second <= 0) return "ETA --";
+    const long long seconds = (remaining_bytes + bytes_per_second - 1) / bytes_per_second;
+    if (seconds >= 60) {
+        return "ETA " + std::to_string(seconds / 60) + "m " +
+            std::to_string(seconds % 60) + "s";
+    }
+    return "ETA " + std::to_string(seconds) + "s";
+}
+
+} // namespace
 
 namespace lunar::ui {
 
@@ -174,14 +199,38 @@ void DevToolsActivity::installBuild(app::DevBuild build) {
         const long long manifest_size = !build.compressed_download_url.empty() &&
             build.compressed_size > 0 ? build.compressed_size : build.size;
         const std::string version = build.version;
+        const auto progress_started = std::chrono::steady_clock::now();
+        auto progress_last_sample = progress_started;
+        long long progress_last_bytes = 0;
+        long long progress_speed_bps = 0;
         const bool ok = client.install(build, target, error,
-            [this, alive, manifest_size, version](long long downloaded, long long total) {
+            [this, alive, manifest_size, version, progress_started,
+             progress_last_sample, progress_last_bytes, progress_speed_bps]
+            (long long downloaded, long long total) mutable {
                 const long long expected = total > 0 ? total : manifest_size;
                 const int percent = expected > 0
                     ? static_cast<int>((downloaded * 100) / expected) : 0;
-                brls::sync([this, alive, downloaded, expected, percent, version]() {
+                const auto now = std::chrono::steady_clock::now();
+                const auto sample_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - progress_last_sample).count();
+                if (sample_ms >= 200 && downloaded >= progress_last_bytes) {
+                    const long long sample_speed =
+                        (downloaded - progress_last_bytes) * 1000 / sample_ms;
+                    progress_speed_bps = progress_speed_bps == 0 ? sample_speed
+                        : (progress_speed_bps * 3 + sample_speed) / 4;
+                    progress_last_sample = now;
+                    progress_last_bytes = downloaded;
+                } else if (progress_speed_bps == 0) {
+                    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - progress_started).count();
+                    if (elapsed_ms >= 500 && downloaded > 0) {
+                        progress_speed_bps = downloaded * 1000 / elapsed_ms;
+                    }
+                }
+                const long long speed_bps = progress_speed_bps;
+                brls::sync([this, alive, downloaded, expected, percent, speed_bps, version]() {
                     if (!alive->load()) return;
-                    updateDownloadProgress(downloaded, expected, percent, version);
+                    updateDownloadProgress(downloaded, expected, percent, speed_bps, version);
                 });
             });
         brls::sync([this, alive, ok, error = std::move(error), target]() {
@@ -192,7 +241,7 @@ void DevToolsActivity::installBuild(app::DevBuild build) {
                 if (status_) status_->setText(brls::getStr("lunarnx/dev/install_failed") + ": " + error);
                 return;
             }
-            updateDownloadProgress(1, 1, 100, brls::getStr("lunarnx/dev/restarting"));
+            updateDownloadProgress(1, 1, 100, 0, brls::getStr("lunarnx/dev/restarting"));
             if (status_) status_->setText(brls::getStr("lunarnx/dev/restarting"));
             envSetNextLoad(target.c_str(), target.c_str());
             brls::Application::quit();
@@ -247,12 +296,17 @@ void DevToolsActivity::showDownloadProgress(const std::string& version) {
 }
 
 void DevToolsActivity::updateDownloadProgress(long long downloaded, long long expected,
-                                              int percent, const std::string& version) {
+                                              int percent, long long speed_bps,
+                                              const std::string& version) {
     const int safe_percent = std::clamp(percent, 0, 100);
     if (progress_fill_) progress_fill_->setWidth(std::max(2, safe_percent * 440 / 100));
-    const std::string detail = std::to_string(safe_percent) + "% (" +
+    std::string detail = std::to_string(safe_percent) + "% (" +
         std::to_string(downloaded / (1024 * 1024)) + "/" +
-        std::to_string(expected / (1024 * 1024)) + " MiB)";
+        std::to_string(expected / (1024 * 1024)) + " MiB)  " +
+        formatDownloadRate(speed_bps);
+    if (expected > downloaded) {
+        detail += "  " + formatDownloadEta(expected - downloaded, speed_bps);
+    }
     if (progress_label_) progress_label_->setText(detail);
     if (status_) status_->setText(brls::getStr("lunarnx/dev/installing") + " " +
         version + " — " + detail);
