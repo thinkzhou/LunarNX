@@ -68,6 +68,21 @@ def main():
         "high-RTT missing packets must receive a bounded NACK recovery budget",
     )
     require(
+        "enum class VideoNetworkQuality" in jitter_header
+        and "setNetworkQuality" in jitter_header
+        and "VideoNetworkQuality::Good" in jitter_source
+        and "VideoNetworkQuality::Fair" in jitter_source
+        and "VideoNetworkQuality::Poor" in jitter_source,
+        "RTP missing-packet recovery must use the network quality tiers",
+    )
+    require(
+        "updateVideoNetworkQuality(network_stats)" in peer_manager
+        and "video_quality_bad_windows_ >= 2" in peer_manager
+        and "video_quality_good_windows_ >= 3" in peer_manager
+        and "xbox-net-quality" in peer_manager,
+        "network quality must use rolling evidence, hysteresis, and DROP_DIAG telemetry",
+    )
+    require(
         "on_video_recovery" in peer_header
         and "media_.requestVideoRecovery" in session
         and "requestVideoRecovery" in media,

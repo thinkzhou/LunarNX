@@ -1042,6 +1042,15 @@ void PeerManager::setVideoJitterMode(VideoJitterMode mode) {
     video_jitter_mode_ = mode;
     smoothed_rtt_ms_ = 0;
     last_rtt_sample_ms_ = 0;
+    video_network_quality_ = VideoNetworkQuality::Good;
+    video_quality_window_started_ = {};
+    video_quality_last_packets_ = 0;
+    video_quality_last_missing_ = 0;
+    video_quality_last_nacks_ = 0;
+    video_quality_last_recovered_ = 0;
+    video_quality_bad_windows_ = 0;
+    video_quality_good_windows_ = 0;
+    video_jitter_.setNetworkQuality(video_network_quality_);
     const bool cloud = mode == VideoJitterMode::Cloud;
     video_jitter_.setHeadBlockedPolicy(cloud ? 6 : 2,
                                        cloud ? 80 : 32);
@@ -1049,6 +1058,96 @@ void PeerManager::setVideoJitterMode(VideoJitterMode mode) {
                                  : kHomeMinJitterHoldMs);
     video_jitter_.setRecoveryHoldMs(cloud ? kCloudRecoveryHoldMs
                                           : kHomeRecoveryHoldMs);
+}
+
+void PeerManager::updateVideoNetworkQuality(const PeerMediaStats& stats) {
+    const auto now = std::chrono::steady_clock::now();
+    if (video_quality_window_started_.time_since_epoch().count() == 0) {
+        video_quality_window_started_ = now;
+        video_quality_last_packets_ = stats.video_rtp_packets;
+        video_quality_last_missing_ = stats.video_rtp_missing_packets_detected;
+        video_quality_last_nacks_ = stats.video_rtp_nacks;
+        video_quality_last_recovered_ = stats.video_rtp_missing_packets_recovered;
+        return;
+    }
+    if (now - video_quality_window_started_ < std::chrono::seconds(1)) return;
+
+    const auto delta = [](uint32_t current, uint32_t previous) {
+        return current >= previous ? current - previous : current;
+    };
+    const uint32_t packets = delta(stats.video_rtp_packets,
+                                    video_quality_last_packets_);
+    const uint32_t missing = delta(stats.video_rtp_missing_packets_detected,
+                                   video_quality_last_missing_);
+    const uint32_t nacks = delta(stats.video_rtp_nacks,
+                                 video_quality_last_nacks_);
+    const uint32_t recovered = delta(
+        stats.video_rtp_missing_packets_recovered,
+        video_quality_last_recovered_);
+    video_quality_last_packets_ = stats.video_rtp_packets;
+    video_quality_last_missing_ = stats.video_rtp_missing_packets_detected;
+    video_quality_last_nacks_ = stats.video_rtp_nacks;
+    video_quality_last_recovered_ = stats.video_rtp_missing_packets_recovered;
+    video_quality_window_started_ = now;
+
+    if (packets == 0 && missing == 0 && nacks == 0) return;
+    const uint64_t total = static_cast<uint64_t>(packets) + missing;
+    const uint64_t loss_ppm = total == 0
+        ? 0
+        : static_cast<uint64_t>(missing) * 1'000'000u / total;
+    const uint64_t rtt_ms = smoothed_rtt_ms_ > 0
+        ? smoothed_rtt_ms_
+        : stats.ice_rtt_ms;
+    const bool good = rtt_ms > 0 && rtt_ms <= 20 &&
+                      loss_ppm < 2'000 &&
+                      stats.video_rtp_last_arrival_gap_ms <= 8 &&
+                      stats.video_rtp_last_gap_packets <= 2;
+    const bool fair = rtt_ms > 0 && rtt_ms <= 50 &&
+                      loss_ppm < 10'000 &&
+                      stats.video_rtp_last_arrival_gap_ms <= 20 &&
+                      stats.video_rtp_last_gap_packets <= 5;
+    const VideoNetworkQuality observed = good
+        ? VideoNetworkQuality::Good
+        : fair ? VideoNetworkQuality::Fair : VideoNetworkQuality::Poor;
+    const auto rank = [](VideoNetworkQuality quality) {
+        return static_cast<int>(quality);
+    };
+    if (rank(observed) > rank(video_network_quality_)) {
+        video_quality_bad_windows_++;
+        video_quality_good_windows_ = 0;
+        if (video_quality_bad_windows_ >= 2) {
+            video_network_quality_ = observed;
+            video_quality_bad_windows_ = 0;
+            video_jitter_.setNetworkQuality(video_network_quality_);
+        }
+    } else if (rank(observed) < rank(video_network_quality_)) {
+        video_quality_good_windows_++;
+        video_quality_bad_windows_ = 0;
+        if (video_quality_good_windows_ >= 3) {
+            video_network_quality_ = observed;
+            video_quality_good_windows_ = 0;
+            video_jitter_.setNetworkQuality(video_network_quality_);
+        }
+    } else {
+        video_quality_bad_windows_ = 0;
+        video_quality_good_windows_ = 0;
+    }
+#if LUNARNX_DROP_DIAGNOSTIC_LOG
+    lunar::dropDiagnosticLog(
+        "xbox-net-quality",
+        "quality=%s observed=%s rtt_ms=%llu packets=%u missing=%u "
+        "loss_ppm=%llu last_gap_ms=%u gap_packets=%u nacks=%u recovered=%u",
+        videoNetworkQualityName(video_network_quality_),
+        videoNetworkQualityName(observed),
+        static_cast<unsigned long long>(rtt_ms),
+        packets,
+        missing,
+        static_cast<unsigned long long>(loss_ppm),
+        stats.video_rtp_last_arrival_gap_ms,
+        stats.video_rtp_last_gap_packets,
+        nacks,
+        recovered);
+#endif
 }
 
 PeerConnectionMediaStats PeerManager::networkStatsSnapshot() const {
@@ -1202,6 +1301,7 @@ void PeerManager::processEvents() {
                                      kHomeRecoveryHoldMs + smoothed_rtt_ms_ / 2);
             video_jitter_.setRecoveryHoldMs(recovery_hold_ms);
         }
+        updateVideoNetworkQuality(network_stats);
 
         const auto pump_finished = std::chrono::steady_clock::now();
         const auto elapsed_us = [](auto start, auto finish) -> uint64_t {
