@@ -44,8 +44,8 @@ def main():
         "Jitter recovery must coalesce PLI through the session request path",
     )
     require(
-        "VideoRtpJitterBuffer::kMinHoldMs" in peer_manager
-        and "smoothed_rtt_ms_" in peer_manager
+        "smoothed_rtt_ms_" in peer_manager
+        and "kHomeMinJitterHoldMs = 24" in peer_manager
         and "kHomeMaxJitterHoldMs = 48" in peer_manager
         and "kCloudMaxJitterHoldMs = 180" in peer_manager
         and "kCloudRecoveryHoldMs = 300" in peer_manager

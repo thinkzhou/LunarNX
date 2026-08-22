@@ -19,6 +19,10 @@ constexpr uint32_t kMaxConsecutiveSctpSendFailures = 128;
 constexpr std::chrono::milliseconds kMaxSctpTransientFailureAge{500};
 constexpr std::chrono::milliseconds kMaxLatestTransientFailureAge{32};
 constexpr std::chrono::milliseconds kMediaStatsCacheInterval{250};
+// A 16 ms floor is shorter than one 60 Hz frame. On a LAN, a short receive
+// burst can expose a one-packet gap just after the frame deadline; keep one
+// bounded retransmission opportunity without allowing the old 60+ ms queue.
+constexpr uint64_t kHomeMinJitterHoldMs = 24;
 constexpr uint64_t kHomeMaxJitterHoldMs = 48;
 constexpr uint64_t kCloudMaxJitterHoldMs = 180;
 constexpr uint64_t kHomeRecoveryHoldMs = 96;
@@ -1042,7 +1046,7 @@ void PeerManager::setVideoJitterMode(VideoJitterMode mode) {
     video_jitter_.setHeadBlockedPolicy(cloud ? 6 : 2,
                                        cloud ? 80 : 32);
     video_jitter_.setHoldMs(cloud ? 80
-                                 : VideoRtpJitterBuffer::kMinHoldMs * 2);
+                                 : kHomeMinJitterHoldMs);
     video_jitter_.setRecoveryHoldMs(cloud ? kCloudRecoveryHoldMs
                                           : kHomeRecoveryHoldMs);
 }
@@ -1178,8 +1182,9 @@ void PeerManager::processEvents() {
             const uint64_t hold_ms = cloud
                 ? std::clamp<uint64_t>(smoothed_rtt_ms_ + 40,
                                        80, kCloudMaxJitterHoldMs)
-                : std::clamp<uint64_t>(16 + smoothed_rtt_ms_ / 4,
-                                       VideoRtpJitterBuffer::kMinHoldMs,
+                : std::clamp<uint64_t>(kHomeMinJitterHoldMs +
+                                           smoothed_rtt_ms_ / 4,
+                                       kHomeMinJitterHoldMs,
                                        kHomeMaxJitterHoldMs);
             const uint64_t head_blocked_hold_ms = cloud
                 ? std::clamp<uint64_t>(smoothed_rtt_ms_ + 30, 80, 140)
