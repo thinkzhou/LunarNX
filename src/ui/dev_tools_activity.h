@@ -23,7 +23,8 @@ private:
     void installBuild(app::DevBuild build);
     void showDownloadProgress(const std::string& version);
     void updateDownloadProgress(long long downloaded, long long expected,
-                                int percent, const std::string& version);
+                                int percent, long long speed_bps,
+                                const std::string& version);
     void closeDownloadProgress();
     void uploadLog();
     void setBusy(bool busy);

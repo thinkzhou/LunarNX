@@ -14,6 +14,7 @@ def main() -> None:
         "sessions for Chiaki's stop socket and worker sockets"
     )
     assert "cfg.num_bsd_sessions = 2;" not in socket_policy
+    assert "cfg.udp_rx_buf_size = 512 * 1024;" in socket_policy
     assert (
         '"socketInitialize application enhanced rc=0x%08x udp_rx=%u '
         'sessions=%u efficiency=%u"' in socket_policy

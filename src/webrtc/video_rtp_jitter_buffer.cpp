@@ -23,6 +23,10 @@ constexpr uint64_t kMinNackRetryMs = 20;
 constexpr uint64_t kMaxNackRetryMs = 60;
 constexpr size_t kDefaultMaxHeadBlockedFrames = 8;
 constexpr uint64_t kDefaultMinHeadBlockedHoldMs = 80;
+// Keep the low-latency policy for local links, but give high-RTT cloud
+// routes enough time for one or two NACK rounds to return.
+constexpr uint64_t kCloudRttThresholdMs = 150;
+constexpr uint64_t kMaxMissingPacketHoldMs = 500;
 constexpr uint32_t kTimestampDiscontinuityTicks = 180000;
 constexpr size_t kMaxRtpPayloadBytes = 2048;
 constexpr uint8_t kStartCode[] = {0x00, 0x00, 0x00, 0x01};
@@ -242,6 +246,7 @@ struct VideoRtpJitterBuffer::Impl {
     uint64_t hold_ms = kDefaultHoldMs;
     uint64_t recovery_hold_ms = kDefaultRecoveryHoldMs;
     uint64_t network_rtt_ms = 0;
+    VideoNetworkQuality network_quality = VideoNetworkQuality::Good;
     size_t max_head_blocked_frames = kDefaultMaxHeadBlockedFrames;
     uint64_t min_head_blocked_hold_ms = kDefaultMinHeadBlockedHoldMs;
     size_t buffered_bytes = 0;
@@ -325,6 +330,7 @@ struct VideoRtpJitterBuffer::Impl {
         pending_nack_head = 0;
         pending_nack_count = 0;
         have_ssrc = false;
+        network_quality = VideoNetworkQuality::Good;
         counters = {};
     }
 
@@ -415,8 +421,60 @@ struct VideoRtpJitterBuffer::Impl {
             std::min<uint64_t>(kMaxNackRetryMs, network_rtt_ms / 2));
     }
 
+    uint64_t missingPacketHoldMs() const {
+        if (network_rtt_ms == 0) return hold_ms;
+        const bool home_profile = hold_ms <= 48;
+        switch (network_quality) {
+            case VideoNetworkQuality::Good: {
+                if (network_rtt_ms >= kCloudRttThresholdMs) {
+                    // A high RTT sample must still receive the conservative
+                    // WAN recovery budget below, even before the quality
+                    // classifier changes from Good to Fair/Poor.
+                    break;
+                }
+                // A clean LAN must not acquire a long recovery delay from a
+                // single RTT sample. A missing packet still gets one fast
+                // retransmission opportunity, but the budget stays below one
+                // extra 60 Hz frame when the path is healthy.
+                const uint64_t cap = home_profile ? 32 : 120;
+                return std::max<uint64_t>(
+                    hold_ms,
+                    std::min<uint64_t>(cap, network_rtt_ms + 8));
+            }
+            case VideoNetworkQuality::Fair: {
+                const uint64_t cap = home_profile ? 60 : 180;
+                const uint64_t safety = home_profile ? 20 : 40;
+                return std::max<uint64_t>(
+                    hold_ms,
+                    std::min<uint64_t>(cap, network_rtt_ms + safety));
+            }
+            case VideoNetworkQuality::Poor:
+                break;
+        }
+        if (network_rtt_ms >= kCloudRttThresholdMs || !home_profile) {
+            return std::max<uint64_t>(
+                hold_ms,
+                std::min<uint64_t>(kMaxMissingPacketHoldMs,
+                                   network_rtt_ms + hold_ms + 20));
+        }
+        return std::max<uint64_t>(
+            hold_ms,
+            std::min<uint64_t>(180,
+                               network_rtt_ms + hold_ms + 20));
+    }
+
     uint64_t nackHoldMs(const MissingRange& range) const {
-        return range.recovery_candidate ? recovery_hold_ms : hold_ms;
+        if (range.recovery_candidate) return recovery_hold_ms;
+        return missingPacketHoldMs();
+    }
+
+    bool hasPendingNackForTimestamp(uint32_t timestamp) const {
+        for (size_t index = 0; index < pending_nack_count; ++index) {
+            const auto& range = pending_nack_ranges[
+                (pending_nack_head + index) % kMaxPendingNackRanges];
+            if (range.timestamp == timestamp) return true;
+        }
+        return false;
     }
 
     void compactPendingNacks(uint64_t now_ms) {
@@ -424,8 +482,11 @@ struct VideoRtpJitterBuffer::Impl {
             const uint64_t age_ms = now_ms >= range.first_seen_ms
                 ? now_ms - range.first_seen_ms
                 : 0;
-            return range.rounds_completed < kMaxNackRounds &&
-                   age_ms < nackHoldMs(range) &&
+            // Keep the range alive until the frame deadline even when the
+            // next NACK round can no longer meet the RTT budget. The frame
+            // still needs the extended high-RTT hold; dropping the range
+            // here would immediately fall back to the short ordinary hold.
+            return age_ms < nackHoldMs(range) &&
                    !missingRangeReceived(range);
         });
     }
@@ -460,7 +521,8 @@ struct VideoRtpJitterBuffer::Impl {
                 auto& range = pending_nack_ranges[
                     (pending_nack_head + index) % kMaxPendingNackRanges];
                 const bool is_retry = range.rounds_completed > 0;
-                if (is_retry != (retry_pass != 0) ||
+                if (range.rounds_completed >= kMaxNackRounds ||
+                    is_retry != (retry_pass != 0) ||
                     (range.recovery_candidate && !range.recovery_authorized) ||
                     now_ms < range.next_send_ms) {
                     continue;
@@ -968,7 +1030,9 @@ struct VideoRtpJitterBuffer::Impl {
                 frameMayContainRecoveryPoint(front);
             const uint64_t frame_hold_ms = recovery_candidate
                 ? recovery_hold_ms
-                : hold_ms;
+                : hasPendingNackForTimestamp(front.timestamp)
+                    ? missingPacketHoldMs()
+                    : hold_ms;
             const bool idle_timeout = idle_age_ms >= frame_hold_ms;
             const uint64_t head_blocked_hold_ms = std::min<uint64_t>(
                 frame_hold_ms, min_head_blocked_hold_ms);
@@ -1224,6 +1288,10 @@ void VideoRtpJitterBuffer::setHoldMs(uint64_t hold_ms) {
 
 void VideoRtpJitterBuffer::setNetworkRttMs(uint64_t rtt_ms) {
     impl_->network_rtt_ms = std::min<uint64_t>(rtt_ms, 2000);
+}
+
+void VideoRtpJitterBuffer::setNetworkQuality(VideoNetworkQuality quality) {
+    impl_->network_quality = quality;
 }
 
 void VideoRtpJitterBuffer::setHeadBlockedPolicy(size_t max_frames,

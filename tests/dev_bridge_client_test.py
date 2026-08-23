@@ -33,8 +33,10 @@ require("build.compressed_size" in ui and "build.compressed_download_url.empty()
         "gzip download progress must use the compressed transport size")
 require("showDownloadProgress(build.version)" in ui and
         "progress_dialog_->setCancelable(false)" in ui and
-        "progress_fill_->setWidth" in ui,
-        "installing a build must show a non-dismissible modal download progress bar")
+        "progress_fill_->setWidth" in ui and
+        "formatDownloadRate" in ui and "MiB/s" in ui and
+        "formatDownloadEta" in ui and "speed_bps" in ui,
+        "installing a build must show progress, download speed, and ETA")
 require("kDownloadTimeoutSeconds = 30L * 60L" in client and
         "kDownloadLowSpeedBytesPerSecond = 512L" in client and
         "kDownloadLowSpeedSeconds = 3L * 60L" in client,

@@ -44,8 +44,8 @@ def main():
         "Jitter recovery must coalesce PLI through the session request path",
     )
     require(
-        "VideoRtpJitterBuffer::kMinHoldMs" in peer_manager
-        and "smoothed_rtt_ms_" in peer_manager
+        "smoothed_rtt_ms_" in peer_manager
+        and "kHomeMinJitterHoldMs = 24" in peer_manager
         and "kHomeMaxJitterHoldMs = 48" in peer_manager
         and "kCloudMaxJitterHoldMs = 180" in peer_manager
         and "kCloudRecoveryHoldMs = 300" in peer_manager
@@ -59,6 +59,28 @@ def main():
         and "last_rtt_sample_ms_" in peer_manager
         and "setVideoJitterMode" in peer_manager,
         "Adaptive jitter hold must use smoothed, profile-specific low-latency bounds",
+    )
+    jitter_source = Path("src/webrtc/video_rtp_jitter_buffer.cpp").read_text()
+    require(
+        "kCloudRttThresholdMs" in jitter_source
+        and "kMaxMissingPacketHoldMs" in jitter_source
+        and "missingPacketHoldMs" in jitter_source,
+        "high-RTT missing packets must receive a bounded NACK recovery budget",
+    )
+    require(
+        "enum class VideoNetworkQuality" in jitter_header
+        and "setNetworkQuality" in jitter_header
+        and "VideoNetworkQuality::Good" in jitter_source
+        and "VideoNetworkQuality::Fair" in jitter_source
+        and "VideoNetworkQuality::Poor" in jitter_source,
+        "RTP missing-packet recovery must use the network quality tiers",
+    )
+    require(
+        "updateVideoNetworkQuality(network_stats)" in peer_manager
+        and "video_quality_bad_windows_ >= 2" in peer_manager
+        and "video_quality_good_windows_ >= 3" in peer_manager
+        and "xbox-net-quality" in peer_manager,
+        "network quality must use rolling evidence, hysteresis, and DROP_DIAG telemetry",
     )
     require(
         "on_video_recovery" in peer_header
