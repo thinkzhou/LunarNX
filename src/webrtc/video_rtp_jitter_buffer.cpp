@@ -426,6 +426,12 @@ struct VideoRtpJitterBuffer::Impl {
         const bool home_profile = hold_ms <= 48;
         switch (network_quality) {
             case VideoNetworkQuality::Good: {
+                if (network_rtt_ms >= kCloudRttThresholdMs) {
+                    // A high RTT sample must still receive the conservative
+                    // WAN recovery budget below, even before the quality
+                    // classifier changes from Good to Fair/Poor.
+                    break;
+                }
                 // A clean LAN must not acquire a long recovery delay from a
                 // single RTT sample. A missing packet still gets one fast
                 // retransmission opportunity, but the budget stays below one
