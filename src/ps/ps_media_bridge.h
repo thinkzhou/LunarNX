@@ -9,7 +9,9 @@
 #include "../stream/audio_decoder.h"
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <functional>
+#include <mutex>
 #include <vector>
 
 namespace lunar::ps {
@@ -26,6 +28,10 @@ public:
 
     // Chiaki callbacks (called from chiaki's internal thread)
     bool onVideoSample(uint8_t* data, size_t size, int32_t frames_lost, bool recovered);
+    // Chiaki can deliver the first access units before the asynchronously
+    // initialized MediaPipeline is running. Publish the bounded startup
+    // buffer after initialize() completes, before requesting a fresh IDR.
+    void setMediaReady();
 
     ChiakiAudioSink audioSink();
     void initializeAudio(ChiakiLog* log);
@@ -40,8 +46,19 @@ public:
     static void eventCb(ChiakiEvent* event, void* user);
 
 private:
+    struct PendingVideoSample {
+        std::vector<uint8_t> data;
+        int32_t frames_lost = 0;
+        uint64_t pts = 0;
+    };
+
     stream::MediaPipeline& media_;
     int fps_;
+
+    std::mutex video_mutex_;
+    bool media_ready_ = false;
+    std::deque<PendingVideoSample> pending_video_samples_;
+    size_t pending_video_bytes_ = 0;
 
     // Video PTS tracking
     uint64_t video_frame_count_ = 0;

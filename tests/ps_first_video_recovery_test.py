@@ -15,6 +15,10 @@ adapter = Path("src/ps/chiaki_log_adapter.cpp").read_text()
 require("media ready; requested initial IDR" in controller and
         "startVideoMonitor()" in controller,
         "PS startup must request a fresh IDR after the media pipeline is ready")
+require("bridge_->setMediaReady()" in controller and
+        "setMediaReady" in bridge and
+        "pending_video_samples_" in bridge,
+        "PS must retain video callbacks that arrive before MediaPipeline init")
 require("stream_transport_connected_ = true" in controller and
         "if (!stream_transport_connected_.load()) continue" in controller,
         "the first-frame timeout must start after StreamConnection is ready, "

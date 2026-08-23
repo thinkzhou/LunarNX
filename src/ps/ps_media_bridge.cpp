@@ -6,8 +6,13 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <utility>
 
 namespace lunar::ps {
+
+namespace {
+constexpr size_t kMaxStartupVideoBytes = 8 * 1024 * 1024;
+}
 
 PsMediaBridge::PsMediaBridge(stream::MediaPipeline& media, int fps)
     : media_(media), fps_(std::clamp(fps, 1, 120)) {}
@@ -17,6 +22,8 @@ PsMediaBridge::~PsMediaBridge() {
 }
 
 bool PsMediaBridge::onVideoSample(uint8_t* data, size_t size, int32_t frames_lost, bool recovered) {
+    std::lock_guard<std::mutex> lock(video_mutex_);
+
     // Calculate PTS
     if (video_frame_count_ == 0) {
         next_video_pts_ns_.store(0);
@@ -31,12 +38,54 @@ bool PsMediaBridge::onVideoSample(uint8_t* data, size_t size, int32_t frames_los
         next_video_pts_ns_.store(pts + frame_advance * frame_duration_ns);
     }
     video_frame_count_++;
+
+    if (!media_ready_) {
+        // Chiaki owns and reuses its callback buffer, so startup samples must
+        // be copied before returning. Keep only a bounded suffix; the IDR
+        // requested after initialization remains the authoritative recovery
+        // path if the startup burst exceeds the cap.
+        if (!data || size == 0 || size > kMaxStartupVideoBytes) return true;
+        try {
+            while (!pending_video_samples_.empty() &&
+                   pending_video_bytes_ + size > kMaxStartupVideoBytes) {
+                pending_video_bytes_ -= pending_video_samples_.front().data.size();
+                pending_video_samples_.pop_front();
+            }
+            PendingVideoSample sample;
+            sample.data.assign(data, data + size);
+            sample.frames_lost = frames_lost;
+            sample.pts = pts;
+            pending_video_bytes_ += sample.data.size();
+            pending_video_samples_.push_back(std::move(sample));
+        } catch (...) {
+            // A startup allocation failure must not make Chiaki tear down the
+            // session. The post-init IDR request can still recover the stream.
+        }
+        return true;
+    }
+
     media_.recordIncomingVideoSample(size, pts,
         static_cast<uint32_t>(std::max(frames_lost, 0)));
     // Copy data - chiaki reuses the buffer after callback returns
     const bool queued = media_.decodeVideoPacket(data, size, pts);
     (void)recovered;
     return queued;
+}
+
+void PsMediaBridge::setMediaReady() {
+    std::lock_guard<std::mutex> lock(video_mutex_);
+    if (media_ready_) return;
+    media_ready_ = true;
+
+    for (auto& sample : pending_video_samples_) {
+        media_.recordIncomingVideoSample(
+            sample.data.size(), sample.pts,
+            static_cast<uint32_t>(std::max(sample.frames_lost, 0)));
+        (void)media_.decodeVideoPacket(sample.data.data(), sample.data.size(),
+                                       sample.pts);
+    }
+    pending_video_samples_.clear();
+    pending_video_bytes_ = 0;
 }
 
 void PsMediaBridge::initializeAudio(ChiakiLog* log) {

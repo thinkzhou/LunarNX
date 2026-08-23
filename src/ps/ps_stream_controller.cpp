@@ -324,6 +324,10 @@ bool PsStreamController::startStream() {
         return false;
     }
 
+    // Flush complete video access units that arrived while Chiaki was
+    // starting before asking the console for another IDR.
+    bridge_->setMediaReady();
+
     // The PS5 may begin sending immediately after CHIAKI_EVENT_CONNECTED,
     // while NVDEC/Audren are still being initialized. Always request a fresh
     // SPS/PPS/IDR once the media pipeline is ready.
