@@ -46,8 +46,8 @@ def main() -> None:
             "controller must expose a bitrate-aware launch path")
     require("makeCloudStreamProfile(\n        title_id, width, height, bitrate_kbps)" in controller_source,
             "cloud launches must build the selected quality profile")
-    require('"tizen"' in profile and "30000" in profile,
-            "cloud 1080p HQ must use the Tizen high-bitrate fingerprint")
+    require('profile.os_name = height >= 1080 ? "windows" : "android"' in profile,
+            "cloud 1080p HQ must not implicitly request the Tizen 1440p tier")
 
     print("Stream quality selection tests passed")
 

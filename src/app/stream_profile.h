@@ -57,11 +57,11 @@ inline StreamProfile makeCloudStreamProfile(const std::string& title_id,
     profile.bitrate_kbps = bitrate_kbps > 0
         ? bitrate_kbps
         : (height >= 1080 ? 20000 : 10000);
-    // xCloud uses the Tizen device fingerprint for its 1080p high-bitrate
-    // tier. Ordinary 1080p remains the Windows profile for compatibility.
-    profile.os_name = profile.bitrate_kbps >= 30000 && height >= 1080
-        ? "tizen"
-        : (height >= 1080 ? "windows" : "android");
+    // Tizen now allows xCloud to select 1440p for some titles even when the
+    // message channel advertises 1920x1080. Keep every UI 1080p tier on the
+    // Windows fingerprint; callers may explicitly override os_name for an
+    // experimental 1440p session.
+    profile.os_name = height >= 1080 ? "windows" : "android";
     // Cloud is WAN-only; prefer public IPv4 / IPv6 over LAN private ranks.
     profile.prefer_ipv6 = true;
     return profile;

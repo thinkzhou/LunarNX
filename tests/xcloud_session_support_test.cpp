@@ -34,7 +34,7 @@ int main() {
     auto cloud_hq = lunar::app::makeCloudStreamProfile(
         "TITLE123", 1920, 1080, 30000);
     require(cloud_hq.bitrate_kbps == 30000, "cloud 1080 HQ bitrate");
-    require(cloud_hq.os_name == "tizen", "cloud 1080 HQ os");
+    require(cloud_hq.os_name == "windows", "cloud 1080 HQ stays strict 1080p");
 
     require(std::string(lunar::api::gssvSessionKindPath(lunar::api::GssvSessionKind::Home)) == "home",
             "home path");

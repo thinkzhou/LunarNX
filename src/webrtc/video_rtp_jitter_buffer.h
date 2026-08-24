@@ -15,27 +15,14 @@ struct VideoRtpReceiverReport {
     uint32_t highest_sequence = 0;
 };
 
-enum class VideoNetworkQuality : uint8_t {
-    Good,
-    Fair,
-    Poor,
-};
-
-inline const char* videoNetworkQualityName(VideoNetworkQuality quality) {
-    switch (quality) {
-        case VideoNetworkQuality::Good: return "good";
-        case VideoNetworkQuality::Fair: return "fair";
-        case VideoNetworkQuality::Poor: return "poor";
-    }
-    return "unknown";
-}
-
 struct VideoRtpJitterStats {
     uint32_t packets = 0;
+    uint64_t payload_bytes = 0;
     uint32_t sequence_gaps = 0;
     uint32_t missing_packets = 0;
     uint32_t missing_packets_detected = 0;
     uint32_t missing_packets_recovered = 0;
+    uint32_t missing_packets_unrecovered = 0;
     uint32_t frames = 0;
     uint32_t corrupt_frames = 0;
     uint32_t unsupported_nalus = 0;
@@ -90,7 +77,7 @@ public:
     void reset();
     void setHoldMs(uint64_t hold_ms);
     void setNetworkRttMs(uint64_t rtt_ms);
-    void setNetworkQuality(VideoNetworkQuality quality);
+    void setMissingPacketHoldMs(uint64_t hold_ms);
     // Bound head-of-line waiting independently from the ordinary incomplete
     // frame hold. Home LAN streams use a smaller budget than cloud streams.
     void setHeadBlockedPolicy(size_t max_frames, uint64_t min_hold_ms);

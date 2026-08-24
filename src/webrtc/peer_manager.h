@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../common.h"
+#include "network_path_estimator.h"
 #include "rtp_clock_mapper.h"
 #include "video_rtp_jitter_buffer.h"
 #include <peer_connection.h>
@@ -32,8 +33,10 @@ struct IceCandidate {
 };
 
 struct PeerMediaStats : PeerConnectionMediaStats {
+    uint64_t video_rtp_payload_bytes = 0;
     uint32_t video_rtp_missing_packets_detected = 0;
     uint32_t video_rtp_missing_packets_recovered = 0;
+    uint32_t video_rtp_missing_packets_unrecovered = 0;
     uint32_t video_rtp_nacks = 0;
     uint32_t video_rtp_nack_retries = 0;
     uint32_t video_rtp_resyncs = 0;
@@ -48,12 +51,10 @@ struct PeerMediaStats : PeerConnectionMediaStats {
     uint32_t video_jitter_buffered_frames = 0;
     uint32_t video_jitter_buffered_bytes = 0;
     bool video_waiting_keyframe = true;
+    NetworkPathEstimate network_path;
 };
 
-enum class VideoJitterMode {
-    Home,
-    Cloud,
-};
+using VideoJitterMode = NetworkPathMode;
 
 struct PeerCallbacks {
     using MediaFrameCallback =
@@ -178,16 +179,9 @@ private:
     RtpClockMapper audio_clock_{48000};
     VideoRtpJitterBuffer video_jitter_;
     VideoJitterMode video_jitter_mode_ = VideoJitterMode::Home;
-    VideoNetworkQuality video_network_quality_ = VideoNetworkQuality::Good;
-    uint64_t smoothed_rtt_ms_ = 0;
-    uint64_t last_rtt_sample_ms_ = 0;
-    std::chrono::steady_clock::time_point video_quality_window_started_{};
-    uint32_t video_quality_last_packets_ = 0;
-    uint32_t video_quality_last_missing_ = 0;
-    uint32_t video_quality_last_nacks_ = 0;
-    uint32_t video_quality_last_recovered_ = 0;
-    uint32_t video_quality_bad_windows_ = 0;
-    uint32_t video_quality_good_windows_ = 0;
+    NetworkPathEstimator network_path_estimator_{NetworkPathMode::Home};
+    NetworkPathEstimate network_path_estimate_{};
+    std::chrono::steady_clock::time_point network_path_window_started_{};
     // The owner loop needs transport statistics far less often than it pumps
     // RTP/SCTP. Keep the last libpeer snapshot so processEvents() and the
     // session watchdog do not both call into the stats collector every 2 ms.
@@ -233,7 +227,8 @@ private:
     void clearOutboundCommands();
     PeerConnectionMediaStats networkStatsSnapshot() const;
     void invalidateMediaStatsCache();
-    void updateVideoNetworkQuality(const PeerMediaStats& stats);
+    void updateNetworkPathEstimate(const PeerMediaStats& stats);
+    void applyVideoJitterPolicy(const NetworkPathEstimate& path);
     static bool isReliableCommand(OutboundType type);
     static bool isSctpCommand(OutboundType type);
     static int outboundPriority(OutboundType type);

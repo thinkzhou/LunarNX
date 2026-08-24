@@ -1,4 +1,5 @@
 #include "xbox_stream_session.h"
+#include "adaptive_bitrate_controller.h"
 #include "../diagnostics.h"
 
 #include <algorithm>
@@ -769,6 +770,11 @@ void XboxStreamSession::runLoop(StreamProfile profile,
     auto last_perf_log = std::chrono::steady_clock::now();
     auto last_keyframe_request = std::chrono::steady_clock::time_point{};
     auto last_receiver_feedback = std::chrono::steady_clock::time_point{};
+    AdaptiveBitrateController bitrate_controller(
+        profile.type == SessionType::Cloud
+            ? webrtc::NetworkPathMode::Cloud
+            : webrtc::NetworkPathMode::Home,
+        streamProfileBitrateKbps(profile));
     uint32_t last_perf_rendered = 0;
     uint32_t keyframe_missing_baseline = 0;
     uint32_t keyframe_corrupt_baseline = 0;
@@ -967,8 +973,35 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             (last_receiver_feedback.time_since_epoch().count() == 0 ||
              std::chrono::steady_clock::now() - last_receiver_feedback >=
                  kReceiverFeedbackInterval)) {
+            const int previous_bitrate_kbps = bitrate_controller.targetKbps();
+            const int target_bitrate_kbps =
+                bitrate_controller.observe(media_stats.network_path);
+            if (target_bitrate_kbps != previous_bitrate_kbps) {
+                lunar::persistentEventLog(
+                    "xbox-bitrate",
+                    "adaptive REMB bitrate_kbps=%d->%d quality=%s "
+                    "detected=%u recovered=%u unrecovered=%u "
+                    "unrecovered_loss_ppm=%llu received_kbps=%u "
+                    "queue_depth=%u queue_drops=%u rtt_ms=%u "
+                    "baseline_ms=%u inflation_ms=%u",
+                    previous_bitrate_kbps,
+                    target_bitrate_kbps,
+                    webrtc::networkPathQualityName(
+                        media_stats.network_path.quality),
+                    media_stats.network_path.detected_missing,
+                    media_stats.network_path.recovered_missing,
+                    media_stats.network_path.unrecovered_missing,
+                    static_cast<unsigned long long>(
+                        media_stats.network_path.unrecovered_loss_ppm),
+                    media_stats.network_path.received_bitrate_kbps,
+                    media_stats.network_path.queue_depth,
+                    media_stats.network_path.queue_drops,
+                    media_stats.network_path.raw_rtt_ms,
+                    media_stats.network_path.baseline_rtt_ms,
+                    media_stats.network_path.rtt_inflation_ms);
+            }
             const uint32_t bitrate_bps = static_cast<uint32_t>(
-                streamProfileBitrateKbps(profile)) * 1000u;
+                target_bitrate_kbps) * 1000u;
             transport_.sendReceiverFeedback(bitrate_bps);
             last_receiver_feedback = std::chrono::steady_clock::now();
         }
@@ -1232,6 +1265,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                                  "stream fps=%.1f rendered=%u video_aus=%u audio_aus=%u "
                                  "rtp_video=%u rtp_audio=%u video_seq_gaps=%u "
                                  "missing=%u(%.3f%%) detected=%u recovered=%u "
+                                 "unrecovered=%u quality=%s baseline_rtt=%u "
+                                 "rtt_inflation=%u received_kbps=%u "
                                  "audio_seq_gaps=%u missing=%u "
                                  "h264_ok=%u h264_corrupt=%u h264_unsupported=%u h264_overflow=%u "
                                  "rtp_queue_drop=%u rtp_queue_high=%u rtp_queue_depth=%u "
@@ -1251,6 +1286,12 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                                  video_gap_pct,
                                  media_stats.video_rtp_missing_packets_detected,
                                  media_stats.video_rtp_missing_packets_recovered,
+                                 media_stats.video_rtp_missing_packets_unrecovered,
+                                 webrtc::networkPathQualityName(
+                                     media_stats.network_path.quality),
+                                 media_stats.network_path.baseline_rtt_ms,
+                                 media_stats.network_path.rtt_inflation_ms,
+                                 media_stats.network_path.received_bitrate_kbps,
                                  audio_gaps,
                                  audio_missing,
                                  h264_ok,

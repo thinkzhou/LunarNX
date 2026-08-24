@@ -124,6 +124,12 @@ STREAM_TEST_OBJS = $(BUILD)/tests/ice_candidate_processor_test.o \
 
 XCLOUD_TEST_OBJS = $(BUILD)/tests/xcloud_session_support_test.o
 
+ADAPTIVE_BITRATE_TEST_OBJS = \
+	$(BUILD)/tests/adaptive_bitrate_controller_test.o
+
+NETWORK_STRATEGY_SIM_OBJS = \
+	$(BUILD)/tools/network_strategy_ab_sim.o
+
 H264_RTP_TEST_OBJS = $(BUILD)/tests/h264_rtp_depacketizer_test.o \
 	                   $(BUILD)/lib/libpeer/src/rtp.o
 
@@ -209,7 +215,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 RHO_SRCS = src/rho/rho_main.cpp
 RHO_OBJS = $(RHO_SRCS:%.cpp=$(BUILD)/%.o)
 
-.PHONY: xcloud_session_support_test all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests xbox_input_accumulator_tests stream_input_router_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
+.PHONY: xcloud_session_support_test adaptive_bitrate_tests network_strategy_sim xbox_local_latency_sim all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests xbox_input_accumulator_tests stream_input_router_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
 
 all:  $(TARGET)
 	@echo "=== Desktop Build Complete ==="
@@ -248,7 +254,18 @@ xcloud_session_support_test: $(XCLOUD_TEST_OBJS)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/$@ $(XCLOUD_TEST_OBJS)
 	$(BUILD)/$@
 
-stream_tests: $(STREAM_TEST_OBJS) h264_rtp_tests xcloud_session_support_test
+adaptive_bitrate_tests: $(ADAPTIVE_BITRATE_TEST_OBJS)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/adaptive_bitrate_controller_test $(ADAPTIVE_BITRATE_TEST_OBJS)
+	./$(BUILD)/adaptive_bitrate_controller_test
+
+network_strategy_sim: $(NETWORK_STRATEGY_SIM_OBJS)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/network_strategy_ab_sim $(NETWORK_STRATEGY_SIM_OBJS)
+	./$(BUILD)/network_strategy_ab_sim
+
+xbox_local_latency_sim:
+	python3 tools/xbox_local_pipeline_sim.py
+
+stream_tests: $(STREAM_TEST_OBJS) h264_rtp_tests xcloud_session_support_test adaptive_bitrate_tests
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/stream_tests $(STREAM_TEST_OBJS)
 	./$(BUILD)/stream_tests
