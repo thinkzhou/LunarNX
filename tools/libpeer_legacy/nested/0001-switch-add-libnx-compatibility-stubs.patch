@@ -1,36 +1,5 @@
-From a8db67a8b25ac391f8b93747ac8b712d64bf5a01 Mon Sep 17 00:00:00 2001
-From: thinkzhou <thinkingzhou@163.com>
-Date: Wed, 8 Jul 2026 16:56:00 +0800
-Subject: [PATCH] switch: add libnx compatibility stubs
-
-From: zhouyang <zhouyang@leyantech.com>
-
----
- CMakeLists.txt                |  2 +-
- usrsctplib/netinet/in_systm.h |  4 ++++
- usrsctplib/netinet/ip.h       | 13 ++++++++++++
- usrsctplib/netinet/ip6.h      | 15 ++++++++++++++
- usrsctplib/netinet/ip_var.h   |  2 ++
- usrsctplib/netinet/udp.h      |  8 ++++++++
- usrsctplib/netinet6/ip6_var.h |  3 +++
- usrsctplib/switch_compat.h    | 37 +++++++++++++++++++++++++++++++++++
- usrsctplib/sys/ifaddrs.h      | 14 +++++++++++++
- usrsctplib/sys/uio.h          |  3 +++
- usrsctplib/user_recv_thread.c |  4 ++++
- usrsctplib/user_socketvar.h   |  2 ++
- 12 files changed, 106 insertions(+), 1 deletion(-)
- create mode 100644 usrsctplib/netinet/in_systm.h
- create mode 100644 usrsctplib/netinet/ip.h
- create mode 100644 usrsctplib/netinet/ip6.h
- create mode 100644 usrsctplib/netinet/ip_var.h
- create mode 100644 usrsctplib/netinet/udp.h
- create mode 100644 usrsctplib/netinet6/ip6_var.h
- create mode 100644 usrsctplib/switch_compat.h
- create mode 100644 usrsctplib/sys/ifaddrs.h
- create mode 100644 usrsctplib/sys/uio.h
-
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 3fc4ec6..88c043b 100644
+index 3fc4ec6ac2b7e01e8e6c1c08353690b929ddbe69..88c043b8cb3360a7b738a9e3465e3501fb400a15 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -29,8 +29,8 @@
@@ -43,38 +12,107 @@ index 3fc4ec6..88c043b 100644
  
  # Debug build type as default
  if (NOT CMAKE_BUILD_TYPE)
+diff --git a/usrsctplib/net/if.h b/usrsctplib/net/if.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..ebdc40ab81d7de63627ed63c4a4f90a3e8a7f390
+--- /dev/null
++++ b/usrsctplib/net/if.h
+@@ -0,0 +1,43 @@
++#pragma once
++
++#include <sys/types.h>
++#include <sys/socket.h>
++
++#define IF_NAMESIZE 16
++#ifndef IFNAMSIZ
++#define IFNAMSIZ IF_NAMESIZE
++#endif
++
++#define IFF_UP 0x1
++#define IFF_BROADCAST 0x2
++#define IFF_DEBUG 0x4
++#define IFF_LOOPBACK 0x8
++#define IFF_POINTOPOINT 0x10
++#define IFF_RUNNING 0x40
++#define IFF_NOARP 0x80
++#define IFF_PROMISC 0x100
++#define IFF_ALLMULTI 0x200
++#define IFF_MULTICAST 0x8000
++
++struct ifreq {
++    char ifr_name[IFNAMSIZ];
++    union {
++        struct sockaddr ifru_addr;
++        struct sockaddr ifru_dstaddr;
++        struct sockaddr ifru_broadaddr;
++        short ifru_flags;
++        int ifru_metric;
++        int ifru_mtu;
++        void* ifru_data;
++    } ifr_ifru;
++#define ifr_addr ifr_ifru.ifru_addr
++#define ifr_dstaddr ifr_ifru.ifru_dstaddr
++#define ifr_broadaddr ifr_ifru.ifru_broadaddr
++#define ifr_flags ifr_ifru.ifru_flags
++#define ifr_metric ifr_ifru.ifru_metric
++#define ifr_mtu ifr_ifru.ifru_mtu
++#define ifr_data ifr_ifru.ifru_data
++};
++
++unsigned int if_nametoindex(const char* ifname);
++char* if_indextoname(unsigned int ifindex, char* ifname);
 diff --git a/usrsctplib/netinet/in_systm.h b/usrsctplib/netinet/in_systm.h
 new file mode 100644
-index 0000000..c8f57b3
+index 0000000000000000000000000000000000000000..b72d3b2aba9460a6c0c4d380e39a908f61e6027b
 --- /dev/null
 +++ b/usrsctplib/netinet/in_systm.h
-@@ -0,0 +1,4 @@
+@@ -0,0 +1,5 @@
 +#pragma once
-+typedef unsigned short n_short;
-+typedef unsigned long  n_long;
-+typedef unsigned long  n_time;
++#include <stdint.h>
++typedef uint16_t n_short;
++typedef uint32_t n_long;
++typedef uint32_t n_time;
 diff --git a/usrsctplib/netinet/ip.h b/usrsctplib/netinet/ip.h
 new file mode 100644
-index 0000000..451345c
+index 0000000000000000000000000000000000000000..19109150b369c326ba1bb207ec5b8c8a499a5619
 --- /dev/null
 +++ b/usrsctplib/netinet/ip.h
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,32 @@
 +#pragma once
++#include <stdint.h>
 +#include <netinet/in.h>
++#include <netinet/in_systm.h>
++
 +struct ip {
-+    unsigned char  ip_vhl;
-+    unsigned char  ip_tos;
-+    unsigned short ip_len;
-+    unsigned short ip_id;
-+    unsigned short ip_off;
-+    unsigned char  ip_ttl;
-+    unsigned char  ip_p;
-+    unsigned short ip_sum;
++    uint8_t ip_hl : 4,
++        ip_v : 4;
++    uint8_t ip_tos;
++    uint16_t ip_len;
++    uint16_t ip_id;
++    uint16_t ip_off;
++#define IP_RF 0x8000
++#define IP_DF 0x4000
++#define IP_MF 0x2000
++#define IP_OFFMASK 0x1fff
++    uint8_t ip_ttl;
++    uint8_t ip_p;
++    uint16_t ip_sum;
 +    struct in_addr ip_src, ip_dst;
-+};
++} __attribute__((packed));
++
++#define IPVERSION 4
++#define IP_MAXPACKET 65535
++#define IPDEFTTL 64
++#define MAXTTL 255
++
++#define IPTOS_ECN_NOTECT 0x00
++#define IPTOS_ECN_ECT1 0x01
++#define IPTOS_ECN_ECT0 0x02
++#define IPTOS_ECN_CE 0x03
++#define IPTOS_ECN_MASK 0x03
 diff --git a/usrsctplib/netinet/ip6.h b/usrsctplib/netinet/ip6.h
 new file mode 100644
-index 0000000..f0fddda
+index 0000000000000000000000000000000000000000..f0fddda8d788af4cee9286a91f93fb304cb01390
 --- /dev/null
 +++ b/usrsctplib/netinet/ip6.h
 @@ -0,0 +1,15 @@
@@ -95,15 +133,28 @@ index 0000000..f0fddda
 +};
 diff --git a/usrsctplib/netinet/ip_var.h b/usrsctplib/netinet/ip_var.h
 new file mode 100644
-index 0000000..421fc0a
+index 0000000000000000000000000000000000000000..421fc0a8077a195d68c10365701fe6275e530625
 --- /dev/null
 +++ b/usrsctplib/netinet/ip_var.h
 @@ -0,0 +1,2 @@
 +#pragma once
 +#include "ip.h"
+diff --git a/usrsctplib/netinet/sctp_os_userspace.h b/usrsctplib/netinet/sctp_os_userspace.h
+index 05f655aa948aeda2e44fc4c9a94bd342da995d08..dcdb823fe02ee45a89a7a0668129fdae7e5471d6 100755
+--- a/usrsctplib/netinet/sctp_os_userspace.h
++++ b/usrsctplib/netinet/sctp_os_userspace.h
+@@ -1001,7 +1001,7 @@ int sctp_userspace_get_mtu_from_ifn(uint32_t if_index);
+ 
+ #define AF_CONN 123
+ struct sockaddr_conn {
+-#ifdef HAVE_SCONN_LEN
++#if defined(HAVE_SCONN_LEN) || defined(__SWITCH__)
+ 	uint8_t sconn_len;
+ 	uint8_t sconn_family;
+ #else
 diff --git a/usrsctplib/netinet/udp.h b/usrsctplib/netinet/udp.h
 new file mode 100644
-index 0000000..6f12cf0
+index 0000000000000000000000000000000000000000..6f12cf04e075bb13e88777117ac0a9aa684d3710
 --- /dev/null
 +++ b/usrsctplib/netinet/udp.h
 @@ -0,0 +1,8 @@
@@ -117,7 +168,7 @@ index 0000000..6f12cf0
 +};
 diff --git a/usrsctplib/netinet6/ip6_var.h b/usrsctplib/netinet6/ip6_var.h
 new file mode 100644
-index 0000000..3b23a26
+index 0000000000000000000000000000000000000000..3b23a264785efca0f0bbc2fc7f075fd6d69052c8
 --- /dev/null
 +++ b/usrsctplib/netinet6/ip6_var.h
 @@ -0,0 +1,3 @@
@@ -126,15 +177,35 @@ index 0000000..3b23a26
 +// Minimal stub for IPv6 variables
 diff --git a/usrsctplib/switch_compat.h b/usrsctplib/switch_compat.h
 new file mode 100644
-index 0000000..559c99e
+index 0000000000000000000000000000000000000000..7f1a8508f7e6bd53e460cea53b04fb3180702dfe
 --- /dev/null
 +++ b/usrsctplib/switch_compat.h
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,57 @@
 +#pragma once
 +#include <sys/types.h>
 +#include <sys/socket.h>
 +#include <netinet/in.h>
 +#include <arpa/inet.h>
++#include <errno.h>
++
++#ifndef CMSG_ALIGN
++#ifdef _ALIGN
++#define CMSG_ALIGN(n) _ALIGN(n)
++#else
++#define CMSG_ALIGN(n) (((n) + sizeof(long) - 1) & ~(sizeof(long) - 1))
++#endif
++#endif
++
++#ifndef ERESTART
++#define ERESTART 700
++#endif
++
++#ifndef UIO_MAXIOV
++#define UIO_MAXIOV 1024
++#endif
++#ifndef IOV_MAX
++#define IOV_MAX UIO_MAXIOV
++#endif
 +// BSD types for non-BSD newlib:
 +#ifndef u_long
 +typedef unsigned long  u_long;
@@ -169,7 +240,7 @@ index 0000000..559c99e
 +};
 diff --git a/usrsctplib/sys/ifaddrs.h b/usrsctplib/sys/ifaddrs.h
 new file mode 100644
-index 0000000..e68e46c
+index 0000000000000000000000000000000000000000..e68e46c5c73d542ac529cf2dda8547a9d34234cb
 --- /dev/null
 +++ b/usrsctplib/sys/ifaddrs.h
 @@ -0,0 +1,14 @@
@@ -189,15 +260,47 @@ index 0000000..e68e46c
 +void freeifaddrs(struct ifaddrs *ifa);
 diff --git a/usrsctplib/sys/uio.h b/usrsctplib/sys/uio.h
 new file mode 100644
-index 0000000..0ab162d
+index 0000000000000000000000000000000000000000..a36a78fa362a7f9a87f1d68d3baa493b45f56b72
 --- /dev/null
 +++ b/usrsctplib/sys/uio.h
 @@ -0,0 +1,3 @@
 +#pragma once
-+#include <stddef.h>
-+struct iovec { void* iov_base; size_t iov_len; };
++#include <sys/types.h>
++#include <sys/_iovec.h>
+diff --git a/usrsctplib/user_environment.c b/usrsctplib/user_environment.c
+index 3deb3ef0d4c52edf0418fe3ac467dad7ebf3cda5..59790f636c1ddb8a1e3ed808d63ae5cb86452200 100755
+--- a/usrsctplib/user_environment.c
++++ b/usrsctplib/user_environment.c
+@@ -345,6 +345,27 @@ read_random(void *buf, size_t size)
+ 	return;
+ }
+ 
++void
++finish_random(void)
++{
++	return;
++}
++#elif defined(__SWITCH__)
++void randomGet(void *buf, size_t len);
++
++void
++init_random(void)
++{
++	return;
++}
++
++void
++read_random(void *buf, size_t size)
++{
++	randomGet(buf, size);
++	return;
++}
++
+ void
+ finish_random(void)
+ {
 diff --git a/usrsctplib/user_recv_thread.c b/usrsctplib/user_recv_thread.c
-index 66be13d..52e0e4a 100755
+index 66be13d749b57233ef0571b5bdc49b084e07839d..52e0e4a7a33849469cc3cedd2dd7f495a655a6fe 100755
 --- a/usrsctplib/user_recv_thread.c
 +++ b/usrsctplib/user_recv_thread.c
 @@ -36,7 +36,11 @@
@@ -213,7 +316,7 @@ index 66be13d..52e0e4a 100755
  #include <user_ip6_var.h>
  #endif
 diff --git a/usrsctplib/user_socketvar.h b/usrsctplib/user_socketvar.h
-index e8eccc7..15322dd 100755
+index e8eccc7fb104d3ab8717c9ed14eeadf66b9d9217..15322dd2c118b174f071217e126e4240d2c593d5 100755
 --- a/usrsctplib/user_socketvar.h
 +++ b/usrsctplib/user_socketvar.h
 @@ -43,8 +43,10 @@
@@ -227,6 +330,17 @@ index e8eccc7..15322dd 100755
  #define SOCK_MAXADDRLEN 255
  #if !defined(MSG_NOTIFICATION)
  #define MSG_NOTIFICATION 0x2000         /* SCTP notification */
--- 
-2.50.1 (Apple Git-155)
-
+diff --git a/usrsctplib/usrsctp.h b/usrsctplib/usrsctp.h
+index e0c17c3a04289a7aa0b1b14ac329204bd1a44600..ecc9221bd2ef8a9b6a9cc644f3d89f57a4f2e044 100644
+--- a/usrsctplib/usrsctp.h
++++ b/usrsctplib/usrsctp.h
+@@ -120,7 +120,8 @@ struct sctp_common_header {
+  * tune with other sockaddr_* structures.
+  */
+ #if defined(__APPLE__) || defined(__Bitrig__) || defined(__DragonFly__) || \
+-    defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
++    defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || \
++    defined(__SWITCH__)
+ struct sockaddr_conn {
+ 	uint8_t sconn_len;
+ 	uint8_t sconn_family;

@@ -41,6 +41,11 @@ def main() -> None:
     assert "currentState(true)" in reader
     assert "const size_t count = state.count" in reader
     assert "blocked_until_release_" in reader
+    assert "const bool had_active_touch = activeTouchCount() > 0" in reader
+    assert "blocked_until_release_ = had_active_touch" in reader
+    assert "blocked_finger_id_" in reader
+    assert "blocked_finger_present" in reader
+    assert "blocked_until_release_ = false" in reader
     assert "touchpad_reader_->read(input_suppressed)" in controller
     assert "input_mapper_->map(state, touchpad, &motion)" in controller
     assert "state = input_router_.route(state);" in controller

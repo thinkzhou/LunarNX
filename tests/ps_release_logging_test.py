@@ -16,7 +16,7 @@ def main() -> None:
     manager = (ROOT / "src/ps/ps_manager.cpp").read_text()
 
     assert "APP_DIAG ?= 0" in makefile
-    assert "DROP_DIAG ?= 0" in makefile
+    assert "DROP_DIAG ?= 1" in makefile
     assert "#if LUNARNX_DIAGNOSTIC_LOG\n    ensureDiagnosticLogDirectory();" in adapter
     assert "#if LUNARNX_DIAGNOSTIC_LOG || LUNARNX_DROP_DIAGNOSTIC_LOG" in adapter
     assert "ChiakiLog log{};" in adapter

@@ -197,18 +197,12 @@ bool WebRtcTransport::sendInputData(const uint8_t* data, size_t len) {
     return peer_ && peer_->sendInputData(data, len);
 }
 
-uint64_t WebRtcTransport::sendInputTransitionData(const uint8_t* data,
-                                                  size_t len) {
-    return peer_ ? peer_->sendInputTransitionData(data, len) : 0;
+bool WebRtcTransport::sendTransitionInputData(const uint8_t* data, size_t len) {
+    return peer_ && peer_->sendTransitionInputData(data, len);
 }
 
 bool WebRtcTransport::sendLatestInputData(const uint8_t* data, size_t len) {
     return peer_ && peer_->sendLatestInputData(data, len);
-}
-
-std::optional<webrtc::InputDeliveryResult>
-WebRtcTransport::consumeInputDeliveryResult() {
-    return peer_ ? peer_->consumeInputDeliveryResult() : std::nullopt;
 }
 
 bool WebRtcTransport::sendControlData(const uint8_t* data, size_t len) {
@@ -269,6 +263,10 @@ void WebRtcTransport::setVideoJitterMode(webrtc::VideoJitterMode mode) {
 
 webrtc::PeerMediaStats WebRtcTransport::getMediaStats() const {
     return peer_ ? peer_->getMediaStats() : webrtc::PeerMediaStats{};
+}
+
+webrtc::PeerLatencyWindow WebRtcTransport::takeLatencyWindow() {
+    return peer_ ? peer_->takeLatencyWindow() : webrtc::PeerLatencyWindow{};
 }
 
 bool WebRtcTransport::isConnected() const {

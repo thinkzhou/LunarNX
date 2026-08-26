@@ -16,6 +16,7 @@ MBEDTLS       = $(LIBPEER_LIB)
 MBEDTLS_LIBDIR = -L$(MBEDTLS)/lib
 USRSCTP_CFLAGS = -DCONFIG_USE_USRSCTP=1
 USRSCTP_LIBS   = -lusrsctp
+USRSCTP_INCLUDES =
 LIBPEER_COMPAT = tools/libpeer_switch_build/compat
 LIBPEER_LIBDIRS =
 else
@@ -23,16 +24,19 @@ LIBPEER       = lib/libpeer
 LIBPEER_LIB   = $(LIBPEER)
 MBEDTLS       = $(LIBPEER)/third_party/mbedtls
 MBEDTLS_LIBDIR = -L$(MBEDTLS)/build_switch/library
-USRSCTP_CFLAGS = -DCONFIG_USE_USRSCTP=0
-USRSCTP_LIBS   =
+USRSCTP_CFLAGS = -DCONFIG_USE_USRSCTP=1
+USRSCTP_LIBS   = -lusrsctp
+USRSCTP_INCLUDES = -I$(LIBPEER)/third_party/usrsctp/usrsctplib
 LIBPEER_COMPAT =
-LIBPEER_LIBDIRS = -L$(LIBPEER)/third_party/libsrtp/build_switch
+LIBPEER_LIBDIRS = -L$(LIBPEER)/third_party/libsrtp/build_switch \
+    -L$(LIBPEER)/third_party/usrsctp/build_switch/usrsctplib
 endif
 
 NETWORK_DIAG ?= 0
 XBOX_RESPONSE_TRACE ?= 0
 APP_DIAG ?= 0
-DROP_DIAG ?= 0
+DROP_DIAG ?= 1
+LATENCY_DIAG ?= 0
 PS_MOCK_REPLAY ?= 0
 IPV6 ?= 0
 CURL_PROVIDER ?= moonlight
@@ -40,6 +44,7 @@ CURL_VERIFY ?= 0
 CURL_VERBOSE ?= 0
 CURL_TIMEOUT_MS ?= 120000
 APP_VERSION ?= 0.2.0
+APP_TITLE ?= LunarNX
 DEV_BRIDGE_UPLOAD_TOKEN ?=
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 EXTRA_DFLAGS ?=
@@ -89,6 +94,7 @@ DFLAGS = -D__SWITCH__ -DHAVE_LIBNX -DSWITCH -DSTBI_NO_THREAD_LOCALS \
          -DLUNARNX_XBOX_RESPONSE_TRACE=$(XBOX_RESPONSE_TRACE) \
          -DLUNARNX_DIAGNOSTIC_LOG=$(APP_DIAG) \
          -DLUNARNX_DROP_DIAGNOSTIC_LOG=$(DROP_DIAG) \
+         -DLUNARNX_LATENCY_DIAGNOSTIC_LOG=$(LATENCY_DIAG) \
          -DLUNARNX_PS_MOCK_REPLAY=$(PS_MOCK_REPLAY) \
          -DLUNARNX_CURL_VERIFY_SSL=$(CURL_VERIFY) \
          -DLUNARNX_CURL_VERBOSE=$(CURL_VERBOSE) \
@@ -116,6 +122,7 @@ INCDIRS = -Isrc -Ilib -Ilib/switch/include \
     -I$(LIBPEER_LIB)/include -I$(LIBPEER)/include -I$(LIBPEER)/src \
     -I$(LIBPEER)/third_party/libsrtp/include \
     -I$(LIBPEER)/third_party/libsrtp/crypto/include \
+    $(USRSCTP_INCLUDES) \
     $(if $(LIBPEER_COMPAT),-I$(LIBPEER_COMPAT))
 
 LIBDIRS = $(MBEDTLS_LIBDIR) \
@@ -141,6 +148,7 @@ ROMFS_STAGE = $(BUILD)/romfs
 ROMFS_STAGE_STAMP = $(BUILD)/romfs.stamp
 BOREALIS_RESOURCES = $(shell find $(BOREALIS)/resources -type f 2>/dev/null)
 APP_ROMFS_FILES = $(shell find romfs -type f 2>/dev/null)
+XCLOUD_TITLES_RESOURCE = res/xcloud_titles.json
 ROMFS_SHADERS = romfs/shaders/basic_vsh.dksh \
     romfs/shaders/texture_fsh.dksh \
     romfs/shaders/upscaling_pass_fsh.dksh \
@@ -217,14 +225,15 @@ all: $(TARGET)
 
 $(TARGET): $(BUILD)/LunarNX.elf $(ROMFS_STAGE_STAMP)
 	$(OBJCOPY) -O binary $< $(BUILD)/LunarNX.bin
-	$(NACP) --create LunarNX "LunarNX Team" $(APP_VERSION) $(BUILD)/nacp.tmp
+	$(NACP) --create "$(APP_TITLE)" "LunarNX Team" $(APP_VERSION) $(BUILD)/nacp.tmp
 	$(ELF2NRO) $< $@ --icon=res/icon.jpg --nacp=$(BUILD)/nacp.tmp --romfsdir=$(ROMFS_STAGE)
 
-$(ROMFS_STAGE_STAMP): $(ROMFS_SHADERS) $(BOREALIS_RESOURCES) $(APP_ROMFS_FILES)
+$(ROMFS_STAGE_STAMP): $(ROMFS_SHADERS) $(BOREALIS_RESOURCES) $(APP_ROMFS_FILES) $(XCLOUD_TITLES_RESOURCE)
 	rm -rf $(ROMFS_STAGE)
 	mkdir -p $(ROMFS_STAGE)
 	cp -R lib/borealis/resources/. $(ROMFS_STAGE)/
 	cp -R romfs/. $(ROMFS_STAGE)/
+	cp $(XCLOUD_TITLES_RESOURCE) $(ROMFS_STAGE)/xcloud_titles.json
 	touch $@
 
 romfs/shaders/basic_vsh.dksh: shaders/basic_vsh.glsl

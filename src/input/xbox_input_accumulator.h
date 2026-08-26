@@ -1,62 +1,49 @@
 #pragma once
 
 #include "gamepad_reader.h"
-#include "xinput_encoder.h"
 
 #include <cstdint>
 #include <deque>
 #include <mutex>
 #include <optional>
-#include <vector>
 
 namespace lunar::input {
 
 class XboxInputAccumulator {
 public:
-    struct Batch {
-        std::vector<GamepadState> frames;
-        bool reliable = false;
-        uint64_t last_transition_id = 0;
-        uint64_t latest_generation = 0;
-        bool includes_latest = false;
+    struct Snapshot {
+        GamepadState state{};
+        uint64_t generation = 0;
+        uint64_t sampled_at_ns = 0;
+        uint64_t transition_id = 0;
     };
 
-    static constexpr size_t kMaxPendingTransitions = 256;
-
     void reset();
-    void publish(const GamepadState& state,
-                 bool delivery_ready,
-                 bool mark_latest,
-                 bool force_snapshot = false);
-    std::optional<Batch> peekBatch() const;
-    void commitBatch(const Batch& batch);
+    void publish(const GamepadState& state, bool delivery_ready);
+    void publishAt(const GamepadState& state,
+                   bool delivery_ready,
+                   uint64_t sampled_at_ns);
+    std::optional<Snapshot> peekLatest() const;
+    std::optional<Snapshot> peekTransition(uint64_t now_ns);
+    void commitLatest(const Snapshot& snapshot);
+    void commitTransition(const Snapshot& snapshot);
     void prepareForReconnect();
-    bool consumeOverflowFault();
-    size_t pendingTransitionCount() const;
+
+private:
+    static constexpr size_t kMaxPendingTransitions = 8;
+    static constexpr uint64_t kTransitionLifetimeNs = 50'000'000;
 
     static bool hasDigitalTransition(const GamepadState& previous,
                                      const GamepadState& current);
-    static bool sameEncodedState(const GamepadState& left,
-                                 const GamepadState& right);
-
-private:
-    struct Transition {
-        uint64_t id = 0;
-        GamepadState state{};
-    };
 
     mutable std::mutex mutex_;
-    std::deque<Transition> transitions_;
     GamepadState latest_state_{};
-    GamepadState last_sampled_state_{};
-    GamepadState last_snapshot_state_{};
-    uint64_t next_transition_id_ = 1;
     uint64_t latest_generation_ = 0;
+    uint64_t latest_sampled_at_ns_ = 0;
     bool latest_dirty_ = false;
     bool has_sampled_state_ = false;
-    bool has_snapshot_state_ = false;
-    bool force_snapshot_ = false;
-    bool overflow_fault_ = false;
+    uint64_t next_transition_id_ = 1;
+    std::deque<Snapshot> transitions_;
 };
 
 } // namespace lunar::input

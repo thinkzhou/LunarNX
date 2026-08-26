@@ -1828,11 +1828,11 @@ index fe0f63e..70e3f72 100644
  #include "sdp.h"
  
 -#define PEER_CONNECTION_MAX_PACKETS_PER_LOOP 64
-+#define PEER_CONNECTION_MAX_PACKETS_PER_LOOP 96
++#define PEER_CONNECTION_MAX_PACKETS_PER_LOOP 128
 +#define PEER_CONNECTION_RECEIVE_BUDGET_US 1000
  #define PEER_CONNECTION_RTP_QUEUE_CAPACITY 4096
 -#define PEER_CONNECTION_RTP_DECODE_BUDGET 64
-+#define PEER_CONNECTION_RTP_DECODE_BUDGET 32
++#define PEER_CONNECTION_RTP_DECODE_BUDGET 64
  
 @@ -25,7 +27,8 @@
  
@@ -3353,13 +3353,30 @@ index 4e1694a..bebc5d3 100644
  }
  
  static void sctp_prepare_outgoing_packet(Sctp* sctp, SctpPacket* packet) {
-@@ -169,8 +177,7 @@ static void sctp_send_sack(Sctp* sctp, uint32_t cumulative_tsn_ack) {
+@@ -169,8 +177,24 @@ static void sctp_send_sack(Sctp* sctp, uint32_t cumulative_tsn_ack) {
  static int sctp_outgoing_data_cb(void* userdata, void* buf, size_t len, uint8_t tos, uint8_t set_df) {
    Sctp* sctp = (Sctp*)userdata;
  
 -  dtls_srtp_write(sctp->dtls_srtp, buf, len);
 -  return 0;
-+  return dtls_srtp_write(sctp->dtls_srtp, buf, len);
++  const int write_result = dtls_srtp_write(sctp->dtls_srtp, buf, len);
++#if CONFIG_USE_USRSCTP
++  // usrsctp's conn_output callback is a socket-style contract: zero means
++  // success and a positive errno means failure. mbedTLS instead returns the
++  // number of bytes written on success and a negative error code on failure.
++  // Passing a successful byte count through makes usrsctp treat every DTLS
++  // write as an error even though the packet reached the network.
++  if (write_result >= 0) {
++    return 0;
++  }
++  if (write_result == MBEDTLS_ERR_SSL_WANT_WRITE ||
++      write_result == MBEDTLS_ERR_SSL_WANT_READ) {
++    return EAGAIN;
++  }
++  return EIO;
++#else
++  return write_result;
++#endif
  }
  
  int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uint16_t sid) {
@@ -3423,6 +3440,18 @@ index 4e1694a..bebc5d3 100644
  }
  
  void sctp_add_stream_mapping(Sctp* sctp, const char* label, uint16_t sid) {
+diff --git a/src/sctp.h b/src/sctp.h
+--- a/src/sctp.h
++++ b/src/sctp.h
+@@ -141,7 +141,7 @@ typedef enum SctpDataPpid {
+ 
+ } SctpDataPpid;
+ 
+-#define SCTP_MAX_STREAMS 5
++#define SCTP_MAX_STREAMS 16
+ #define SCTP_MAX_TRACKED_STREAM_SEQUENCES 16
+ 
+ typedef struct {
 diff --git a/src/sdp.c b/src/sdp.c
 index d4702dc..8b31701 100644
 --- a/src/sdp.c
@@ -3776,3 +3805,150 @@ diff --git a/src/peer_connection.c b/src/peer_connection.c
    msg[0] = DATA_CHANNEL_OPEN;
 +  msg[1] = (char)channel_type;
    memcpy(msg + 2, &priority_big_endian, sizeof(uint16_t));
+
+diff --git a/src/agent.c b/src/agent.c
+--- a/src/agent.c
++++ b/src/agent.c
+@@ -606,6 +606,15 @@ int agent_send(Agent* agent, const uint8_t* buf, int len) {
+   return agent_socket_send(agent, &agent->nominated_pair->remote->addr, buf, len);
+ }
+ 
++int agent_last_send_error(Agent* agent) {
++  if (!agent || !agent->nominated_pair || !agent->nominated_pair->remote) {
++    return 0;
++  }
++  const int socket_index =
++      agent->nominated_pair->remote->addr.family == AF_INET6 ? 1 : 0;
++  return agent->udp_sockets[socket_index].last_send_error;
++}
++
+ static void agent_create_binding_response(Agent* agent,
+                                           StunMessage* msg,
+                                           Address* addr,
+diff --git a/src/agent.h b/src/agent.h
+--- a/src/agent.h
++++ b/src/agent.h
+@@ -88,6 +88,8 @@ void agent_get_local_description(Agent* agent, char* description, int length);
+ 
+ int agent_send(Agent* agent, const uint8_t* buf, int len);
+ 
++int agent_last_send_error(Agent* agent);
++
+ int agent_recv(Agent* agent, uint8_t* buf, int len);
+ 
+ int agent_recv_nonblocking(Agent* agent,
+diff --git a/src/dtls_srtp.c b/src/dtls_srtp.c
+--- a/src/dtls_srtp.c
++++ b/src/dtls_srtp.c
+@@ -23,6 +23,11 @@ int dtls_srtp_udp_send(void* ctx, const uint8_t* buf, size_t len) {
+ 
+   int ret = udp_socket_sendto(udp_socket, dtls_srtp->remote_addr, buf, len);
+ 
++  if (ret < 0 &&
++      udp_socket_is_temporary_send_error(udp_socket->last_send_error)) {
++    return MBEDTLS_ERR_SSL_WANT_WRITE;
++  }
++
+   LOGD("dtls_srtp_udp_send (%d)", ret);
+ 
+   return ret;
+diff --git a/src/peer_connection.c b/src/peer_connection.c
+--- a/src/peer_connection.c
++++ b/src/peer_connection.c
+@@ -405,6 +405,11 @@ static int peer_connection_dtls_srtp_send(void* ctx, const uint8_t* buf, size_t
+ 
+   // LOGD("send %.4x %.4x, %ld", *(uint16_t*)buf, *(uint16_t*)(buf + 2), len);
+   int ret = agent_send(&pc->agent, buf, len);
++  if (ret < 0 &&
++      udp_socket_is_temporary_send_error(
++          agent_last_send_error(&pc->agent))) {
++    ret = MBEDTLS_ERR_SSL_WANT_WRITE;
++  }
+   if (pc->debug_dtls_send_logs < 12) {
+     peer_connection_debug_log("send len=%zu first=0x%02x ret=%d", len, buf ? buf[0] : 0, ret);
+     pc->debug_dtls_send_logs++;
+@@ -606,6 +611,10 @@ int peer_connection_is_datachannel_connected(PeerConnection* pc) {
+   return pc && sctp_is_connected(&pc->sctp);
+ }
+ 
++int peer_connection_get_last_send_error(PeerConnection* pc) {
++  return pc ? agent_last_send_error(&pc->agent) : 0;
++}
++
+ void peer_connection_set_media_enabled(PeerConnection* pc, int enabled) {
+   if (!pc) {
+     return;
+diff --git a/src/peer_connection.h b/src/peer_connection.h
+--- a/src/peer_connection.h
++++ b/src/peer_connection.h
+@@ -171,6 +171,8 @@ int peer_connection_is_transient_send_error(int result);
+ 
+ int peer_connection_is_datachannel_connected(PeerConnection* pc);
+ 
++int peer_connection_get_last_send_error(PeerConnection* pc);
++
+ void peer_connection_set_media_enabled(PeerConnection* pc, int enabled);
+ 
+ void peer_connection_get_media_stats(PeerConnection* pc, PeerConnectionMediaStats* stats);
+diff --git a/src/socket.c b/src/socket.c
+--- a/src/socket.c
++++ b/src/socket.c
+@@ -37,6 +37,7 @@ int udp_socket_open(UdpSocket* udp_socket, int family, int port) {
+ 
+   udp_socket->bind_addr.family = family;
+   udp_socket->receive_buffer_size = 0;
++  udp_socket->last_send_error = 0;
+   switch (family) {
+     case AF_INET6:
+       udp_socket->fd = socket(AF_INET6, SOCK_DGRAM, 0);
+@@ -125,6 +126,7 @@ int udp_socket_sendto(UdpSocket* udp_socket, Address* addr, const uint8_t* buf,
+   int ret = -1;
+ 
+   if (udp_socket->fd < 0) {
++    udp_socket->last_send_error = EBADF;
+     LOGE("sendto before socket init");
+     return -1;
+   }
+@@ -144,13 +146,21 @@ int udp_socket_sendto(UdpSocket* udp_socket, Address* addr, const uint8_t* buf,
+   }
+ 
+   if ((ret = sendto(udp_socket->fd, buf, len, 0, sa, sock_len)) < 0) {
+-    LOGE("Failed to sendto: %s", strerror(errno));
++    const int send_error = errno;
++    udp_socket->last_send_error = send_error;
++    LOGE("Failed to sendto: %s", strerror(send_error));
+     return -1;
+   }
+ 
++  udp_socket->last_send_error = 0;
+   return ret;
+ }
+ 
++int udp_socket_is_temporary_send_error(int error_code) {
++  return error_code == EAGAIN || error_code == EWOULDBLOCK ||
++         error_code == EINTR || error_code == ENOBUFS;
++}
++
+ static int udp_socket_recvfrom_with_flags(UdpSocket* udp_socket,
+                                           Address* addr,
+                                           uint8_t* buf,
+diff --git a/src/socket.h b/src/socket.h
+--- a/src/socket.h
++++ b/src/socket.h
+@@ -6,6 +6,7 @@
+ typedef struct UdpSocket {
+   int fd;
+   int receive_buffer_size;
++  int last_send_error;
+   Address bind_addr;
+ } UdpSocket;
+ 
+@@ -22,6 +23,8 @@ void udp_socket_close(UdpSocket* udp_socket);
+ 
+ int udp_socket_sendto(UdpSocket* udp_socket, Address* bind_addr, const uint8_t* buf, int len);
+ 
++int udp_socket_is_temporary_send_error(int error_code);
++
+ int udp_socket_recvfrom(UdpSocket* udp_sock, Address* bind_addr, uint8_t* buf, int len);
+ 
+ int udp_socket_recvfrom_nonblocking(UdpSocket* udp_sock,

@@ -1,6 +1,7 @@
 #include <netinet/in.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include <switch.h>
 
 struct sigaction;
@@ -11,6 +12,23 @@ int sigaction(int signum, const struct sigaction* act, struct sigaction* oldact)
     (void)act;
     (void)oldact;
     return 0;
+}
+
+// usrsctp's userspace address setup expects the POSIX interface-name helpers.
+// SCTP itself uses AF_CONN over DTLS, so one stable synthetic interface index
+// is sufficient on Switch.
+unsigned int if_nametoindex(const char* ifname)
+{
+    (void)ifname;
+    return 1;
+}
+
+char* if_indextoname(unsigned int ifindex, char* ifname)
+{
+    (void)ifindex;
+    if (ifname == NULL) return NULL;
+    strcpy(ifname, "wlan0");
+    return ifname;
 }
 
 // The pinned mbedTLS 3 submodule has no Horizon OS entropy backend. Feed its

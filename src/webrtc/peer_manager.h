@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../common.h"
+#include "network_path_estimator.h"
 #include "rtp_clock_mapper.h"
 #include "video_rtp_jitter_buffer.h"
 #include <peer_connection.h>
@@ -12,16 +13,10 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
-#include <optional>
 
 namespace lunar::webrtc {
 
 struct PeerManagerQueueTestAccess;
-
-struct InputDeliveryResult {
-    uint64_t ticket = 0;
-    bool sent = false;
-};
 
 struct IceCandidate {
     std::string sdp;          // Full candidate line
@@ -32,8 +27,10 @@ struct IceCandidate {
 };
 
 struct PeerMediaStats : PeerConnectionMediaStats {
+    uint64_t video_rtp_payload_bytes = 0;
     uint32_t video_rtp_missing_packets_detected = 0;
     uint32_t video_rtp_missing_packets_recovered = 0;
+    uint32_t video_rtp_missing_packets_unrecovered = 0;
     uint32_t video_rtp_nacks = 0;
     uint32_t video_rtp_nack_retries = 0;
     uint32_t video_rtp_resyncs = 0;
@@ -48,12 +45,46 @@ struct PeerMediaStats : PeerConnectionMediaStats {
     uint32_t video_jitter_buffered_frames = 0;
     uint32_t video_jitter_buffered_bytes = 0;
     bool video_waiting_keyframe = true;
+    NetworkPathEstimate network_path;
 };
 
-enum class VideoJitterMode {
-    Home,
-    Cloud,
+struct PeerLatencyWindow {
+    uint64_t pump_total_us = 0;
+    uint64_t pump_max_us = 0;
+    uint32_t pump_samples = 0;
+    uint64_t pump_gap_total_us = 0;
+    uint64_t pump_gap_max_us = 0;
+    uint32_t pump_gap_samples = 0;
+    uint64_t peer_loop_total_us = 0;
+    uint64_t peer_loop_max_us = 0;
+    uint64_t socket_total_us = 0;
+    uint64_t socket_max_us = 0;
+    uint64_t receive_loop_total_us = 0;
+    uint64_t receive_loop_max_us = 0;
+    uint64_t rtp_drain_total_us = 0;
+    uint64_t rtp_drain_max_us = 0;
+    uint64_t outbound_total_us = 0;
+    uint64_t outbound_max_us = 0;
+    uint64_t other_total_us = 0;
+    uint64_t other_max_us = 0;
+    uint64_t socket_packets = 0;
+    uint64_t rtp_packets_decoded = 0;
+    uint32_t input_enqueued = 0;
+    uint32_t input_replaced = 0;
+    uint32_t input_sent = 0;
+    uint32_t input_send_failures = 0;
+    uint64_t input_queue_total_us = 0;
+    uint64_t input_queue_max_us = 0;
+    uint32_t input_queue_samples = 0;
+    uint64_t input_send_total_us = 0;
+    uint64_t input_send_max_us = 0;
+    uint32_t input_send_samples = 0;
+    uint32_t outbound_queue_depth = 0;
+    uint32_t outbound_queue_high_watermark = 0;
+    VideoRtpLatencyWindow video_jitter;
 };
+
+using VideoJitterMode = NetworkPathMode;
 
 struct PeerCallbacks {
     using MediaFrameCallback =
@@ -100,9 +131,8 @@ public:
     // Locally initiated DTLS-client channels use XStreaming's even SID order.
     bool createDataChannels();
     bool sendInputData(const uint8_t* data, size_t len);
-    uint64_t sendInputTransitionData(const uint8_t* data, size_t len);
+    bool sendTransitionInputData(const uint8_t* data, size_t len);
     bool sendLatestInputData(const uint8_t* data, size_t len);
-    std::optional<InputDeliveryResult> consumeInputDeliveryResult();
     bool sendControlData(const uint8_t* data, size_t len);
     bool sendMessageData(const uint8_t* data, size_t len);
     bool requestVideoKeyframe();
@@ -113,6 +143,7 @@ public:
     void setMediaEnabled(bool enabled);
     void setVideoJitterMode(VideoJitterMode mode);
     PeerMediaStats getMediaStats() const;
+    PeerLatencyWindow takeLatencyWindow();
 
     // Connection
     bool isConnected() const;
@@ -142,7 +173,9 @@ private:
         uint32_t highest_sequence = 0;
         uint32_t bitrate_bps = 0;
         uint64_t id = 0;
-        uint64_t input_ticket = 0;
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        std::chrono::steady_clock::time_point enqueued_at{};
+#endif
         uint32_t attempts = 0;
         std::chrono::steady_clock::time_point first_attempt_at{};
         std::chrono::steady_clock::time_point expires_at{};
@@ -151,6 +184,7 @@ private:
     static constexpr size_t kMaxOutboundCommands = 64;
     static constexpr size_t kMaxOutboundPayloadBytes = 1024;
     static constexpr uint8_t kMaxPliSendAttempts = 3;
+    static constexpr std::chrono::milliseconds kInputTransitionTtl{50};
     PeerConnection* pc_ = nullptr;
     PeerCallbacks callbacks_;
     std::atomic<bool> connected_{false};
@@ -171,6 +205,41 @@ private:
     uint64_t slow_pump_count_ = 0;
     std::chrono::steady_clock::time_point last_pump_phase_log_{};
 
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+    alignas(64) std::atomic<uint64_t> latency_pump_total_us_{0};
+    std::atomic<uint64_t> latency_pump_max_us_{0};
+    std::atomic<uint32_t> latency_pump_samples_{0};
+    std::atomic<uint64_t> latency_pump_gap_total_us_{0};
+    std::atomic<uint64_t> latency_pump_gap_max_us_{0};
+    std::atomic<uint32_t> latency_pump_gap_samples_{0};
+    std::atomic<uint64_t> latency_peer_loop_total_us_{0};
+    std::atomic<uint64_t> latency_peer_loop_max_us_{0};
+    std::atomic<uint64_t> latency_socket_total_us_{0};
+    std::atomic<uint64_t> latency_socket_max_us_{0};
+    std::atomic<uint64_t> latency_receive_loop_total_us_{0};
+    std::atomic<uint64_t> latency_receive_loop_max_us_{0};
+    std::atomic<uint64_t> latency_rtp_drain_total_us_{0};
+    std::atomic<uint64_t> latency_rtp_drain_max_us_{0};
+    std::atomic<uint64_t> latency_outbound_total_us_{0};
+    std::atomic<uint64_t> latency_outbound_max_us_{0};
+    std::atomic<uint64_t> latency_other_total_us_{0};
+    std::atomic<uint64_t> latency_other_max_us_{0};
+    std::atomic<uint64_t> latency_socket_packets_{0};
+    std::atomic<uint64_t> latency_rtp_packets_decoded_{0};
+    alignas(64) std::atomic<uint32_t> latency_input_enqueued_{0};
+    std::atomic<uint32_t> latency_input_replaced_{0};
+    std::atomic<uint32_t> latency_input_sent_{0};
+    std::atomic<uint32_t> latency_input_send_failures_{0};
+    std::atomic<uint64_t> latency_input_queue_total_us_{0};
+    std::atomic<uint64_t> latency_input_queue_max_us_{0};
+    std::atomic<uint32_t> latency_input_queue_samples_{0};
+    std::atomic<uint64_t> latency_input_send_total_us_{0};
+    std::atomic<uint64_t> latency_input_send_max_us_{0};
+    std::atomic<uint32_t> latency_input_send_samples_{0};
+    std::atomic<uint32_t> latency_outbound_queue_high_watermark_{0};
+    std::chrono::steady_clock::time_point latency_last_pump_started_{};
+#endif
+
     // ICE candidate collection
     std::vector<IceCandidate> local_candidates_;
     std::chrono::steady_clock::time_point media_clock_start_;
@@ -178,16 +247,9 @@ private:
     RtpClockMapper audio_clock_{48000};
     VideoRtpJitterBuffer video_jitter_;
     VideoJitterMode video_jitter_mode_ = VideoJitterMode::Home;
-    VideoNetworkQuality video_network_quality_ = VideoNetworkQuality::Good;
-    uint64_t smoothed_rtt_ms_ = 0;
-    uint64_t last_rtt_sample_ms_ = 0;
-    std::chrono::steady_clock::time_point video_quality_window_started_{};
-    uint32_t video_quality_last_packets_ = 0;
-    uint32_t video_quality_last_missing_ = 0;
-    uint32_t video_quality_last_nacks_ = 0;
-    uint32_t video_quality_last_recovered_ = 0;
-    uint32_t video_quality_bad_windows_ = 0;
-    uint32_t video_quality_good_windows_ = 0;
+    NetworkPathEstimator network_path_estimator_{NetworkPathMode::Home};
+    NetworkPathEstimate network_path_estimate_{};
+    std::chrono::steady_clock::time_point network_path_window_started_{};
     // The owner loop needs transport statistics far less often than it pumps
     // RTP/SCTP. Keep the last libpeer snapshot so processEvents() and the
     // session watchdog do not both call into the stats collector every 2 ms.
@@ -197,9 +259,7 @@ private:
     mutable bool media_stats_cache_valid_ = false;
     mutable std::mutex outbound_mutex_;
     std::deque<OutboundCommand> outbound_commands_;
-    std::deque<InputDeliveryResult> input_delivery_results_;
     uint64_t next_outbound_command_id_ = 1;
-    uint64_t next_input_delivery_ticket_ = 1;
     uint32_t next_input_sequence_ = 0;
     std::atomic<bool> data_channel_failed_{false};
     std::atomic<bool> data_channel_failure_event_{false};
@@ -211,12 +271,16 @@ private:
                      const uint8_t* data,
                      size_t len,
                      bool replace_existing,
-                     uint64_t input_ticket = 0,
-                     bool invalidate_pending_snapshot = false);
+                     std::chrono::milliseconds ttl =
+                         std::chrono::milliseconds{0});
     bool enqueueNack(uint16_t pid, uint16_t blp);
     bool enqueueSimple(OutboundCommand command, bool high_priority);
-    void drainOutboundCommands(std::chrono::steady_clock::time_point deadline);
-    bool completeOutboundCommand(const OutboundCommand& command, int result);
+    void drainOutboundCommands(
+        std::chrono::steady_clock::time_point deadline,
+        bool realtime_input_only = false);
+    bool completeOutboundCommand(const OutboundCommand& command,
+                                 int result,
+                                 bool data_channel_connected);
     int sendOutboundCommand(const OutboundCommand& command);
     int sendInputCommand(const OutboundCommand& command);
     bool prepareSequencedInputPayload(const OutboundCommand& command,
@@ -224,24 +288,40 @@ private:
     void commitSequencedInputResult(int result);
     void observeSctpSendResult(OutboundType type,
                                int result,
-                               uint32_t attempts);
+                               uint32_t attempts,
+                               bool data_channel_connected);
     void markDataChannelFailed(const char* reason,
                                OutboundType type,
                                int result,
-                               uint32_t attempts);
+                               uint32_t attempts,
+                               bool data_channel_connected);
     void resetDataChannelHealth();
     void clearOutboundCommands();
     PeerConnectionMediaStats networkStatsSnapshot() const;
     void invalidateMediaStatsCache();
-    void updateVideoNetworkQuality(const PeerMediaStats& stats);
+    void updateNetworkPathEstimate(const PeerMediaStats& stats);
+    void applyVideoJitterPolicy(const NetworkPathEstimate& path);
     static bool isReliableCommand(OutboundType type);
     static bool isSctpCommand(OutboundType type);
+    static bool isRecoverableSctpSendError(int result,
+                                           bool data_channel_connected);
     static int outboundPriority(OutboundType type);
     bool selectOutboundCommand(OutboundCommand& command,
-                               bool allow_sctp) const;
+                               bool allow_sctp,
+                               bool realtime_input_only = false) const;
     void logOutboundDrop(const char* reason,
                          OutboundType type,
                          int result = 0) noexcept;
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+    template <typename T>
+    static void recordLatencyMaximum(std::atomic<T>& target, T sample) {
+        T current = target.load(std::memory_order_relaxed);
+        while (sample > current &&
+               !target.compare_exchange_weak(current, sample,
+                                             std::memory_order_relaxed)) {}
+    }
+    void recordOutboundQueueDepthLocked() noexcept;
+#endif
 
     static void onIceCandidate(char* sdp_text, void* userdata);
     static void onIceStateChange(PeerConnectionState state, void* userdata);

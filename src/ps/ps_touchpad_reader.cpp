@@ -121,13 +121,21 @@ PsTouchpadState PsTouchpadReader::read(bool suppressed) {
     const size_t samples = hidGetTouchScreenStates(&state, 1);
 
     if (suppressed) {
+        // Only fence off a touch that was already in progress when the UI
+        // took ownership.  Setting this unconditionally makes a quiet UI
+        // period depend on a later empty HID sample; if libnx has no new
+        // sample queued, the first touch after returning to the game is
+        // discarded until the user taps again.
+        const bool had_active_touch = activeTouchCount() > 0 ||
+            gesture_ != GestureState::Idle;
+        if (had_active_touch) blocked_finger_id_ = primary_finger_id_;
         gesture_ = GestureState::Idle;
         touches_ = {};
         had_multiple_touches_ = false;
         release_was_long_press_ = false;
         // The menu may open between HID samples. Require a later, valid empty
         // sample before accepting another touch so a held finger cannot leak.
-        blocked_until_release_ = true;
+        blocked_until_release_ = had_active_touch;
         return {};
     }
 
@@ -159,7 +167,21 @@ PsTouchpadState PsTouchpadReader::read(bool suppressed) {
     const size_t count = state.count;
     if (blocked_until_release_) {
         if (count == 0) blocked_until_release_ = false;
-        return {};
+        else {
+            bool blocked_finger_present = false;
+            for (size_t i = 0; i < count; ++i) {
+                if (state.touches[i].finger_id == blocked_finger_id_) {
+                    blocked_finger_present = true;
+                    break;
+                }
+            }
+            // Some HID sequences do not provide a separate empty sample
+            // between an interrupted touch and the next touch. If the old
+            // finger is gone, this is a new gesture and the fence can be
+            // removed without requiring a stream restart.
+            if (blocked_finger_present) return {};
+            blocked_until_release_ = false;
+        }
     }
 
     const HidTouchState* primary = nullptr;
@@ -246,7 +268,10 @@ void PsTouchpadReader::reset() {
     touches_ = {};
     had_multiple_touches_ = false;
     release_was_long_press_ = false;
-    blocked_until_release_ = true;
+    // Reset is an empty input boundary, so the next valid touch is a new
+    // gesture. There is no held touch to fence off here.
+    blocked_until_release_ = false;
+    blocked_finger_id_ = 0;
 }
 
 } // namespace lunar::ps

@@ -1,0 +1,280 @@
+From: LunarNX Team <noreply@lunarnx.local>
+Date: Tue, 25 Aug 2026 17:40:00 +0800
+Subject: [PATCH 3/3] sctp: apply datachannel policy and safe lifecycle
+
+Use usrsctp's unordered and PR-SCTP send options for application messages,
+while keeping DCEP control reliable and ordered. Preserve the policy by SID
+and let usrsctp process inbound DCEP only after SCTP validation/reassembly.
+Keep failed asynchronous shutdowns initialized across fast reconnects, and
+release socket/address state on every association setup failure.
+
+diff --git a/src/peer_connection.c b/src/peer_connection.c
+--- a/src/peer_connection.c
++++ b/src/peer_connection.c
+@@ -743,7 +743,9 @@ int peer_connection_create_datachannel_sid(PeerConnection* pc, DecpChannelType c
+ 
+   rtrn = sctp_outgoing_data(&pc->sctp, msg, msg_size, PPID_CONTROL, sid);
+   if (rtrn >= 0) {
+-    sctp_add_stream_mapping(&pc->sctp, label, sid);
++    sctp_add_stream_mapping(&pc->sctp, label, sid,
++                            (uint8_t)channel_type,
++                            reliability_parameter);
+   }
+   free(msg);
+   return rtrn;
+diff --git a/src/sctp.c b/src/sctp.c
+--- a/src/sctp.c
++++ b/src/sctp.c
+@@ -1,3 +1,4 @@
++#include <errno.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <stdarg.h>
+@@ -8,6 +9,8 @@
+ #include "utils.h"
+ #if CONFIG_USE_USRSCTP
+ #include <usrsctp.h>
++
++static int usrsctp_initialized = 0;
+ #endif
+ 
+ #ifndef SCTP_ENABLE_DEBUG_LOGS
+@@ -116,6 +117,15 @@ static uint32_t sctp_get_checksum(Sctp* sctp, const uint8_t* buf, size_t len) {
+   return crc;
+ }
+ 
++static SctpStreamEntry* sctp_find_stream(Sctp* sctp, uint16_t sid) {
++  for (int i = 0; i < sctp->stream_count; i++) {
++    if (sctp->stream_table[i].sid == sid) {
++      return &sctp->stream_table[i];
++    }
++  }
++  return NULL;
++}
++
+ #if !CONFIG_USE_USRSCTP
+ static size_t sctp_padded_length(size_t len) {
+   return 4 * ((len + 3) / 4);
+@@ -184,6 +194,7 @@ int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uin
+ #if CONFIG_USE_USRSCTP
+   int res;
+   struct sctp_sendv_spa spa = {0};
++  SctpStreamEntry* stream = sctp_find_stream(sctp, sid);
+ 
+   spa.sendv_flags = SCTP_SEND_SNDINFO_VALID;
+ 
+@@ -191,9 +202,30 @@ int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uin
+   spa.sendv_sndinfo.snd_flags = SCTP_EOR;
+   spa.sendv_sndinfo.snd_ppid = htonl(ppid);
+ 
++  // DCEP control traffic is always reliable and ordered. Application data
++  // follows the policy advertised when the channel was opened.
++  if (ppid != PPID_CONTROL && stream) {
++    const uint8_t reliability_type = stream->channel_type & 0x7f;
++    if ((stream->channel_type & 0x80) != 0) {
++      spa.sendv_sndinfo.snd_flags |= SCTP_UNORDERED;
++    }
++    if (reliability_type == 0x01 || reliability_type == 0x02) {
++      spa.sendv_flags |= SCTP_SEND_PRINFO_VALID;
++      spa.sendv_prinfo.pr_policy = reliability_type == 0x01
++          ? SCTP_PR_SCTP_RTX
++          : SCTP_PR_SCTP_TTL;
++      spa.sendv_prinfo.pr_value = stream->reliability_parameter;
++    }
++  }
++
+   res = usrsctp_sendv(sctp->sock, buf, len, NULL, 0, &spa, sizeof(spa), SCTP_SENDV_SPA, 0);
+   if (res < 0) {
+-    LOGE("sctp sendv error %d: %s", errno, strerror(errno));
++    const int send_error = errno;
++    LOGE("sctp sendv error %d: %s", send_error, strerror(send_error));
++    if (send_error == EAGAIN || send_error == EWOULDBLOCK ||
++        send_error == EINTR || send_error == ENOBUFS) {
++      return MBEDTLS_ERR_SSL_WANT_WRITE;
++    }
+   }
+   return res;
+ #else
+@@ -263,15 +295,22 @@ int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uin
+ #endif
+ }
+ 
+-void sctp_add_stream_mapping(Sctp* sctp, const char* label, uint16_t sid) {
+-  for (int i = 0; i < sctp->stream_count; i++) {
+-    if (sctp->stream_table[i].sid == sid) {
+-      return;
+-    }
++void sctp_add_stream_mapping(Sctp* sctp, const char* label, uint16_t sid,
++                             uint8_t channel_type,
++                             uint32_t reliability_parameter) {
++  SctpStreamEntry* stream = sctp_find_stream(sctp, sid);
++  if (stream) {
++    stream->channel_type = channel_type;
++    stream->reliability_parameter = reliability_parameter;
++    return;
+   }
+   if (sctp->stream_count < SCTP_MAX_STREAMS) {
+-    strncpy(sctp->stream_table[sctp->stream_count].label, label, sizeof(sctp->stream_table[sctp->stream_count].label));
+-    sctp->stream_table[sctp->stream_count].sid = sid;
++    stream = &sctp->stream_table[sctp->stream_count];
++    strncpy(stream->label, label, sizeof(stream->label));
++    stream->label[sizeof(stream->label) - 1] = '\0';
++    stream->sid = sid;
++    stream->channel_type = channel_type;
++    stream->reliability_parameter = reliability_parameter;
+     sctp->stream_count++;
+   } else
+     LOGE("Stream table full. Cannot add more streams.");
+@@ -282,8 +321,11 @@ void sctp_parse_data_channel_open(Sctp* sctp, uint16_t sid, char* data, size_t l
+     return;  // Not enough data for a DATA_CHANNEL_OPEN message
+ 
+   if (data[0] == DATA_CHANNEL_OPEN) {
++    uint32_t reliability_parameter = 0;
+     uint16_t label_length = ntohs(*(uint16_t*)(data + 8));
+     uint16_t protocol_length = ntohs(*(uint16_t*)(data + 10));
++    memcpy(&reliability_parameter, data + 4, sizeof(reliability_parameter));
++    reliability_parameter = ntohl(reliability_parameter);
+ 
+     // Ensure we have enough data for the label and protocol
+     if (length < 12 + label_length + protocol_length)
+@@ -300,27 +342,13 @@ void sctp_parse_data_channel_open(Sctp* sctp, uint16_t sid, char* data, size_t l
+     printf("DATA_CHANNEL_OPEN: Label=%s, sid=%d\n", label_str, sid);
+ 
+     // Add stream mapping
+-    sctp_add_stream_mapping(sctp, label_str, sid);
++    sctp_add_stream_mapping(sctp, label_str, sid, (uint8_t)data[1],
++                            reliability_parameter);
+     char ack = DATA_CHANNEL_ACK;
+-    sctp_outgoing_data(sctp, &ack, 1, DATA_CHANNEL_PPID_CONTROL, sid);
++    sctp_outgoing_data(sctp, &ack, 1, PPID_CONTROL, sid);
+   }
+ }
+ 
+-void sctp_handle_sctp_packet(Sctp* sctp, char* buf, size_t len) {
+-  if (len <= 29)
+-    return;
+-
+-  if (buf[12] != 0)  // if chunk_type is no zero, it's not data
+-    return;
+-
+-  uint16_t sid = ntohs(*(uint16_t*)(buf + 20));
+-  uint32_t ppid = ntohl(*(uint32_t*)(buf + 24));
+-
+-  if (ppid == DATA_CHANNEL_PPID_CONTROL)
+-    sctp_parse_data_channel_open(sctp, sid, buf + 28, len - 28);
+-}
+-
+-#if !CONFIG_USE_USRSCTP
+ static void sctp_handle_data_channel_control(Sctp* sctp, uint16_t sid, char* data, size_t length) {
+   if (!data || length == 0)
+     return;
+@@ -341,14 +369,12 @@ static void sctp_handle_data_channel_control(Sctp* sctp, uint16_t sid, char* dat
+       break;
+   }
+ }
+-#endif
+ 
+ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len) {
+   if (!sctp)
+     return;
+ 
+ #if CONFIG_USE_USRSCTP
+-  sctp_handle_sctp_packet(sctp, buf, len);
+   usrsctp_conninput(sctp, buf, len, 0);
+ #else
+   sctp_debug_log("incoming len=%zu first_chunk=%u", len, len > sizeof(SctpHeader) ? (unsigned)buf[sizeof(SctpHeader)] : 255);
+@@ -562,6 +588,7 @@ static int sctp_handle_incoming_data(Sctp* sctp, char* data, size_t len, uint32_
+ #if CONFIG_USE_USRSCTP
+   switch (ppid) {
+     case DATA_CHANNEL_PPID_CONTROL:
++      sctp_handle_data_channel_control(sctp, sid, data, len);
+       break;
+ 
+     case DATA_CHANNEL_PPID_DOMSTRING:
+@@ -637,13 +666,21 @@ static int sctp_incoming_data_cb(struct socket* sock, union sctp_sockstore addr,
+ 
+ void sctp_usrsctp_init() {
+ #if CONFIG_USE_USRSCTP
+-  usrsctp_init(0, sctp_outgoing_data_cb, NULL);
++  if (!usrsctp_initialized) {
++    usrsctp_init(0, sctp_outgoing_data_cb, NULL);
++    usrsctp_initialized = 1;
++  }
+ #endif
+ }
+ 
+ void sctp_usrsctp_deinit() {
+ #if CONFIG_USE_USRSCTP
+-  usrsctp_finish();
++  // usrsctp_finish() can temporarily fail while an abortive socket close is
++  // still being retired. Keep the live global stack in that case so a fast
++  // Xbox reconnect cannot double-initialize its mutexes and timer thread.
++  if (usrsctp_initialized && usrsctp_finish() == 0) {
++    usrsctp_initialized = 0;
++  }
+ #endif
+ }
+ 
+@@ -661,9 +698,13 @@ int sctp_create_association(Sctp* sctp, DtlsSrtp* dtls_srtp) {
+                                        sctp_incoming_data_cb, NULL, 0, sctp);
+ 
+   if (!sock) {
++    usrsctp_deregister_address(sctp);
+     LOGE("usrsctp_socket failed");
+     return -1;
+   }
++  // Publish the socket immediately so every later setup failure goes through
++  // the same close/deregister cleanup path.
++  sctp->sock = sock;
+ 
+   do {
+     if (usrsctp_set_non_blocking(sock, 1) < 0) {
+@@ -724,6 +765,10 @@ int sctp_create_association(Sctp* sctp, DtlsSrtp* dtls_srtp) {
+     sconn.sconn_port = htons(sctp->local_port);
+     sconn.sconn_addr = (void*)sctp;
+     ret = usrsctp_bind(sock, (struct sockaddr*)&sconn, sizeof(sconn));
++    if (ret < 0) {
++      LOGE("bind error");
++      break;
++    }
+ 
+     struct sockaddr_conn rconn;
+ 
+@@ -747,7 +792,6 @@ int sctp_create_association(Sctp* sctp, DtlsSrtp* dtls_srtp) {
+     return -1;
+   }
+ 
+-  sctp->sock = sock;
+ #else
+   // send SCTP_INIT
+   int length = 0;
+@@ -784,6 +828,7 @@ void sctp_destroy_association(Sctp* sctp) {
+     usrsctp_shutdown(sctp->sock, SHUT_RDWR);
+     usrsctp_close(sctp->sock);
+     sctp->sock = NULL;
++    usrsctp_deregister_address(sctp);
+   }
+ #endif
+ }
+diff --git a/src/sctp.h b/src/sctp.h
+--- a/src/sctp.h
++++ b/src/sctp.h
+@@ -146,6 +146,8 @@ typedef enum SctpDataPpid {
+ typedef struct {
+   char label[32];  // Stream label
+   uint16_t sid;    // Stream ID
++  uint8_t channel_type;
++  uint32_t reliability_parameter;
+ } SctpStreamEntry;
+ 
+ typedef struct Sctp {
+@@ -185,6 +187,8 @@ void sctp_incoming_data(Sctp* sctp, char* buf, size_t len);
+ 
+ int sctp_outgoing_data(Sctp* sctp, char* buf, size_t len, SctpDataPpid ppid, uint16_t sid);
+ 
+-void sctp_add_stream_mapping(Sctp* sctp, const char* label, uint16_t sid);
++void sctp_add_stream_mapping(Sctp* sctp, const char* label, uint16_t sid,
++                             uint8_t channel_type,
++                             uint32_t reliability_parameter);
+ 
+ void sctp_onmessage(Sctp* sctp, void (*onmessage)(char* msg, size_t len, void* userdata, uint16_t sid));

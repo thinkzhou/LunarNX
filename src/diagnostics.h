@@ -22,6 +22,10 @@
 #define LUNARNX_DROP_DIAGNOSTIC_LOG 0
 #endif
 
+#ifndef LUNARNX_LATENCY_DIAGNOSTIC_LOG
+#define LUNARNX_LATENCY_DIAGNOSTIC_LOG 0
+#endif
+
 namespace lunar {
 
 inline const char* get_diagnostic_log_path() {
@@ -78,9 +82,22 @@ inline void diagnosticTimestamp(char* buffer, size_t buffer_size) noexcept {
                   utc_time.tm_sec, static_cast<long long>(milliseconds));
 }
 
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
+#if LUNARNX_DROP_DIAGNOSTIC_LOG || LUNARNX_LATENCY_DIAGNOSTIC_LOG
 inline constexpr size_t kDropDiagnosticQueueCapacity = 64;
 inline constexpr size_t kDropDiagnosticLineBytes = 4096;
+
+struct AsyncDiagnosticWriterStats {
+    uint64_t enqueued = 0;
+    uint64_t dropped = 0;
+    uint64_t batches = 0;
+    uint64_t bytes_written = 0;
+    uint64_t write_total_us = 0;
+    uint64_t write_max_us = 0;
+    uint64_t file_opens = 0;
+    uint64_t flushes = 0;
+    uint32_t queue_depth = 0;
+    uint32_t queue_high_watermark = 0;
+};
 
 namespace detail {
 
@@ -153,6 +170,13 @@ public:
             entry.text[entry.length] = '\0';
             entry.urgent = urgent;
             count_++;
+            enqueued_.fetch_add(1, std::memory_order_relaxed);
+            uint32_t high = queue_high_watermark_.load(
+                std::memory_order_relaxed);
+            const uint32_t depth = static_cast<uint32_t>(count_);
+            while (depth > high &&
+                   !queue_high_watermark_.compare_exchange_weak(
+                       high, depth, std::memory_order_relaxed)) {}
             cv_.notify_one();
             return true;
         } catch (...) {
@@ -163,6 +187,35 @@ public:
 
     uint64_t dropped() const noexcept {
         return dropped_.load(std::memory_order_relaxed);
+    }
+
+    bool running() const noexcept {
+        try {
+            std::lock_guard<std::mutex> lock(mutex_);
+            return running_ && !stopping_;
+        } catch (...) {
+            return false;
+        }
+    }
+
+    AsyncDiagnosticWriterStats stats() const noexcept {
+        AsyncDiagnosticWriterStats result;
+        result.enqueued = enqueued_.load(std::memory_order_relaxed);
+        result.dropped = dropped_.load(std::memory_order_relaxed);
+        result.batches = batches_.load(std::memory_order_relaxed);
+        result.bytes_written = bytes_written_.load(std::memory_order_relaxed);
+        result.write_total_us = write_total_us_.load(std::memory_order_relaxed);
+        result.write_max_us = write_max_us_.load(std::memory_order_relaxed);
+        result.file_opens = file_opens_.load(std::memory_order_relaxed);
+        result.flushes = flushes_.load(std::memory_order_relaxed);
+        result.queue_high_watermark = queue_high_watermark_.load(
+            std::memory_order_relaxed);
+        try {
+            std::lock_guard<std::mutex> lock(mutex_);
+            result.queue_depth = static_cast<uint32_t>(count_);
+        } catch (...) {
+        }
+        return result;
     }
 
 private:
@@ -182,19 +235,23 @@ private:
             return;
         }
 
+        FILE* log = nullptr;
+        auto last_flush = std::chrono::steady_clock::now();
         while (true) {
             batch.clear();
             bool should_stop = false;
+            bool batch_urgent = false;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
                 cv_.wait(lock, [this]() { return stopping_ || count_ > 0; });
                 if (!stopping_ && !hasUrgentLocked()) {
-                    cv_.wait_for(lock, std::chrono::milliseconds(20),
+                    cv_.wait_for(lock, std::chrono::milliseconds(100),
                                  [this]() {
                                      return stopping_ || hasUrgentLocked();
                                  });
                 }
                 while (count_ > 0) {
+                    batch_urgent = batch_urgent || entries_[head_].urgent;
                     batch.push_back(entries_[head_]);
                     head_ = (head_ + 1) % entries_.size();
                     count_--;
@@ -203,9 +260,18 @@ private:
             }
 
             try {
+                const auto write_started = std::chrono::steady_clock::now();
+                uint64_t batch_bytes = 0;
                 ensureDiagnosticLogDirectory();
                 std::lock_guard<std::mutex> file_lock(diagnosticLogMutex());
-                FILE* log = std::fopen(get_diagnostic_log_path(), "a");
+                if (!log) {
+                    log = std::fopen(get_diagnostic_log_path(), "a");
+                    if (log) {
+                        std::setvbuf(log, nullptr, _IOFBF, 16 * 1024);
+                        file_opens_.fetch_add(1, std::memory_order_relaxed);
+                        last_flush = std::chrono::steady_clock::now();
+                    }
+                }
                 if (log) {
                     const uint64_t dropped_now = dropped();
                     if (dropped_now != reported_drops_) {
@@ -218,13 +284,44 @@ private:
                     }
                     for (const auto& entry : batch) {
                         std::fwrite(entry.text.data(), 1, entry.length, log);
+                        batch_bytes += entry.length;
                     }
-                    std::fclose(log);
+                    const auto now = std::chrono::steady_clock::now();
+                    if (batch_urgent || should_stop ||
+                        now - last_flush >= std::chrono::seconds(1)) {
+                        std::fflush(log);
+                        flushes_.fetch_add(1, std::memory_order_relaxed);
+                        last_flush = now;
+                    }
+                    const uint64_t write_us = static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - write_started).count());
+                    batches_.fetch_add(1, std::memory_order_relaxed);
+                    bytes_written_.fetch_add(batch_bytes,
+                                             std::memory_order_relaxed);
+                    write_total_us_.fetch_add(write_us,
+                                              std::memory_order_relaxed);
+                    uint64_t high = write_max_us_.load(
+                        std::memory_order_relaxed);
+                    while (write_us > high &&
+                           !write_max_us_.compare_exchange_weak(
+                               high, write_us, std::memory_order_relaxed)) {}
                 }
             } catch (...) {
             }
 
-            if (should_stop) return;
+            if (should_stop) {
+                try {
+                    std::lock_guard<std::mutex> file_lock(
+                        diagnosticLogMutex());
+                    if (log) {
+                        std::fclose(log);
+                        log = nullptr;
+                    }
+                } catch (...) {
+                }
+                return;
+            }
         }
     }
 
@@ -236,7 +333,15 @@ private:
     size_t count_ = 0;
     bool running_ = false;
     bool stopping_ = false;
+    std::atomic<uint64_t> enqueued_{0};
     std::atomic<uint64_t> dropped_{0};
+    std::atomic<uint64_t> batches_{0};
+    std::atomic<uint64_t> bytes_written_{0};
+    std::atomic<uint64_t> write_total_us_{0};
+    std::atomic<uint64_t> write_max_us_{0};
+    std::atomic<uint64_t> file_opens_{0};
+    std::atomic<uint64_t> flushes_{0};
+    std::atomic<uint32_t> queue_high_watermark_{0};
     uint64_t reported_drops_ = 0;
 };
 
@@ -261,13 +366,37 @@ inline bool enqueueDropDiagnostic(const char* text,
     return detail::dropDiagnosticWriter().enqueue(text, length, urgent);
 }
 
+inline bool dropDiagnosticWriterRunning() noexcept {
+    return detail::dropDiagnosticWriter().running();
+}
+
 inline uint64_t dropDiagnosticQueueDrops() noexcept {
     return detail::dropDiagnosticWriter().dropped();
 }
+
+inline AsyncDiagnosticWriterStats asyncDiagnosticWriterStats() noexcept {
+    return detail::dropDiagnosticWriter().stats();
+}
 #else
+struct AsyncDiagnosticWriterStats {
+    uint64_t enqueued = 0;
+    uint64_t dropped = 0;
+    uint64_t batches = 0;
+    uint64_t bytes_written = 0;
+    uint64_t write_total_us = 0;
+    uint64_t write_max_us = 0;
+    uint64_t file_opens = 0;
+    uint64_t flushes = 0;
+    uint32_t queue_depth = 0;
+    uint32_t queue_high_watermark = 0;
+};
 inline void startDropDiagnosticWriter() noexcept {}
 inline void stopDropDiagnosticWriter() noexcept {}
+inline bool dropDiagnosticWriterRunning() noexcept { return false; }
 inline uint64_t dropDiagnosticQueueDrops() noexcept { return 0; }
+inline AsyncDiagnosticWriterStats asyncDiagnosticWriterStats() noexcept {
+    return {};
+}
 #endif
 
 inline std::atomic<bool>& cloud1080CrashProbeFlag() {
@@ -336,16 +465,51 @@ inline void diagnosticLog(const char* component, const char* format, ...) noexce
 // bounded, user-initiated troubleshooting flows and must never be per-packet.
 inline void persistentEventLog(const char* component, const char* format, ...) noexcept {
     try {
+        va_list args;
+        va_start(args, format);
+#if LUNARNX_DROP_DIAGNOSTIC_LOG || LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        if (dropDiagnosticWriterRunning()) {
+            std::array<char, kDropDiagnosticLineBytes> line{};
+            char timestamp[80]{};
+            diagnosticTimestamp(timestamp, sizeof(timestamp));
+            int written = std::snprintf(
+                line.data(), line.size(), "[%s] [%s] ", timestamp,
+                component ? component : "event");
+            if (written >= 0) {
+                size_t used = std::min(static_cast<size_t>(written),
+                                       line.size() - 1);
+                va_list args_copy;
+                va_copy(args_copy, args);
+                const int body_written = std::vsnprintf(
+                    line.data() + used, line.size() - used, format,
+                    args_copy);
+                va_end(args_copy);
+                if (body_written > 0) {
+                    used += std::min(static_cast<size_t>(body_written),
+                                     line.size() - used - 1);
+                }
+                if (used + 1 < line.size()) {
+                    line[used++] = '\n';
+                    line[used] = '\0';
+                }
+                if (enqueueDropDiagnostic(line.data(), used, true)) {
+                    va_end(args);
+                    return;
+                }
+            }
+        }
+#endif
         ensureDiagnosticLogDirectory();
         std::lock_guard<std::mutex> lock(diagnosticLogMutex());
         FILE* log = std::fopen(get_diagnostic_log_path(), "a");
-        if (!log) return;
+        if (!log) {
+            va_end(args);
+            return;
+        }
         char timestamp[80]{};
         diagnosticTimestamp(timestamp, sizeof(timestamp));
         std::fprintf(log, "[%s] [%s] ", timestamp,
                      component ? component : "event");
-        va_list args;
-        va_start(args, format);
         std::vfprintf(log, format, args);
         va_end(args);
         std::fprintf(log, "\n");
@@ -410,6 +574,51 @@ inline void dropDiagnosticLog(const char* component,
     va_start(args, format);
     enqueueFormattedDropDiagnostic(false, component, format, args);
     va_end(args);
+#else
+    (void)component;
+    (void)format;
+#endif
+}
+
+// Periodic latency summaries use the same bounded background writer as sparse
+// drop diagnostics. Callers aggregate hot-path samples in memory and invoke
+// this at most once per reporting window; no media/input callback writes to the
+// SD card directly.
+#if defined(__GNUC__) || defined(__clang__)
+inline void latencyDiagnosticLog(const char* component,
+                                 const char* format,
+                                 ...) noexcept
+    __attribute__((format(printf, 2, 3)));
+#endif
+inline void latencyDiagnosticLog(const char* component,
+                                 const char* format,
+                                 ...) noexcept {
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+    try {
+        std::array<char, kDropDiagnosticLineBytes> line{};
+        int written = std::snprintf(
+            line.data(), line.size(),
+            "[latency-diag t=%llums %s] ",
+            static_cast<unsigned long long>(diagnosticMonotonicMs()),
+            component ? component : "stream");
+        if (written < 0) return;
+        size_t used = std::min(static_cast<size_t>(written), line.size() - 1);
+        va_list args;
+        va_start(args, format);
+        const int body_written = std::vsnprintf(
+            line.data() + used, line.size() - used, format, args);
+        va_end(args);
+        if (body_written > 0) {
+            used += std::min(static_cast<size_t>(body_written),
+                             line.size() - used - 1);
+        }
+        if (used + 1 < line.size()) {
+            line[used++] = '\n';
+            line[used] = '\0';
+        }
+        enqueueDropDiagnostic(line.data(), used, false);
+    } catch (...) {
+    }
 #else
     (void)component;
     (void)format;

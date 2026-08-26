@@ -23,9 +23,9 @@ def main() -> None:
 
     require("APP_DIAG ?= 0" in switch_makefile,
             "normal per-frame diagnostics must remain disabled by default")
-    require("DROP_DIAG ?= 0" in switch_makefile and
+    require("DROP_DIAG ?= 1" in switch_makefile and
             "LUNARNX_DROP_DIAGNOSTIC_LOG=$(DROP_DIAG)" in switch_makefile,
-            "drop diagnostics must be available but disabled in release builds")
+            "drop diagnostics must be enabled by default in Switch release builds")
     media_stats_start = peer.index("PeerMediaStats PeerManager::getMediaStats() const")
     media_stats_end = peer.index("void PeerManager::processEvents()", media_stats_start)
     media_stats = peer[media_stats_start:media_stats_end]

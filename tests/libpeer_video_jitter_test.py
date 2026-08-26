@@ -11,6 +11,8 @@ def main():
     desktop_make = Path("Makefile.desktop").read_text()
     switch_make = Path("Makefile.switch").read_text()
     jitter_header = Path("src/webrtc/video_rtp_jitter_buffer.h").read_text()
+    estimator = Path("src/webrtc/network_path_estimator.h").read_text()
+    policy = Path("src/webrtc/video_jitter_policy.h").read_text()
     peer_manager = Path("src/webrtc/peer_manager.cpp").read_text()
     peer_header = Path("src/webrtc/peer_manager.h").read_text()
     session = Path("src/app/xbox_stream_session.cpp").read_text()
@@ -44,43 +46,41 @@ def main():
         "Jitter recovery must coalesce PLI through the session request path",
     )
     require(
-        "smoothed_rtt_ms_" in peer_manager
-        and "kHomeMinJitterHoldMs = 24" in peer_manager
-        and "kHomeMaxJitterHoldMs = 48" in peer_manager
-        and "kCloudMaxJitterHoldMs = 180" in peer_manager
-        and "kCloudRecoveryHoldMs = 300" in peer_manager
-        and "smoothed_rtt_ms_ + 40" in peer_manager
-        and "smoothed_rtt_ms_ + 30" in peer_manager
-        and "smoothed_rtt_ms_ * 2" in peer_manager
-        and "cloud ? 6 : 2" in peer_manager
+        "NetworkPathEstimator" in peer_header
+        and "computeVideoJitterPolicy" in peer_manager
+        and "setMissingPacketHoldMs" in peer_manager
+        and "NetworkPathMode::Home" in estimator
+        and "enum class NetworkPathMode" in estimator
+        and "Cloud," in estimator
+        and "rtt_inflation_ms" in estimator
+        and "missing_packet_hold_ms" in policy
+        and policy.count("max_head_blocked_frames = 3") >= 2
         and "setHeadBlockedPolicy" in jitter_header
         and "kMediaStatsCacheInterval{250}" in peer_manager
         and "networkStatsSnapshot" in peer_manager
-        and "last_rtt_sample_ms_" in peer_manager
         and "setVideoJitterMode" in peer_manager,
-        "Adaptive jitter hold must use smoothed, profile-specific low-latency bounds",
+        "Adaptive jitter must use the shared path estimate and mode-aware bounds",
     )
     jitter_source = Path("src/webrtc/video_rtp_jitter_buffer.cpp").read_text()
     require(
-        "kCloudRttThresholdMs" in jitter_source
-        and "kMaxMissingPacketHoldMs" in jitter_source
-        and "missingPacketHoldMs" in jitter_source,
-        "high-RTT missing packets must receive a bounded NACK recovery budget",
+        "missingPacketHoldMs" in jitter_source
+        and "missing_packets_unrecovered" in jitter_source
+        and "countUnrecovered" in jitter_source,
+        "jitter buffer must apply the policy deadline and count final loss",
     )
     require(
-        "enum class VideoNetworkQuality" in jitter_header
-        and "setNetworkQuality" in jitter_header
-        and "VideoNetworkQuality::Good" in jitter_source
-        and "VideoNetworkQuality::Fair" in jitter_source
-        and "VideoNetworkQuality::Poor" in jitter_source,
-        "RTP missing-packet recovery must use the network quality tiers",
+        "enum class NetworkPathQuality" in estimator
+        and "NetworkPathQuality::Good" in estimator
+        and "NetworkPathQuality::Fair" in estimator
+        and "NetworkPathQuality::Poor" in estimator,
+        "shared path estimation must expose quality tiers",
     )
     require(
-        "updateVideoNetworkQuality(network_stats)" in peer_manager
-        and "video_quality_bad_windows_ >= 2" in peer_manager
-        and "video_quality_good_windows_ >= 3" in peer_manager
+        "updateNetworkPathEstimate(network_stats)" in peer_manager
+        and "bad_windows_ >= 2" in estimator
+        and "good_windows_ >= 3" in estimator
         and "xbox-net-quality" in peer_manager,
-        "network quality must use rolling evidence, hysteresis, and DROP_DIAG telemetry",
+        "network path quality must use rolling evidence, hysteresis, and telemetry",
     )
     require(
         "on_video_recovery" in peer_header

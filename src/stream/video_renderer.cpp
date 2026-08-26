@@ -17,13 +17,25 @@
 #include <utility>
 #include <vector>
 #include <array>
+
+namespace lunar::stream {
+namespace {
+
+uint64_t rendererMonotonicNowNs() {
+  return static_cast<uint64_t>(std::chrono::duration_cast<
+      std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+}
+}
+
 #ifdef __SWITCH__
 #include <deko3d.hpp>
 #include <borealis.hpp>
 #include <borealis/platforms/switch/switch_video.hpp>
 #include <nanovg/framework/CMemPool.h>
 #include <nanovg/framework/CShader.h>
-#include <nanovg/framework/CCmdMemRing.h>
 extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/hwcontext_nvtegra.h>
@@ -34,6 +46,19 @@ namespace lunar::stream {
 namespace {
   static constexpr unsigned UpdateCmdSliceSize = 0x1000;
   static constexpr unsigned PresentCmdSliceSize = 0x8000;
+  // The Borealis sample ring waits forever. That is unsafe inside draw(): a
+  // delayed GPU fence would hold the UI and media lifecycle locks forever.
+  // A triple-buffered slice should normally already be ready; spend at most
+  // 2 ms waiting, then keep the retained frame and retry on the next draw.
+  static constexpr int64_t kCommandRingWaitTimeoutNs = 2'000'000;
+  // 45 frames at 60 Hz is about 750 ms. Short GPU scheduling blips recover by
+  // bounded retry alone; a persistent stall still gets a full 250 ms renderer
+  // handoff before the one-second presentation watchdog becomes due.
+  static constexpr uint32_t kCommandRingTimeoutFaultThreshold = 45;
+  // Log only stalls that survive roughly eight 60 Hz presentation attempts.
+  // This captures user-visible incidents without synchronously writing to the
+  // SD card for harmless one-frame scheduling jitter.
+  static constexpr uint32_t kCommandRingDiagnosticThreshold = 8;
   static constexpr size_t MaxRetiredTargets =
       brls::FRAMEBUFFERS_COUNT * 6;
   // Real-hardware diagnostics are synchronously flushed to the SD card. Keep
@@ -42,6 +67,51 @@ namespace {
   static constexpr int RenderLogLimit = 8;
   using RenderClock = std::chrono::steady_clock;
   std::atomic<int> render_logs{0};
+
+  template <unsigned NumSlices>
+  class BoundedCmdMemRing {
+      static_assert(NumSlices > 0, "command ring needs at least one slice");
+
+  public:
+      ~BoundedCmdMemRing() { memory_.destroy(); }
+
+      bool allocate(CMemPool& pool, uint32_t slice_size) {
+          slice_size = (slice_size + DK_CMDMEM_ALIGNMENT - 1) &
+              ~(DK_CMDMEM_ALIGNMENT - 1);
+          memory_ = pool.allocate(NumSlices * slice_size);
+          return static_cast<bool>(memory_);
+      }
+
+      DkResult begin(dk::CmdBuf command_buffer, int64_t timeout_ns) {
+          command_buffer.clear();
+          const uint32_t slice_size = memory_.getSize() / NumSlices;
+          const DkResult result = fences_[current_slice_].wait(timeout_ns);
+          if (result != DkResult_Success) return result;
+          command_buffer.addMemory(
+              memory_.getMemBlock(),
+              memory_.getOffset() + current_slice_ * slice_size,
+              slice_size);
+          return DkResult_Success;
+      }
+
+      DkCmdList end(dk::CmdBuf command_buffer) {
+          command_buffer.signalFence(fences_[current_slice_]);
+          current_slice_ = (current_slice_ + 1) % NumSlices;
+          return command_buffer.finishList();
+      }
+
+  private:
+      CMemPool::Handle memory_{};
+      unsigned current_slice_ = 0;
+      dk::Fence fences_[NumSlices]{};
+  };
+
+  struct CommandRingWaitDiagnostics {
+    uint32_t consecutive_timeouts = 0;
+    uint64_t first_timeout_ns = 0;
+    const char* first_stage = nullptr;
+    bool stall_logged = false;
+  };
 
   bool shouldLogRender() {
     return render_logs.fetch_add(1) < RenderLogLimit;
@@ -471,8 +541,8 @@ struct Deko3DRenderContext {
   std::vector<FrameMapping> fms;
   int fi=-1;
   int li=-1,ci=-1;
-  std::optional<CCmdMemRing<brls::FRAMEBUFFERS_COUNT>> update_ring;
-  std::optional<CCmdMemRing<brls::FRAMEBUFFERS_COUNT>> present_ring;
+  std::optional<BoundedCmdMemRing<brls::FRAMEBUFFERS_COUNT>> update_ring;
+  std::optional<BoundedCmdMemRing<brls::FRAMEBUFFERS_COUNT>> present_ring;
   RenderTarget source_target;
   RenderTarget upscale_target;
   RenderTarget rcas_target;
@@ -494,9 +564,11 @@ struct Deko3DRenderContext {
   size_t decoder_reset_drain_steps=0;
   VideoResolutionTransition resolution_transition;
   AVFrame* resolution_transition_frame=nullptr;
+  uint64_t resolution_transition_frame_queued_ns=0;
   size_t resolution_transition_drain_steps=0;
   static constexpr size_t kPendingFrameCapacity=2;
   std::array<AVFrame*,kPendingFrameCapacity> pending_frames{};
+  std::array<uint64_t,kPendingFrameCapacity> pending_frame_queued_ns{};
   size_t pending_head=0;
   size_t pending_count=0;
   AVFrame* current_frame=nullptr;
@@ -506,24 +578,126 @@ struct Deko3DRenderContext {
   size_t active_present_slice=0;
   bool present_slice_active=false;
   uint64_t present_frame_id=0;
+  CommandRingWaitDiagnostics consecutive_update_ring_timeouts;
+  CommandRingWaitDiagnostics consecutive_present_ring_timeouts;
   std::atomic<uint8_t>* pending_render_fault=nullptr;
+  std::atomic<uint8_t>* progress_stage=nullptr;
+  std::atomic<uint64_t>* progress_stage_started_ns=nullptr;
 };
 
 namespace {
+
+void setContextRenderStage(Deko3DRenderContext& s, VideoRenderStage stage) {
+  const uint64_t now_ns = rendererMonotonicNowNs();
+  if (s.progress_stage_started_ns) {
+    s.progress_stage_started_ns->store(now_ns, std::memory_order_release);
+  }
+  if (s.progress_stage) {
+    s.progress_stage->store(static_cast<uint8_t>(stage),
+                            std::memory_order_release);
+  }
+}
+
+size_t submittedFrameCount(const Deko3DRenderContext& s) {
+  return static_cast<size_t>(std::count_if(
+      s.submitted_frames.begin(), s.submitted_frames.end(),
+      [](const AVFrame* frame) { return frame != nullptr; }));
+}
 
 void markContextRenderFault(Deko3DRenderContext& s,
                             RenderFault fault,
                             const char* reason) {
   if (!s.pending_render_fault || fault == RenderFault::None) return;
+  setContextRenderStage(s, VideoRenderStage::Fault);
   uint8_t expected = static_cast<uint8_t>(RenderFault::None);
   if (s.pending_render_fault->compare_exchange_strong(
           expected, static_cast<uint8_t>(fault),
           std::memory_order_release, std::memory_order_relaxed)) {
     lunar::persistentEventLog(
         "video-render",
-        "fault=%s reason=%s action=media-recovery",
-        renderFaultName(fault), reason ? reason : "unknown");
+        "fault=%s reason=%s action=media-recovery queue_error=%d "
+        "frame_id=%llu mappings=%zu pending=%zu submitted=%zu "
+        "size=%dx%d target=%dx%d slice=%zu reset=%d transition=%d post=%d",
+        renderFaultName(fault), reason ? reason : "unknown",
+        s.q && s.q.isInErrorState() ? 1 : 0,
+        static_cast<unsigned long long>(s.present_frame_id), s.fms.size(),
+        s.pending_count, submittedFrameCount(s), s.frame_w, s.frame_h,
+        s.target_w, s.target_h, s.next_submitted_frame,
+        s.decoder_reset_requested ? 1 : 0,
+        s.resolution_transition.isTransitioning() ? 1 : 0,
+        static_cast<int>(s.post_process_mode_requested));
   }
+}
+
+bool commandRingReady(Deko3DRenderContext& s, DkResult result,
+                      CommandRingWaitDiagnostics& wait, const char* stage) {
+  const uint64_t now_ns = rendererMonotonicNowNs();
+  if(result==DkResult_Success){
+    if(wait.stall_logged && wait.first_timeout_ns != 0){
+      const uint64_t duration_ms = now_ns >= wait.first_timeout_ns
+          ? (now_ns - wait.first_timeout_ns) / 1'000'000u
+          : 0;
+      lunar::persistentEventLog(
+          "video-render",
+          "fence-resumed stage=%s first_stage=%s timeouts=%u "
+          "duration_ms=%llu queue_error=%d frame_id=%llu mappings=%zu "
+          "pending=%zu submitted=%zu size=%dx%d target=%dx%d slice=%zu",
+          stage ? stage : "unknown",
+          wait.first_stage ? wait.first_stage : "unknown",
+          wait.consecutive_timeouts,
+          static_cast<unsigned long long>(duration_ms),
+          s.q && s.q.isInErrorState() ? 1 : 0,
+          static_cast<unsigned long long>(s.present_frame_id), s.fms.size(),
+          s.pending_count, submittedFrameCount(s), s.frame_w, s.frame_h,
+          s.target_w, s.target_h, s.next_submitted_frame);
+    }
+    wait = {};
+    return true;
+  }
+  if(result==DkResult_Timeout){
+    if(wait.consecutive_timeouts == 0){
+      wait.first_timeout_ns = now_ns;
+      wait.first_stage = stage;
+    }
+    if(wait.consecutive_timeouts < UINT32_MAX){
+      ++wait.consecutive_timeouts;
+    }
+    const uint32_t consecutive=wait.consecutive_timeouts;
+    lunar::dropDiagnosticLog(
+        "video-render",
+        "command-fence-timeout stage=%s consecutive=%u wait_ns=%lld",
+        stage?stage:"unknown",consecutive,
+        static_cast<long long>(kCommandRingWaitTimeoutNs));
+    if(consecutive==kCommandRingDiagnosticThreshold){
+      wait.stall_logged = true;
+      const uint64_t duration_ms = now_ns >= wait.first_timeout_ns
+          ? (now_ns - wait.first_timeout_ns) / 1'000'000u
+          : 0;
+      lunar::persistentEventLog(
+          "video-render",
+          "fence-stall stage=%s first_stage=%s timeouts=%u "
+          "duration_ms=%llu queue_error=%d frame_id=%llu mappings=%zu "
+          "pending=%zu submitted=%zu size=%dx%d target=%dx%d slice=%zu "
+          "reset=%d transition=%d post=%d",
+          stage ? stage : "unknown",
+          wait.first_stage ? wait.first_stage : "unknown", consecutive,
+          static_cast<unsigned long long>(duration_ms),
+          s.q && s.q.isInErrorState() ? 1 : 0,
+          static_cast<unsigned long long>(s.present_frame_id), s.fms.size(),
+          s.pending_count, submittedFrameCount(s), s.frame_w, s.frame_h,
+          s.target_w, s.target_h, s.next_submitted_frame,
+          s.decoder_reset_requested ? 1 : 0,
+          s.resolution_transition.isTransitioning() ? 1 : 0,
+          static_cast<int>(s.post_process_mode_requested));
+    }
+    if(consecutive==kCommandRingTimeoutFaultThreshold){
+      markContextRenderFault(s,RenderFault::CommandFenceTimeout,stage);
+    }
+  }else{
+    wait = {};
+    markContextRenderFault(s,RenderFault::QueueError,stage);
+  }
+  return false;
 }
 
 void hardwareProbeLog(uint64_t frame_id, const char* stage,
@@ -559,8 +733,11 @@ void hardwareProbeLog(uint64_t frame_id, const char* stage,
 
 void releaseRetainedFrames(Deko3DRenderContext& s) {
   if(s.resolution_transition_frame)av_frame_free(&s.resolution_transition_frame);
-  for(auto*& frame:s.pending_frames){
+  s.resolution_transition_frame_queued_ns=0;
+  for(size_t i=0;i<s.pending_frames.size();++i){
+    auto*& frame=s.pending_frames[i];
     if(frame)av_frame_free(&frame);
+    s.pending_frame_queued_ns[i]=0;
   }
   s.pending_head=0;
   s.pending_count=0;
@@ -572,32 +749,40 @@ void releaseRetainedFrames(Deko3DRenderContext& s) {
 }
 
 void clearPendingFrames(Deko3DRenderContext& s) {
-  for(auto*& frame:s.pending_frames){
+  for(size_t i=0;i<s.pending_frames.size();++i){
+    auto*& frame=s.pending_frames[i];
     if(frame)av_frame_free(&frame);
+    s.pending_frame_queued_ns[i]=0;
   }
   s.pending_head=0;
   s.pending_count=0;
 }
 
-void enqueuePendingFrame(Deko3DRenderContext& s, AVFrame* frame) {
+void enqueuePendingFrame(Deko3DRenderContext& s, AVFrame* frame,
+                         uint64_t queued_ns=0) {
   if(!frame)return;
+  if(queued_ns==0)queued_ns=rendererMonotonicNowNs();
   if(s.pending_count==s.pending_frames.size()){
     if(s.perf) s.perf->recordDecodedPendingDropOldest();
     av_frame_free(&s.pending_frames[s.pending_head]);
+    s.pending_frame_queued_ns[s.pending_head]=0;
     s.pending_head=(s.pending_head+1)%s.pending_frames.size();
     s.pending_count--;
   }
   const size_t tail=(s.pending_head+s.pending_count)%s.pending_frames.size();
   s.pending_frames[tail]=frame;
+  s.pending_frame_queued_ns[tail]=queued_ns;
   s.pending_count++;
   if(s.perf) s.perf->recordDecodedPendingDepth(
       static_cast<uint32_t>(s.pending_count));
 }
 
-AVFrame* dequeuePendingFrame(Deko3DRenderContext& s) {
+AVFrame* dequeuePendingFrame(Deko3DRenderContext& s, uint64_t& queued_ns) {
   if(s.pending_count==0)return nullptr;
   AVFrame* frame=s.pending_frames[s.pending_head];
+  queued_ns=s.pending_frame_queued_ns[s.pending_head];
   s.pending_frames[s.pending_head]=nullptr;
+  s.pending_frame_queued_ns[s.pending_head]=0;
   s.pending_head=(s.pending_head+1)%s.pending_frames.size();
   s.pending_count--;
   return frame;
@@ -731,7 +916,10 @@ bool updateRenderTargetDescriptor(Deko3DRenderContext& s, RenderTarget& target) 
                    "slot=%d size=%dx%d queue_error=%d",
                    target.texture_slot, target.width, target.height,
                    s.q && s.q.isInErrorState() ? 1 : 0);
-  s.update_ring->begin(s.update_cb);
+  if(!commandRingReady(
+         s,s.update_ring->begin(s.update_cb,kCommandRingWaitTimeoutNs),
+         s.consecutive_update_ring_timeouts,
+         "target-descriptor-fence"))return false;
   bool updated = s.vctx->updateImageDescriptor(s.update_cb,
                                                target.texture_slot,
                                                target.descriptor);
@@ -1251,7 +1439,10 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
                      "mapping=%d previous=%d luma_slot=%d chroma_slot=%d queue_error=%d",
                      mapping_index, s.fi, s.li, s.ci,
                      s.q && s.q.isInErrorState() ? 1 : 0);
-    s.update_ring->begin(s.update_cb);
+    if(!commandRingReady(
+           s,s.update_ring->begin(s.update_cb,kCommandRingWaitTimeoutNs),
+           s.consecutive_update_ring_timeouts,
+           "plane-descriptor-fence"))return false;
     auto& mapping=s.fms[mapping_index];
     const bool luma_ok=s.vctx->updateImageDescriptor(s.update_cb,s.li,mapping.ld);
     const bool chroma_ok=s.vctx->updateImageDescriptor(s.update_cb,s.ci,mapping.cd);
@@ -1293,17 +1484,38 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
 VideoRenderer::VideoRenderer() = default;
 VideoRenderer::~VideoRenderer(){shutdown();delete static_cast<Deko3DRenderContext*>(ctx_);ctx_=nullptr;}
 
+void VideoRenderer::setProgressSink(
+    std::atomic<uint8_t>* stage,
+    std::atomic<uint64_t>* stage_started_ns) {
+  progress_stage_sink_ = stage;
+  progress_stage_started_ns_sink_ = stage_started_ns;
+  setRenderStage(VideoRenderStage::Idle);
+}
+
+void VideoRenderer::setRenderStage(VideoRenderStage stage) {
+  const uint64_t now_ns = rendererMonotonicNowNs();
+  if(progress_stage_started_ns_sink_){
+    progress_stage_started_ns_sink_->store(now_ns,std::memory_order_release);
+  }
+  if(progress_stage_sink_){
+    progress_stage_sink_->store(static_cast<uint8_t>(stage),
+                                std::memory_order_release);
+  }
+}
+
 void VideoRenderer::recordSuccessfulPresent() {
+  gpu_quarantine_required_.store(false, std::memory_order_release);
   successful_presents_.fetch_add(1, std::memory_order_relaxed);
   last_successful_present_ns_.store(
-      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::steady_clock::now().time_since_epoch()).count()),
+      rendererMonotonicNowNs(),
       std::memory_order_release);
   consecutive_render_faults_.store(0, std::memory_order_release);
+  setRenderStage(VideoRenderStage::Idle);
 }
 
 void VideoRenderer::markRenderFault(RenderFault fault) {
   if (fault == RenderFault::None) return;
+  setRenderStage(VideoRenderStage::Fault);
   uint8_t expected = static_cast<uint8_t>(RenderFault::None);
   if (pending_render_fault_.compare_exchange_strong(
           expected, static_cast<uint8_t>(fault),
@@ -1319,6 +1531,9 @@ RenderFault VideoRenderer::consumeRenderFault() {
                                      std::memory_order_acq_rel));
   if (fault != RenderFault::None) {
     consecutive_render_faults_.fetch_add(1, std::memory_order_acq_rel);
+    if (fault == RenderFault::CommandFenceTimeout) {
+      gpu_quarantine_required_.store(true, std::memory_order_release);
+    }
   }
   return fault;
 }
@@ -1328,6 +1543,7 @@ void VideoRenderer::resetLiveness() {
                               std::memory_order_release);
   last_successful_present_ns_.store(0, std::memory_order_release);
   consecutive_render_faults_.store(0, std::memory_order_release);
+  setRenderStage(VideoRenderStage::Idle);
 }
 
 void VideoRenderer::setVideoBackend(VideoBackend backend){
@@ -1335,6 +1551,7 @@ void VideoRenderer::setVideoBackend(VideoBackend backend){
 }
 
 bool VideoRenderer::initialize(const char*,int w,int h){
+  setRenderStage(VideoRenderStage::Idle);
   pending_render_fault_.store(static_cast<uint8_t>(RenderFault::None),
                               std::memory_order_release);
   successful_presents_.store(0, std::memory_order_release);
@@ -1342,6 +1559,7 @@ bool VideoRenderer::initialize(const char*,int w,int h){
   consecutive_render_faults_.store(0, std::memory_order_release);
   if(video_backend_==VideoBackend::Software){
     try{
+      gpu_quarantine_required_.store(false, std::memory_order_release);
       lunar::diagnosticLog("render","software renderer init begin width=%d height=%d",w,h);
       if(software_sws_){
         auto* sws=reinterpret_cast<SwsContext*>(software_sws_);
@@ -1373,9 +1591,19 @@ bool VideoRenderer::initialize(const char*,int w,int h){
     lunar::diagnosticLog("render","context alloc done ptr=%p",ctx_);
   }
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);
+  if(s->ok){
+    shutdown();
+    if(!ctx_){
+      ctx_=new (std::nothrow) Deko3DRenderContext();
+      if(!ctx_)return false;
+    }
+    s=static_cast<Deko3DRenderContext*>(ctx_);
+  }
+  gpu_quarantine_required_.store(false, std::memory_order_release);
   s->perf=perf_;
-  if(s->ok)shutdown();
   s->pending_render_fault=&pending_render_fault_;
+  s->progress_stage=progress_stage_sink_;
+  s->progress_stage_started_ns=progress_stage_started_ns_sink_;
 
   std::unique_lock<std::recursive_mutex> gpu_lock;
   try {
@@ -1607,6 +1835,7 @@ bool VideoRenderer::render(const VideoFrame&frame){
     if(s->resolution_transition_frame)
       av_frame_free(&s->resolution_transition_frame);
     s->resolution_transition_frame=keep;
+    s->resolution_transition_frame_queued_ns=rendererMonotonicNowNs();
     if(!had_startup_candidate||f->width!=previous_candidate_width||
        f->height!=previous_candidate_height){
       lunar::dropDiagnosticLog(
@@ -1624,6 +1853,7 @@ bool VideoRenderer::render(const VideoFrame&frame){
     if(s->resolution_transition_frame)
       av_frame_free(&s->resolution_transition_frame);
     s->resolution_transition_frame=keep;
+    s->resolution_transition_frame_queued_ns=rendererMonotonicNowNs();
     if(decision==ResolutionFrameDecision::BeginTransition){
       s->resolution_transition_drain_steps=0;
       lunar::dropDiagnosticLog(
@@ -1640,6 +1870,7 @@ bool VideoRenderer::render(const VideoFrame&frame){
   }
   if(s->resolution_transition_frame)
     av_frame_free(&s->resolution_transition_frame);
+  s->resolution_transition_frame_queued_ns=0;
   enqueuePendingFrame(*s,keep);
   if(shouldLogRender())lunar::diagnosticLog("render","render queued width=%d height=%d",f->width,f->height);
   return true;
@@ -1653,8 +1884,11 @@ void VideoRenderer::present(){
     markRenderFault(RenderFault::InvalidFrame);
     return;
   }
+  setRenderStage(VideoRenderStage::WaitingGpuMutex);
   std::lock_guard<std::recursive_mutex> gpu_lock(s->vctx->getGpuMutex());
+  setRenderStage(VideoRenderStage::WaitingRenderMutex);
   std::lock_guard<std::mutex> lock(s->render_mutex);
+  setRenderStage(VideoRenderStage::Idle);
   if(s->q && s->q.isInErrorState()){
     markContextRenderFault(*s, RenderFault::QueueError, "present-entry");
     return;
@@ -1671,12 +1905,19 @@ void VideoRenderer::present(){
     }
 
     const size_t submitted_index=s->next_submitted_frame;
-    s->present_ring->begin(s->present_cb);
+    setRenderStage(VideoRenderStage::DecoderResetFence);
+    if(!commandRingReady(
+           *s,s->present_ring->begin(s->present_cb,
+                                     kCommandRingWaitTimeoutNs),
+           s->consecutive_present_ring_timeouts,
+           "decoder-reset-fence"))return;
     retireCompletedTargets(*s,submitted_index);
     auto*& completed_frame=s->submitted_frames[submitted_index];
     if(completed_frame)av_frame_free(&completed_frame);
     const DkCmdList reset_list=s->present_ring->end(s->present_cb);
+    setRenderStage(VideoRenderStage::SubmitCommands);
     s->q.submitCommands(reset_list);
+    setRenderStage(VideoRenderStage::Idle);
     s->next_submitted_frame=
         (submitted_index+1)%s->submitted_frames.size();
     s->present_slice_active=false;
@@ -1696,6 +1937,7 @@ void VideoRenderer::present(){
       if(s->current_frame)av_frame_free(&s->current_frame);
       if(s->resolution_transition_frame)
         av_frame_free(&s->resolution_transition_frame);
+      s->resolution_transition_frame_queued_ns=0;
       s->resolution_transition.reset();
       s->resolution_transition_drain_steps=0;
       s->decoder_reset_ready=true;
@@ -1709,8 +1951,10 @@ void VideoRenderer::present(){
   }
   if(s->resolution_transition.startupCandidateReady(renderNowMs())){
     clearPendingFrames(*s);
-    enqueuePendingFrame(*s,s->resolution_transition_frame);
+    enqueuePendingFrame(*s,s->resolution_transition_frame,
+                        s->resolution_transition_frame_queued_ns);
     s->resolution_transition_frame=nullptr;
+    s->resolution_transition_frame_queued_ns=0;
     s->resolution_transition.promoteStartupCandidate();
     lunar::dropDiagnosticLog(
         "resolution-transition",
@@ -1726,12 +1970,19 @@ void VideoRenderer::present(){
     }
 
     const size_t submitted_index=s->next_submitted_frame;
-    s->present_ring->begin(s->present_cb);
+    setRenderStage(VideoRenderStage::ResolutionTransitionFence);
+    if(!commandRingReady(
+           *s,s->present_ring->begin(s->present_cb,
+                                     kCommandRingWaitTimeoutNs),
+           s->consecutive_present_ring_timeouts,
+           "resolution-transition-fence"))return;
     retireCompletedTargets(*s,submitted_index);
     auto*& completed_frame=s->submitted_frames[submitted_index];
     if(completed_frame)av_frame_free(&completed_frame);
     const DkCmdList transition_list=s->present_ring->end(s->present_cb);
+    setRenderStage(VideoRenderStage::SubmitCommands);
     s->q.submitCommands(transition_list);
+    setRenderStage(VideoRenderStage::Idle);
     s->next_submitted_frame=
         (submitted_index+1)%s->submitted_frames.size();
     s->present_slice_active=false;
@@ -1752,8 +2003,10 @@ void VideoRenderer::present(){
       s->static_state_dirty=true;
       clearPendingFrames(*s);
       if(s->current_frame)av_frame_free(&s->current_frame);
-      enqueuePendingFrame(*s,s->resolution_transition_frame);
+      enqueuePendingFrame(*s,s->resolution_transition_frame,
+                          s->resolution_transition_frame_queued_ns);
       s->resolution_transition_frame=nullptr;
+      s->resolution_transition_frame_queued_ns=0;
       s->resolution_transition.completeTransition();
       s->resolution_transition_drain_steps=0;
       lunar::dropDiagnosticLog(
@@ -1773,10 +2026,35 @@ void VideoRenderer::present(){
                    s->pending_count, s->current_frame ? 1 : 0,
                    s->q && s->q.isInErrorState() ? 1 : 0);
   if(s->pending_count>0){
+    const uint64_t presentation_now_ns=rendererMonotonicNowNs();
+    const uint64_t oldest_queued_ns=
+        s->pending_frame_queued_ns[s->pending_head];
+    const uint64_t oldest_wait_us=
+        oldest_queued_ns>0&&presentation_now_ns>=oldest_queued_ns
+            ? (presentation_now_ns-oldest_queued_ns)/1000ULL
+            : 0;
+    size_t stale_to_drop=stalePresentationFramesToDrop(
+        presentation_mode_.load(std::memory_order_acquire),
+        s->pending_count,oldest_wait_us);
+    while(stale_to_drop-->0){
+      uint64_t stale_queued_ns=0;
+      AVFrame* stale=dequeuePendingFrame(*s,stale_queued_ns);
+      if(stale){
+        if(perf_)perf_->recordDecodedPendingDropOldest();
+        av_frame_free(&stale);
+      }
+    }
     if(s->current_frame)av_frame_free(&s->current_frame);
-    s->current_frame=dequeuePendingFrame(*s);
+    uint64_t queued_ns=0;
+    s->current_frame=dequeuePendingFrame(*s,queued_ns);
     advanced_to_new_frame=s->current_frame!=nullptr;
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+    const uint64_t now_ns=rendererMonotonicNowNs();
+    if(advanced_to_new_frame&&queued_ns>0&&now_ns>=queued_ns&&perf_)
+      perf_->recordRenderQueueWait((now_ns-queued_ns)/1000ULL);
+#endif
   }
+  setRenderStage(VideoRenderStage::MappingUpdate);
   if(!updateFrameMapping(*s,s->current_frame)){
     hardwareProbeLog(frame_id, "mapping-rejected",
                      "queue_error=%d", s->q && s->q.isInErrorState() ? 1 : 0);
@@ -1787,6 +2065,7 @@ void VideoRenderer::present(){
                    s->frame_w, s->frame_h, s->mapped_luma_w,
                    s->mapped_luma_h, s->q && s->q.isInErrorState() ? 1 : 0);
 
+  setRenderStage(VideoRenderStage::FramebufferAcquire);
   dk::Image* fb = s->vctx->getFramebuffer();
   dk::Image* db = s->vctx->getDepthBuffer();
   hardwareProbeLog(frame_id, "framebuffer-acquire",
@@ -1806,11 +2085,16 @@ void VideoRenderer::present(){
   hardwareProbeLog(frame_id, "command-ring-begin-before",
                    "slice=%zu queue_error=%d", s->next_submitted_frame,
                    s->q && s->q.isInErrorState() ? 1 : 0);
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
+#if LUNARNX_DROP_DIAGNOSTIC_LOG || LUNARNX_LATENCY_DIAGNOSTIC_LOG
   const auto present_wait_start=RenderClock::now();
 #endif
-  s->present_ring->begin(s->present_cb);
-#if LUNARNX_DROP_DIAGNOSTIC_LOG
+  setRenderStage(VideoRenderStage::PresentFence);
+  if(!commandRingReady(
+         *s,s->present_ring->begin(s->present_cb,
+                                   kCommandRingWaitTimeoutNs),
+         s->consecutive_present_ring_timeouts,
+         "present-fence"))return;
+#if LUNARNX_DROP_DIAGNOSTIC_LOG || LUNARNX_LATENCY_DIAGNOSTIC_LOG
   if(perf_)perf_->recordPresentWait(
       toMicroseconds(RenderClock::now()-present_wait_start));
 #endif
@@ -1838,6 +2122,7 @@ void VideoRenderer::present(){
   }
 
   const auto render_start = RenderClock::now();
+  setRenderStage(VideoRenderStage::RecordCommands);
   hardwareProbeLog(frame_id, "record-pipeline-begin",
                    "fb=%p db=%p static_dirty=%d queue_error=%d",
                    fb, db, s->static_state_dirty ? 1 : 0,
@@ -1851,6 +2136,7 @@ void VideoRenderer::present(){
   hardwareProbeLog(frame_id, "finish-list-end",
                    "cmdlist=%p queue_error=%d", reinterpret_cast<void*>(s->cl),
                    s->q && s->q.isInErrorState() ? 1 : 0);
+  setRenderStage(VideoRenderStage::SubmitCommands);
   s->q.submitCommands(s->cl);
   if(advanced_to_new_frame&&perf_)perf_->recordNewFrameSubmit();
   hardwareProbeLog(frame_id, "queue-submit-after",
@@ -1912,6 +2198,25 @@ void VideoRenderer::shutdown(){
   }
   SoftwareVideoFrameSink::instance().clear();
   auto* s=static_cast<Deko3DRenderContext*>(ctx_);if(!s)return;
+  if(gpu_quarantine_required_.exchange(false,std::memory_order_acq_rel)){
+    // A timed-out command fence means the queue may never become idle.  Do not
+    // block the cleanup worker and do not destroy resources still referenced
+    // by the GPU.  Losing this one context is preferable to hanging or causing
+    // a use-after-free; a later stream creates a fresh renderer context.
+    lunar::persistentEventLog(
+        "video-render",
+        "shutdown phase=gpu-quarantine action=retain-unsafe-context "
+        "queue_error=%d frame_id=%llu mappings=%zu pending=%zu "
+        "submitted=%zu size=%dx%d target=%dx%d slice=%zu",
+        s->q && s->q.isInErrorState() ? 1 : 0,
+        static_cast<unsigned long long>(s->present_frame_id), s->fms.size(),
+        s->pending_count, submittedFrameCount(*s), s->frame_w, s->frame_h,
+        s->target_w, s->target_h, s->next_submitted_frame);
+    setRenderStage(VideoRenderStage::Shutdown);
+    ctx_=nullptr;
+    return;
+  }
+  setRenderStage(VideoRenderStage::Shutdown);
   std::unique_lock<std::recursive_mutex> gpu_lock;
   if(s->vctx)gpu_lock=std::unique_lock<std::recursive_mutex>(s->vctx->getGpuMutex());
   std::lock_guard<std::mutex> render_lock(s->render_mutex);
@@ -1950,6 +2255,8 @@ void VideoRenderer::shutdown(){
   s->mapped_luma_w=0;
   s->mapped_luma_h=0;
   s->present_frame_id=0;
+  s->consecutive_update_ring_timeouts={};
+  s->consecutive_present_ring_timeouts={};
   configurePresentPipeline(s->pipeline, PostProcessMode::Off);
   s->static_state_dirty=true;
   s->ok=false;
@@ -1962,16 +2269,31 @@ void VideoRenderer::shutdown(){
 #include <mutex>
 namespace lunar::stream {
 VideoRenderer::VideoRenderer()=default;VideoRenderer::~VideoRenderer(){shutdown();}
+void VideoRenderer::setProgressSink(
+    std::atomic<uint8_t>* stage,
+    std::atomic<uint64_t>* stage_started_ns){
+  progress_stage_sink_=stage;
+  progress_stage_started_ns_sink_=stage_started_ns;
+  setRenderStage(VideoRenderStage::Idle);
+}
+void VideoRenderer::setRenderStage(VideoRenderStage stage){
+  const uint64_t now_ns=rendererMonotonicNowNs();
+  if(progress_stage_started_ns_sink_)
+    progress_stage_started_ns_sink_->store(now_ns,std::memory_order_release);
+  if(progress_stage_sink_)
+    progress_stage_sink_->store(static_cast<uint8_t>(stage),
+                                std::memory_order_release);
+}
 void VideoRenderer::recordSuccessfulPresent(){
   successful_presents_.fetch_add(1, std::memory_order_relaxed);
-  last_successful_present_ns_.store(
-      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::steady_clock::now().time_since_epoch()).count()),
-      std::memory_order_release);
+  last_successful_present_ns_.store(rendererMonotonicNowNs(),
+                                    std::memory_order_release);
   consecutive_render_faults_.store(0, std::memory_order_release);
+  setRenderStage(VideoRenderStage::Idle);
 }
 void VideoRenderer::markRenderFault(RenderFault fault){
   if(fault==RenderFault::None)return;
+  setRenderStage(VideoRenderStage::Fault);
   uint8_t expected=static_cast<uint8_t>(RenderFault::None);
   if(pending_render_fault_.compare_exchange_strong(
          expected,static_cast<uint8_t>(fault),std::memory_order_release,
@@ -1991,12 +2313,14 @@ void VideoRenderer::resetLiveness(){
   pending_render_fault_.store(static_cast<uint8_t>(RenderFault::None),std::memory_order_release);
   last_successful_present_ns_.store(0,std::memory_order_release);
   consecutive_render_faults_.store(0,std::memory_order_release);
+  setRenderStage(VideoRenderStage::Idle);
 }
 void VideoRenderer::setVideoBackend(VideoBackend){video_backend_=VideoBackend::Software;}
 void VideoRenderer::setPostProcessMode(PostProcessMode){}
 void VideoRenderer::setPostProcessEnabled(bool){}
 void VideoRenderer::setDitheringEnabled(bool, float){}
 bool VideoRenderer::initialize(const char* t,int w,int h){
+  setRenderStage(VideoRenderStage::Idle);
   pending_render_fault_.store(static_cast<uint8_t>(RenderFault::None),std::memory_order_release);
   successful_presents_.store(0,std::memory_order_release);
   last_successful_present_ns_.store(0,std::memory_order_release);
@@ -2031,6 +2355,7 @@ void VideoRenderer::present(){}
 bool VideoRenderer::prepareDecoderReset(){return true;}
 bool VideoRenderer::pollEvents(){SDL_Event e;while(SDL_PollEvent(&e))if(e.type==SDL_QUIT||(e.type==SDL_KEYDOWN&&e.key.keysym.sym==SDLK_ESCAPE))return false;return true;}
 void VideoRenderer::shutdown(){
+  setRenderStage(VideoRenderStage::Shutdown);
   std::lock_guard<std::mutex> lock(sdl_mutex_);
   if(texture_){SDL_DestroyTexture(static_cast<SDL_Texture*>(texture_));texture_=nullptr;}
   if(renderer_){SDL_DestroyRenderer(static_cast<SDL_Renderer*>(renderer_));renderer_=nullptr;}

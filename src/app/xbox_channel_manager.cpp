@@ -11,7 +11,7 @@ namespace lunar::app {
 
 namespace {
 
-constexpr std::chrono::milliseconds kHandshakeTimeout{1500};
+constexpr std::chrono::milliseconds kHandshakeTimeout{5000};
 constexpr std::chrono::milliseconds kReliableFlushTimeout{1500};
 constexpr std::chrono::milliseconds kGamepadAddDelay{500};
 constexpr std::chrono::milliseconds kPollInterval{16};
@@ -211,17 +211,19 @@ bool XboxChannelManager::startProtocol(const StreamProfile& profile,
     return flushed;
 }
 
-XboxChannelManager::InputPacketSubmission
-XboxChannelManager::sendInputPacket(const uint8_t* data,
-                                    size_t len,
-                                    bool reliable) {
-    if (reliable) {
-        const uint64_t ticket = transport_.sendInputTransitionData(data, len);
-        return {ticket != 0, ticket};
-    }
-    // A snapshot contains only the current absolute state, so an unsent older
-    // snapshot can safely be replaced by the newest one.
-    return {transport_.sendLatestInputData(data, len), 0};
+bool XboxChannelManager::sendInputPacket(const uint8_t* data,
+                                         size_t len) {
+    // Gamepad packets are complete absolute snapshots. Only the newest unsent
+    // state matters; an old press must never queue behind a newer release.
+    return transport_.sendLatestInputData(data, len);
+}
+
+bool XboxChannelManager::sendInputTransitionPacket(const uint8_t* data,
+                                                   size_t len) {
+    // Digital edges are retained only in LunarNX's 50 ms journal. Once handed
+    // to libpeer they get one send attempt and are never replayed by the app,
+    // preventing a stale press from becoming a sticky control.
+    return transport_.sendTransitionInputData(data, len);
 }
 
 bool XboxChannelManager::sendControlMessage(std::string_view json) {
@@ -279,7 +281,12 @@ bool XboxChannelManager::waitForHandshake(const CancelCallback& cancel) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - start);
         if (elapsed >= kHandshakeTimeout) {
-            return true;
+            lunar::persistentEventLog(
+                "xbox-startup",
+                "phase=handshake-timeout timeout_ms=%lld data_ready=%s",
+                static_cast<long long>(kHandshakeTimeout.count()),
+                transport_.isDataChannelReady() ? "true" : "false");
+            return false;
         }
 
         std::this_thread::sleep_for(kPollInterval);

@@ -14,6 +14,9 @@ def main():
     profile = (ROOT / "src/app/stream_profile.h").read_text()
     channel = (ROOT / "src/app/xbox_channel_manager.cpp").read_text()
     session = (ROOT / "src/app/xbox_stream_session.cpp").read_text()
+    adaptive = (ROOT / "src/app/adaptive_bitrate_controller.h").read_text()
+    estimator = (ROOT / "src/webrtc/network_path_estimator.h").read_text()
+    jitter_policy = (ROOT / "src/webrtc/video_jitter_policy.h").read_text()
     peer = (ROOT / "lib/libpeer/src/peer_connection.c").read_text()
     peer_h = (ROOT / "lib/libpeer/src/peer_connection.h").read_text()
     sdp = (ROOT / "lib/libpeer/src/sdp.c").read_text()
@@ -35,6 +38,20 @@ def main():
     require("kReceiverFeedbackInterval{1}" in session and
             "sendReceiverFeedback" in session,
             "stream loop must send periodic receiver feedback")
+    require("AdaptiveBitrateController" in session and
+            "bitrate_controller.observe(" in session and
+            "media_stats.network_path" in session,
+            "receiver feedback must use the adaptive bitrate target")
+    require("kCongestedWindowsToLower" in adaptive and
+            "kCloudStableWindowsToRaise" in adaptive and
+            "rtt_inflation_ms" in adaptive and
+            "lowerSeverely" in adaptive and "raiseOneStep" in adaptive,
+            "adaptive feedback must lower quickly and recover with hysteresis")
+    require("NetworkPathEstimator" in estimator and
+            "video_missing_unrecovered" in estimator and
+            "received_bitrate_kbps" in estimator and
+            "computeVideoJitterPolicy" in jitter_policy,
+            "REMB and jitter must consume a shared path estimate")
     for line in ("goog-remb", "ccm fir", "max-fs=3600", "max-mbps=108000"):
         require(line in sdp and line in patch,
                 f"tracked SDP must preserve {line}")

@@ -85,6 +85,8 @@ void test_reorders_retransmitted_fu_a() {
     };
     assert(h.frames.back() == expected);
     assert(h.jitter.stats().missing_packets == 0);
+    assert(h.jitter.stats().missing_packets_unrecovered == 0);
+    assert(h.jitter.stats().payload_bytes > 0);
 }
 
 void test_repeated_timeouts_gate_p_frames_until_real_idr() {
@@ -469,6 +471,7 @@ void test_nacks_are_rate_limited_per_window() {
 void test_nack_retries_while_retransmission_can_meet_deadline() {
     Harness h;
     h.jitter.setHoldMs(80);
+    h.jitter.setMissingPacketHoldMs(80);
     h.jitter.setNetworkRttMs(10);
     openWithIdr(h, 2050, 1000);
 
@@ -491,6 +494,7 @@ void test_nack_retries_while_retransmission_can_meet_deadline() {
 void test_nack_does_not_retry_past_high_rtt_frame_deadline() {
     Harness h;
     h.jitter.setHoldMs(180);
+    h.jitter.setMissingPacketHoldMs(180);
     h.jitter.setNetworkRttMs(130);
     openWithIdr(h, 2070, 1000);
 
@@ -509,6 +513,7 @@ void test_cloud_profile_allows_wan_retransmission_budget() {
     // margin for the missing packet to return after the next frame exposes
     // the sequence gap.
     h.jitter.setHoldMs(100);
+    h.jitter.setMissingPacketHoldMs(110);
     h.jitter.setNetworkRttMs(60);
     h.jitter.setHeadBlockedPolicy(6, 90);
     h.jitter.setRecoveryHoldMs(300);
@@ -540,6 +545,7 @@ void test_cloud_profile_allows_wan_retransmission_budget() {
 void test_high_rtt_missing_frame_keeps_nack_budget() {
     Harness h;
     h.jitter.setHoldMs(100);
+    h.jitter.setMissingPacketHoldMs(220);
     h.jitter.setNetworkRttMs(380);
     openWithIdr(h, 2080, 1000);
 
@@ -559,6 +565,7 @@ void test_high_rtt_missing_frame_keeps_nack_budget() {
 void test_lan_missing_frame_gets_one_bounded_retransmission_window() {
     Harness h;
     h.jitter.setHoldMs(24);
+    h.jitter.setMissingPacketHoldMs(32);
     h.jitter.setNetworkRttMs(2);
     h.jitter.setHeadBlockedPolicy(2, 32);
     openWithIdr(h, 2090, 1000);
@@ -576,6 +583,7 @@ void test_lan_missing_frame_gets_one_bounded_retransmission_window() {
     // into an unbounded head-of-line queue when the packet never returns.
     h.push(rtp(2095, 4000, true, {0x61, 0x55}), 38);
     assert(h.jitter.stats().corrupt_frames == 1);
+    assert(h.jitter.stats().missing_packets_unrecovered == 1);
 }
 
 void test_log_sized_gap_is_fully_covered() {
@@ -588,6 +596,32 @@ void test_log_sized_gap_is_fully_covered() {
     assert(h.nacks.size() == 8);
     h.push(rtp(2355, 1000, false, {}, 8), 60);
     assert(h.nacks.size() == 9);
+}
+
+void test_gap_too_large_for_nack_is_counted_as_unrecovered() {
+    Harness h;
+    openWithIdr(h, 4000, 1000);
+
+    // The receiver deliberately declines NACK coverage above 255 packets.
+    // Those packets are no longer recoverable by this receiver and must feed
+    // the adaptive bitrate controller's final-loss signal.
+    h.push(rtp(4301, 2000, true, {0x61, 0x44}), 1);
+    assert(h.jitter.stats().missing_packets_detected == 300);
+    assert(h.jitter.stats().missing_packets_unrecovered == 300);
+}
+
+void test_jitter_overflow_finalizes_pending_missing_packets() {
+    Harness h;
+    openWithIdr(h, 4400, 1000);
+
+    // Sequence 4401 enters the NACK queue, then this oversized RTP payload
+    // forces a jitter reset. Clearing that queue must not silently lose the
+    // final-loss evidence.
+    h.push(rtp(4402, 2000, true,
+               std::vector<uint8_t>(2049, 0x61)),
+           1);
+    assert(h.jitter.stats().missing_packets_detected == 1);
+    assert(h.jitter.stats().missing_packets_unrecovered == 1);
 }
 
 void test_recovery_nacks_only_current_keyframe() {
@@ -751,6 +785,8 @@ int main() {
     test_high_rtt_missing_frame_keeps_nack_budget();
     test_lan_missing_frame_gets_one_bounded_retransmission_window();
     test_log_sized_gap_is_fully_covered();
+    test_gap_too_large_for_nack_is_counted_as_unrecovered();
+    test_jitter_overflow_finalizes_pending_missing_packets();
     test_recovery_nacks_only_current_keyframe();
     test_recovery_keyframe_nacks_remain_rate_limited();
     test_recovery_discards_pending_nacks_from_old_stream();

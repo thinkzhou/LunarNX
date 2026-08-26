@@ -576,3 +576,43 @@ Phase 0  测量与故障注入
 ```
 
 第一批实现应优先完成 Phase 0–2。只要 16ms transport polling 和陈旧 FIFO 仍存在，后续对 jitter、码率或 GPU 的优化结果都可能被排队延迟掩盖。
+
+## 12. 后续项：解码帧显示调度（2026-08-26）
+
+本轮真机延迟日志显示，网络良好窗口中的解码帧显示队列等待中位数约为
+17ms，已经接近一个完整的 60Hz 刷新周期。该等待主要来自解码完成时刻与
+Borealis `View::draw()` 的相位差，不是 NVDEC 吞吐或 Deko3D command submit
+本身过慢。
+
+对照实现：
+
+- LunarNX：容量为 2 的 decoded pending 队列；Home/Good 使用
+  `RealtimeAdaptive`，仅当积压超过一帧且最老帧超过 25ms 时淘汰旧帧；
+  最终由 Borealis draw 驱动 present。
+- Green-NX Steady：单帧 latest-frame mailbox；独立 59.94Hz 软件时钟驱动
+  自有 deko3d swapchain，默认 newest-wins。Smooth 模式额外保留一个源帧
+  以换取更稳定的 cadence。
+- Moonlight-Switch：Borealis draw 驱动、默认上限为 3 帧的 decoded FIFO；
+  队列为空时重复上一帧，拥塞时才淘汰最老帧，策略更偏平滑而非最低延迟。
+
+后续实现方向已经确认，但本轮暂不修改运行代码：
+
+1. Home/Good 增加真正的 `RealtimeLatest` 单帧 mailbox，不等待 25ms 后才
+   合并积压帧。
+2. 将 latest-frame 选择尽可能后移到 Borealis 最终 framebuffer submit 前，
+   避免普通 View draw 后刚完成的帧额外等待一整个刷新周期。
+3. 增加动态 Smooth 模式：稳定 LAN 使用 latest；组帧抖动、重复显示率或
+   丢帧升高时短期保留一帧，恢复稳定 2–3 秒后再退出，使用迟滞避免抖动。
+4. 保持 Cloud/差链路的顺序缓冲和 H.264 依赖帧顺序解码；禁止在解码前
+   任意跳过参考帧。
+
+建议验收目标：
+
+| 模式 | decoded-to-submit p50 | p95 | unique displayed FPS |
+|---|---:|---:|---:|
+| Home RealtimeLatest | 不高于 9ms | 不高于 16.7ms | 不低于 58 |
+| 动态 Smooth | 不高于 25ms | 不高于 33.3ms | 尽量接近 59–60 |
+
+该优化需要保持 Borealis 菜单、GPU mutex、command-ring fence、decoder reset
+和 GPU quarantine 的现有生命周期约束。不能直接照搬 Green-NX 在串流期间
+完全独占默认窗口的实现，也不能仅通过增大 decoded FIFO 来解决平滑问题。
