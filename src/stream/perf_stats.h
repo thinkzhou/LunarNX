@@ -8,8 +8,47 @@
 
 namespace lunar::stream {
 
+struct LatencyPerfWindow {
+    uint64_t access_unit_queue_total_us = 0;
+    uint64_t access_unit_queue_max_us = 0;
+    uint32_t access_unit_queue_samples = 0;
+    uint64_t decode_total_us = 0;
+    uint64_t decode_max_us = 0;
+    uint32_t decode_samples = 0;
+    uint64_t renderer_enqueue_total_us = 0;
+    uint64_t renderer_enqueue_max_us = 0;
+    uint32_t renderer_enqueue_samples = 0;
+    uint64_t render_handoff_total_us = 0;
+    uint64_t render_handoff_max_us = 0;
+    uint32_t render_handoff_samples = 0;
+    uint64_t render_queue_total_us = 0;
+    uint64_t render_queue_max_us = 0;
+    uint32_t render_queue_samples = 0;
+    uint64_t present_fence_total_us = 0;
+    uint64_t present_fence_max_us = 0;
+    uint32_t present_fence_samples = 0;
+    uint64_t present_call_total_us = 0;
+    uint64_t present_call_max_us = 0;
+    uint32_t present_call_samples = 0;
+    uint32_t presented_new_frames = 0;
+    uint64_t frame_submit_gap_total_us = 0;
+    uint64_t frame_submit_gap_max_us = 0;
+    uint32_t frame_submit_gap_samples = 0;
+    uint64_t input_sample_gap_total_us = 0;
+    uint64_t input_sample_gap_max_us = 0;
+    uint32_t input_sample_gap_samples = 0;
+    uint64_t input_read_total_us = 0;
+    uint64_t input_read_max_us = 0;
+    uint32_t input_read_samples = 0;
+    uint64_t input_snapshot_age_total_us = 0;
+    uint64_t input_snapshot_age_max_us = 0;
+    uint32_t input_snapshot_age_samples = 0;
+};
+
 struct PerfStats {
     std::atomic<uint32_t> video_frames{0};
+    std::atomic<uint32_t> decoded_video_width{0};
+    std::atomic<uint32_t> decoded_video_height{0};
     std::atomic<uint32_t> audio_frames{0};
     std::atomic<uint32_t> audio_drops{0};
     std::atomic<uint32_t> audio_queued_buffers{0};
@@ -45,12 +84,52 @@ struct PerfStats {
     // queue pressure from encoded admission and decoder drops.
     std::atomic<uint32_t> decoded_pending_drop_oldest{0};
     std::atomic<uint32_t> decoded_pending_depth_high{0};
+    std::atomic<uint32_t> decoded_catchup_suppressed{0};
     std::atomic<uint32_t> unique_video_frames_submitted{0};
     std::atomic<uint64_t> new_frame_submit_gap_max_us{0};
     std::atomic<int64_t> last_new_frame_submit_ns{0};
     // Monotonic timestamp of the first frame successfully submitted for this
     // stream session. Zero means that playback has not started yet.
     std::atomic<uint64_t> stream_started_ns{0};
+
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+    // Diagnostic-build-only one-second accumulators. Hot paths perform only
+    // relaxed atomic updates; formatting and file I/O happen outside them.
+    alignas(64) std::atomic<uint64_t> latency_au_queue_total_us{0};
+    std::atomic<uint64_t> latency_au_queue_max_us{0};
+    std::atomic<uint32_t> latency_au_queue_samples{0};
+    std::atomic<uint64_t> latency_decode_total_us{0};
+    std::atomic<uint64_t> latency_decode_max_us{0};
+    std::atomic<uint32_t> latency_decode_samples{0};
+    std::atomic<uint64_t> latency_renderer_enqueue_total_us{0};
+    std::atomic<uint64_t> latency_renderer_enqueue_max_us{0};
+    std::atomic<uint32_t> latency_renderer_enqueue_samples{0};
+    std::atomic<uint64_t> latency_render_handoff_total_us{0};
+    std::atomic<uint64_t> latency_render_handoff_max_us{0};
+    std::atomic<uint32_t> latency_render_handoff_samples{0};
+    std::atomic<uint64_t> latency_render_queue_total_us{0};
+    std::atomic<uint64_t> latency_render_queue_max_us{0};
+    std::atomic<uint32_t> latency_render_queue_samples{0};
+    std::atomic<uint64_t> latency_present_fence_total_us{0};
+    std::atomic<uint64_t> latency_present_fence_max_us{0};
+    std::atomic<uint32_t> latency_present_fence_samples{0};
+    std::atomic<uint64_t> latency_present_call_total_us{0};
+    std::atomic<uint64_t> latency_present_call_max_us{0};
+    std::atomic<uint32_t> latency_present_call_samples{0};
+    std::atomic<uint32_t> latency_presented_new_frames{0};
+    std::atomic<uint64_t> latency_frame_submit_gap_total_us{0};
+    std::atomic<uint64_t> latency_frame_submit_gap_max_us{0};
+    std::atomic<uint32_t> latency_frame_submit_gap_samples{0};
+    alignas(64) std::atomic<uint64_t> latency_input_sample_gap_total_us{0};
+    std::atomic<uint64_t> latency_input_sample_gap_max_us{0};
+    std::atomic<uint32_t> latency_input_sample_gap_samples{0};
+    std::atomic<uint64_t> latency_input_read_total_us{0};
+    std::atomic<uint64_t> latency_input_read_max_us{0};
+    std::atomic<uint32_t> latency_input_read_samples{0};
+    std::atomic<uint64_t> latency_input_snapshot_age_total_us{0};
+    std::atomic<uint64_t> latency_input_snapshot_age_max_us{0};
+    std::atomic<uint32_t> latency_input_snapshot_age_samples{0};
+#endif
 
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
     // Sparse drop-diagnostic context. These are cheap rolling samples; file
@@ -164,7 +243,8 @@ struct PerfStats {
     std::chrono::steady_clock::time_point start_time;
 
     void reset() {
-        video_frames = 0; audio_frames = 0; audio_drops = 0;
+        video_frames = 0; decoded_video_width = 0; decoded_video_height = 0;
+        audio_frames = 0; audio_drops = 0;
         audio_queued_buffers = 0; audio_queue_high_watermark = 0;
         audio_latency_ms = 0; audio_latency_high_watermark_ms = 0;
         audio_buffer_ms = 0; audio_overflow_ms = 0; input_packets = 0;
@@ -178,10 +258,40 @@ struct PerfStats {
         video_decode_errors = 0;
         decoded_pending_drop_oldest = 0;
         decoded_pending_depth_high = 0;
+        decoded_catchup_suppressed = 0;
         unique_video_frames_submitted = 0;
         new_frame_submit_gap_max_us = 0;
         last_new_frame_submit_ns = 0;
         stream_started_ns = 0;
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_au_queue_total_us = 0; latency_au_queue_max_us = 0;
+        latency_au_queue_samples = 0;
+        latency_decode_total_us = 0; latency_decode_max_us = 0;
+        latency_decode_samples = 0;
+        latency_renderer_enqueue_total_us = 0;
+        latency_renderer_enqueue_max_us = 0;
+        latency_renderer_enqueue_samples = 0;
+        latency_render_handoff_total_us = 0;
+        latency_render_handoff_max_us = 0;
+        latency_render_handoff_samples = 0;
+        latency_render_queue_total_us = 0; latency_render_queue_max_us = 0;
+        latency_render_queue_samples = 0;
+        latency_present_fence_total_us = 0;
+        latency_present_fence_max_us = 0; latency_present_fence_samples = 0;
+        latency_present_call_total_us = 0; latency_present_call_max_us = 0;
+        latency_present_call_samples = 0; latency_presented_new_frames = 0;
+        latency_frame_submit_gap_total_us = 0;
+        latency_frame_submit_gap_max_us = 0;
+        latency_frame_submit_gap_samples = 0;
+        latency_input_sample_gap_total_us = 0;
+        latency_input_sample_gap_max_us = 0;
+        latency_input_sample_gap_samples = 0;
+        latency_input_read_total_us = 0; latency_input_read_max_us = 0;
+        latency_input_read_samples = 0;
+        latency_input_snapshot_age_total_us = 0;
+        latency_input_snapshot_age_max_us = 0;
+        latency_input_snapshot_age_samples = 0;
+#endif
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         video_queue_packets = 0; video_queue_bytes = 0;
         video_queue_oldest_age_ms = 0; video_queue_high_watermark_packets = 0;
@@ -295,6 +405,10 @@ struct PerfStats {
         }
 #endif
     }
+    void recordDecodedResolution(int width, int height) {
+        if (width > 0) decoded_video_width = static_cast<uint32_t>(width);
+        if (height > 0) decoded_video_height = static_cast<uint32_t>(height);
+    }
     void recordAudioFrame() { audio_frames++; }
     void recordAudioDrop() { audio_drops++; }
     void recordAudioQueuedBuffers(uint32_t queued) {
@@ -350,6 +464,15 @@ struct PerfStats {
                !target.compare_exchange_weak(current, sample)) {}
     }
 #endif
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+    template <typename T>
+    static void recordLatencyMaximum(std::atomic<T>& target, T sample) {
+        T current = target.load(std::memory_order_relaxed);
+        while (sample > current &&
+               !target.compare_exchange_weak(current, sample,
+                                             std::memory_order_relaxed)) {}
+    }
+#endif
 
     void recordVideoSyncDrop() {
         video_frame_drops++;
@@ -361,6 +484,9 @@ struct PerfStats {
     }
     void recordVideoDecodeError() { video_decode_errors++; }
     void recordDecodedPendingDropOldest() { decoded_pending_drop_oldest++; }
+    void recordDecodedCatchUpSuppressed() {
+        decoded_catchup_suppressed.fetch_add(1, std::memory_order_relaxed);
+    }
     void recordDecodedPendingDepth(uint32_t depth) {
         uint32_t current = decoded_pending_depth_high.load();
         while (depth > current &&
@@ -376,6 +502,13 @@ struct PerfStats {
         uint64_t current = new_frame_submit_gap_max_us.load();
         while (gap_us > current &&
                !new_frame_submit_gap_max_us.compare_exchange_weak(current, gap_us)) {}
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_frame_submit_gap_total_us.fetch_add(
+            gap_us, std::memory_order_relaxed);
+        latency_frame_submit_gap_samples.fetch_add(
+            1, std::memory_order_relaxed);
+        recordLatencyMaximum(latency_frame_submit_gap_max_us, gap_us);
+#endif
     }
     void recordVideoQueue(uint32_t packets, uint64_t bytes,
                           uint32_t oldest_age_ms) {
@@ -397,6 +530,12 @@ struct PerfStats {
         last_video_au_idr = idr;
 #else
         (void)bytes; (void)pts_ns; (void)queue_age_us; (void)idr;
+#endif
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_au_queue_total_us.fetch_add(queue_age_us,
+                                            std::memory_order_relaxed);
+        latency_au_queue_samples.fetch_add(1, std::memory_order_relaxed);
+        recordLatencyMaximum(latency_au_queue_max_us, queue_age_us);
 #endif
     }
     void recordVideoTiming(int64_t raw_delay_ns, int64_t policy_delay_ns,
@@ -421,6 +560,11 @@ struct PerfStats {
         last_decode_us = us;
         recordMaximum(decode_window_max_us, us);
 #endif
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_decode_total_us.fetch_add(us, std::memory_order_relaxed);
+        latency_decode_samples.fetch_add(1, std::memory_order_relaxed);
+        recordLatencyMaximum(latency_decode_max_us, us);
+#endif
     }
     void recordDecodeLatencyNs(uint64_t ns) {
         decode_total_us += ns / 1000ULL;
@@ -431,6 +575,12 @@ struct PerfStats {
         recordMaximum(decode_window_max_us,
                       static_cast<uint64_t>(ns / 1000ULL));
 #endif
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        const uint64_t us = ns / 1000ULL;
+        latency_decode_total_us.fetch_add(us, std::memory_order_relaxed);
+        latency_decode_samples.fetch_add(1, std::memory_order_relaxed);
+        recordLatencyMaximum(latency_decode_max_us, us);
+#endif
     }
     void recordRenderSubmit(uint64_t us) {
         render_submit_total_us += us;
@@ -438,6 +588,24 @@ struct PerfStats {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG
         last_render_submit_us = us;
         recordMaximum(render_window_max_us, us);
+#endif
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_render_handoff_total_us.fetch_add(us,
+                                                  std::memory_order_relaxed);
+        latency_render_handoff_samples.fetch_add(1,
+                                                  std::memory_order_relaxed);
+        recordLatencyMaximum(latency_render_handoff_max_us, us);
+#endif
+    }
+    void recordRendererEnqueue(uint64_t us) {
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_renderer_enqueue_total_us.fetch_add(
+            us, std::memory_order_relaxed);
+        latency_renderer_enqueue_samples.fetch_add(
+            1, std::memory_order_relaxed);
+        recordLatencyMaximum(latency_renderer_enqueue_max_us, us);
+#else
+        (void)us;
 #endif
     }
     void recordPresentWait(uint64_t us) {
@@ -447,6 +615,169 @@ struct PerfStats {
 #else
         (void)us;
 #endif
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_present_fence_total_us.fetch_add(us,
+                                                 std::memory_order_relaxed);
+        latency_present_fence_samples.fetch_add(1,
+                                                 std::memory_order_relaxed);
+        recordLatencyMaximum(latency_present_fence_max_us, us);
+#endif
+    }
+    void recordRenderQueueWait(uint64_t us) {
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_render_queue_total_us.fetch_add(us,
+                                                std::memory_order_relaxed);
+        latency_render_queue_samples.fetch_add(1,
+                                                std::memory_order_relaxed);
+        recordLatencyMaximum(latency_render_queue_max_us, us);
+#else
+        (void)us;
+#endif
+    }
+    void recordPresentCall(uint64_t us, bool presented_new_frame) {
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_present_call_total_us.fetch_add(us,
+                                                std::memory_order_relaxed);
+        latency_present_call_samples.fetch_add(1,
+                                                std::memory_order_relaxed);
+        recordLatencyMaximum(latency_present_call_max_us, us);
+        if (presented_new_frame) {
+            latency_presented_new_frames.fetch_add(1,
+                                                    std::memory_order_relaxed);
+        }
+#else
+        (void)us; (void)presented_new_frame;
+#endif
+    }
+    void recordInputSample(uint64_t gap_us, uint64_t read_us) {
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        if (gap_us > 0) {
+            latency_input_sample_gap_total_us.fetch_add(
+                gap_us, std::memory_order_relaxed);
+            latency_input_sample_gap_samples.fetch_add(
+                1, std::memory_order_relaxed);
+            recordLatencyMaximum(latency_input_sample_gap_max_us, gap_us);
+        }
+        latency_input_read_total_us.fetch_add(read_us,
+                                              std::memory_order_relaxed);
+        latency_input_read_samples.fetch_add(1, std::memory_order_relaxed);
+        recordLatencyMaximum(latency_input_read_max_us, read_us);
+#else
+        (void)gap_us; (void)read_us;
+#endif
+    }
+    void recordInputSnapshotAge(uint64_t us) {
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_input_snapshot_age_total_us.fetch_add(
+            us, std::memory_order_relaxed);
+        latency_input_snapshot_age_samples.fetch_add(
+            1, std::memory_order_relaxed);
+        recordLatencyMaximum(latency_input_snapshot_age_max_us, us);
+#else
+        (void)us;
+#endif
+    }
+    LatencyPerfWindow takeLatencyWindow() {
+        LatencyPerfWindow window;
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        window.access_unit_queue_total_us =
+            latency_au_queue_total_us.exchange(0, std::memory_order_relaxed);
+        window.access_unit_queue_max_us =
+            latency_au_queue_max_us.exchange(0, std::memory_order_relaxed);
+        window.access_unit_queue_samples =
+            latency_au_queue_samples.exchange(0, std::memory_order_relaxed);
+        window.decode_total_us =
+            latency_decode_total_us.exchange(0, std::memory_order_relaxed);
+        window.decode_max_us =
+            latency_decode_max_us.exchange(0, std::memory_order_relaxed);
+        window.decode_samples =
+            latency_decode_samples.exchange(0, std::memory_order_relaxed);
+        window.renderer_enqueue_total_us =
+            latency_renderer_enqueue_total_us.exchange(
+                0, std::memory_order_relaxed);
+        window.renderer_enqueue_max_us =
+            latency_renderer_enqueue_max_us.exchange(
+                0, std::memory_order_relaxed);
+        window.renderer_enqueue_samples =
+            latency_renderer_enqueue_samples.exchange(
+                0, std::memory_order_relaxed);
+        window.render_handoff_total_us =
+            latency_render_handoff_total_us.exchange(0,
+                                                      std::memory_order_relaxed);
+        window.render_handoff_max_us =
+            latency_render_handoff_max_us.exchange(0,
+                                                    std::memory_order_relaxed);
+        window.render_handoff_samples =
+            latency_render_handoff_samples.exchange(0,
+                                                     std::memory_order_relaxed);
+        window.render_queue_total_us =
+            latency_render_queue_total_us.exchange(0,
+                                                    std::memory_order_relaxed);
+        window.render_queue_max_us =
+            latency_render_queue_max_us.exchange(0,
+                                                  std::memory_order_relaxed);
+        window.render_queue_samples =
+            latency_render_queue_samples.exchange(0,
+                                                   std::memory_order_relaxed);
+        window.present_fence_total_us =
+            latency_present_fence_total_us.exchange(0,
+                                                     std::memory_order_relaxed);
+        window.present_fence_max_us =
+            latency_present_fence_max_us.exchange(0,
+                                                   std::memory_order_relaxed);
+        window.present_fence_samples =
+            latency_present_fence_samples.exchange(0,
+                                                    std::memory_order_relaxed);
+        window.present_call_total_us =
+            latency_present_call_total_us.exchange(0,
+                                                    std::memory_order_relaxed);
+        window.present_call_max_us =
+            latency_present_call_max_us.exchange(0,
+                                                  std::memory_order_relaxed);
+        window.present_call_samples =
+            latency_present_call_samples.exchange(0,
+                                                   std::memory_order_relaxed);
+        window.presented_new_frames =
+            latency_presented_new_frames.exchange(0,
+                                                   std::memory_order_relaxed);
+        window.frame_submit_gap_total_us =
+            latency_frame_submit_gap_total_us.exchange(
+                0, std::memory_order_relaxed);
+        window.frame_submit_gap_max_us =
+            latency_frame_submit_gap_max_us.exchange(
+                0, std::memory_order_relaxed);
+        window.frame_submit_gap_samples =
+            latency_frame_submit_gap_samples.exchange(
+                0, std::memory_order_relaxed);
+        window.input_sample_gap_total_us =
+            latency_input_sample_gap_total_us.exchange(
+                0, std::memory_order_relaxed);
+        window.input_sample_gap_max_us =
+            latency_input_sample_gap_max_us.exchange(
+                0, std::memory_order_relaxed);
+        window.input_sample_gap_samples =
+            latency_input_sample_gap_samples.exchange(
+                0, std::memory_order_relaxed);
+        window.input_read_total_us =
+            latency_input_read_total_us.exchange(0,
+                                                  std::memory_order_relaxed);
+        window.input_read_max_us =
+            latency_input_read_max_us.exchange(0,
+                                                std::memory_order_relaxed);
+        window.input_read_samples =
+            latency_input_read_samples.exchange(0,
+                                                 std::memory_order_relaxed);
+        window.input_snapshot_age_total_us =
+            latency_input_snapshot_age_total_us.exchange(
+                0, std::memory_order_relaxed);
+        window.input_snapshot_age_max_us =
+            latency_input_snapshot_age_max_us.exchange(
+                0, std::memory_order_relaxed);
+        window.input_snapshot_age_samples =
+            latency_input_snapshot_age_samples.exchange(
+                0, std::memory_order_relaxed);
+#endif
+        return window;
     }
     void recordKeepAliveInterval(uint32_t seconds) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG

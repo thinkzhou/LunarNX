@@ -103,12 +103,13 @@ def main() -> None:
     require(".detach()" not in stop,
             "owned stream threads must never outlive XboxStreamSession")
 
-    require(start.index("callbacks.on_streaming()") <
-            start.index("stream_thread_ = std::thread"),
-            "preserve the original on_streaming-before-worker-start ordering")
     require(start.index("startInputLoop(callbacks)") <
             start.index("stream_thread_ = std::thread"),
             "the input producer must start before the WebRTC owner loop")
+    require(start.index("stream_thread_ = std::thread") <
+            start.index("while (!media_startup_ready_.load()") <
+            start.index("callbacks.on_streaming()"),
+            "the stream page must open only after the owner loop enables media")
 
     require("reconnectWithFreshSession" in run_loop,
             "media failure should rebuild a fresh Xbox session")
@@ -122,9 +123,15 @@ def main() -> None:
         "bool XboxStreamSession::reconnectWithFreshSession(",
         "webrtc::PeerCallbacks XboxStreamSession::createPeerCallbacks(",
     )
+    reconnect_prepare_section = function_body(
+        source,
+        "void XboxStreamSession::prepareFreshSessionReconnect(",
+        "bool XboxStreamSession::reconnectWithFreshSession(",
+    )
     require("api_lock(session_api_mutex_)" in reconnect_section,
             "reconnect signaling must exclude control-plane API operations")
-    require("media_.prepareForNewMediaSource" in reconnect_section,
+    require("prepareFreshSessionReconnect" in reconnect_section and
+            "media_.prepareForNewMediaSource" in reconnect_prepare_section,
             "a fresh WebRTC association must reset the complete media source epoch")
 
     print("Xbox stream control thread tests passed")

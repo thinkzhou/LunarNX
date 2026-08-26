@@ -36,7 +36,7 @@ struct PeerManagerQueueTestAccess {
         return result;
     }
     static bool complete(PeerManager& peer, const Command& command, int result) {
-        return peer.completeOutboundCommand(command, result);
+        return peer.completeOutboundCommand(command, result, false);
     }
     static bool select(const PeerManager& peer,
                        Command& command,

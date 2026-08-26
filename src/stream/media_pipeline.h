@@ -5,6 +5,7 @@
 #include "audio_packet_reorder.h"
 #include "audio_decoder.h"
 #include "bounded_video_queue_policy.h"
+#include "realtime_latency_policy.h"
 #include "stream_backend_provider.h"
 #include "video_codec.h"
 #include <atomic>
@@ -29,6 +30,41 @@ struct VideoFrame;
 class VideoDecoder;
 class VideoRenderer;
 
+enum class VideoRenderStage : uint8_t {
+    Idle = 0,
+    WaitingGpuMutex,
+    WaitingRenderMutex,
+    DecoderResetFence,
+    ResolutionTransitionFence,
+    MappingUpdate,
+    FramebufferAcquire,
+    PresentFence,
+    RecordCommands,
+    SubmitCommands,
+    Fault,
+    Shutdown,
+};
+
+inline const char* videoRenderStageName(VideoRenderStage stage) {
+    switch (stage) {
+        case VideoRenderStage::Idle: return "idle";
+        case VideoRenderStage::WaitingGpuMutex: return "waiting-gpu-mutex";
+        case VideoRenderStage::WaitingRenderMutex: return "waiting-render-mutex";
+        case VideoRenderStage::DecoderResetFence: return "decoder-reset-fence";
+        case VideoRenderStage::ResolutionTransitionFence:
+            return "resolution-transition-fence";
+        case VideoRenderStage::MappingUpdate: return "mapping-update";
+        case VideoRenderStage::FramebufferAcquire:
+            return "framebuffer-acquire";
+        case VideoRenderStage::PresentFence: return "present-fence";
+        case VideoRenderStage::RecordCommands: return "record-commands";
+        case VideoRenderStage::SubmitCommands: return "submit-commands";
+        case VideoRenderStage::Fault: return "fault";
+        case VideoRenderStage::Shutdown: return "shutdown";
+    }
+    return "unknown";
+}
+
 struct MediaHealthStats {
     bool has_decoded_video = false;
     bool has_presented_video = false;
@@ -36,6 +72,8 @@ struct MediaHealthStats {
     uint64_t presented_video_age_ms = 0;
     uint32_t render_fault_count = 0;
     uint32_t consecutive_render_faults = 0;
+    VideoRenderStage renderer_stage = VideoRenderStage::Idle;
+    uint64_t renderer_stage_age_ms = 0;
 };
 
 enum class PostProcessMode {
@@ -102,6 +140,11 @@ struct MediaPipelineOptions {
     bool hold_non_target_startup_frames = false;
     VideoSchedulingMode video_scheduling = VideoSchedulingMode::RealtimeQueued;
     VideoQueueLimits video_queue_limits{};
+    VideoPresentationMode video_presentation_mode =
+        VideoPresentationMode::BufferedFifo;
+    VideoDecodeCatchUpMode video_decode_catch_up_mode =
+        VideoDecodeCatchUpMode::Disabled;
+    AudioLatencyMode audio_latency_mode = AudioLatencyMode::Resilient;
 };
 
 /// Owns the media half of a streaming session.
@@ -135,11 +178,18 @@ public:
     // the decoder reset independently; the session acknowledges this flag
     // after a throttled control/PLI request succeeds.
     bool hasVideoRecoveryRequest() const { return video_recovery_request_.load(); }
+    bool hasRendererRecoveryPending() const {
+        return video_renderer_recovery_pending_.load(std::memory_order_acquire);
+    }
     void clearVideoRecoveryRequest();
     // Ask the transport for an IDR. Packet-loss recovery keeps the active
     // decoder; only invalid H.264 or a bounded-buffer failure requests a
     // decoder reset on the video worker.
     void requestVideoRecovery(const char* reason, bool reset_decoder = false);
+    // Presentation-only stalls keep the decoder and its reference chain alive.
+    // The video worker asks the UI thread to retire GPU command-ring slices,
+    // without flushing FFmpeg or waiting from the WebRTC owner loop.
+    void requestRendererRecovery(const char* reason);
     // Treat a new WebRTC/RTP association as a new encoded video source. This
     // drains GPU-owned frames, flushes decoder/parser state, and re-anchors
     // AV sync before accepting the next IDR.
@@ -148,6 +198,9 @@ public:
     // resets both video and audio RTP/decode/playback state.
     void prepareForNewMediaSource(const char* reason);
     void presentVideoFrame();
+    void setVideoPresentationMode(VideoPresentationMode mode);
+    void setVideoDecodeCatchUpMode(VideoDecodeCatchUpMode mode);
+    bool setAudioLatencyMode(AudioLatencyMode mode);
     MediaHealthStats getHealthStats() const;
 
     bool isRunning() const { return running_.load(); }
@@ -162,6 +215,7 @@ private:
         VideoAccessUnitInfo access_unit;
         std::chrono::steady_clock::time_point enqueued_at;
         uint64_t queue_age_us = 0;
+        bool suppress_output = false;
         std::vector<uint8_t> data;
     };
 
@@ -236,6 +290,13 @@ private:
     std::atomic<PerfStats*> perf_{nullptr};
     std::atomic<VideoSchedulingMode> video_scheduling_{
         VideoSchedulingMode::RealtimeQueued};
+    std::atomic<VideoDecodeCatchUpMode> video_decode_catch_up_mode_{
+        VideoDecodeCatchUpMode::Disabled};
+    // NVDEC may return a frame submitted by an earlier decode() call. Match
+    // catch-up suppression by RTP timestamp instead of the current callback
+    // stack so decoder reordering cannot hide the wrong frame.
+    std::mutex video_suppression_mutex_;
+    std::deque<uint64_t> suppressed_video_timestamps_;
     VideoQueueLimits video_queue_limits_{};
     std::atomic<bool> running_{false};
     std::atomic<uint32_t> generation_{0};
@@ -256,10 +317,13 @@ private:
     uint32_t video_worker_generation_ = 0;
     std::atomic<bool> video_recovery_request_{false};
     std::atomic<bool> video_decoder_reset_pending_{false};
+    std::atomic<bool> video_renderer_recovery_pending_{false};
+    std::atomic<bool> video_renderer_recovery_in_progress_{false};
     std::atomic<bool> video_new_source_pending_{false};
     std::atomic<bool> video_waiting_for_keyframe_{false};
     std::atomic<uint32_t> video_recovery_epoch_{0};
     bool video_decoder_reset_wakeup_ = false;
+    bool video_renderer_recovery_wakeup_ = false;
     BoundedVideoStats bounded_video_stats_{};
 
     std::atomic<uint64_t> last_decoded_video_ns_{0};
@@ -269,6 +333,12 @@ private:
     // liveness without taking the renderer/lifecycle mutex.
     std::atomic<uint64_t> last_presented_video_ns_{0};
     std::atomic<uint32_t> consecutive_render_faults_{0};
+    // VideoRenderer writes these without logging on the hot path. The session
+    // watchdog can therefore report the last Deko3D boundary even if the UI
+    // thread is blocked inside a lock or driver call.
+    std::atomic<uint8_t> renderer_stage_{
+        static_cast<uint8_t>(VideoRenderStage::Idle)};
+    std::atomic<uint64_t> renderer_stage_started_ns_{0};
 
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;

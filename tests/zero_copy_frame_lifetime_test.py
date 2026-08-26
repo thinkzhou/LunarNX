@@ -25,11 +25,12 @@ def main() -> None:
     require("av_frame_ref(keep,f)" in renderer and
             "enqueuePendingFrame(*s,keep)" in renderer,
             "Renderer should retain the borrowed NVTEGRA frame in the bounded queue")
-    require("s->current_frame=dequeuePendingFrame(*s)" in renderer,
+    require("s->current_frame=dequeuePendingFrame(*s,queued_ns)" in renderer,
             "Present should consume the oldest decoded frame")
-    require("s->present_ring->begin(s->present_cb)" in renderer and
+    require("s->present_ring->begin(s->present_cb," in renderer and
+            "kCommandRingWaitTimeoutNs" in renderer and
             "next_submitted_frame" in renderer,
-            "Frame retirement must follow the existing Deko3D command-ring fence")
+            "Frame retirement must follow a bounded Deko3D command-ring fence")
 
     require("dk::MemBlockMaker{s.dev,size}" in renderer and
             ".setStorage(address)" in renderer,

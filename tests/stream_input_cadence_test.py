@@ -33,25 +33,43 @@ require("kInputSampleInterval{8}" in XBOX_SESSION and
 require("transport_" not in input_loop,
         "the Xbox input producer must not call WebRTC/libpeer")
 require("transport_.processEvents()" in run_loop and
-        "xinput_.encodeFrames(input_batch->frames)" in run_loop and
+        "xinput_.encode(input_snapshot->state)" in run_loop and
         "channels_.sendInputPacket" in run_loop,
-        "the Xbox WebRTC owner loop must encode and send sampled frames")
-require("input_accumulator_.peekBatch()" in run_loop and
-        "input_accumulator_.commitBatch(*input_batch)" in run_loop and
-        "input_batch->reliable" in run_loop and
-        "pending_input_batch" in run_loop and
-        "input-transition-overflow" in run_loop,
-        "Xbox input must keep transition batches pending until their send result")
-require("{\"input\", \"1.0\", 0, true, -1}" in DATA_CHANNELS and
+        "the Xbox WebRTC owner loop must encode and send one current-state frame")
+process_events_start = PEER_MANAGER.index("void PeerManager::processEvents()")
+process_events = PEER_MANAGER[process_events_start:]
+require("drainOutboundCommands" in process_events and
+        "realtime_input_only" in process_events and
+        process_events.index("realtime_input_only") <
+            process_events.index("peer_connection_loop(pc_)"),
+        "replaceable input must drain before the potentially slow inbound peer loop")
+require("input_accumulator_.peekLatest()" in run_loop and
+        "input_accumulator_.peekTransition(input_now_ns)" in run_loop and
+        "input_accumulator_.commitLatest(*input_snapshot)" in run_loop and
+        "input_accumulator_.commitTransition(*input_snapshot)" in run_loop and
+        "pending_input_batch" not in run_loop and
+        "consumeInputDeliveryResult" not in run_loop and
+        "input-transition-overflow" not in run_loop,
+        "Xbox input must use latest-state delivery plus the bounded edge journal")
+require("{\"control\", \"controlV1\", 0, true, -1}" in DATA_CHANNELS and
+        "{\"input\", \"1.0\", 2, true, -1}" in DATA_CHANNELS and
+        "{\"message\", \"messageV1\", 4, true, -1}" in DATA_CHANNELS and
+        "{\"chat\", \"chatV1\", 6, true, -1}" in DATA_CHANNELS and
         "ch.ordered ? DATA_CHANNEL_RELIABLE" in PEER_MANAGER and
-        "sendInputTransitionData(data, len)" in XBOX_CHANNEL and
+        "sendInputTransitionPacket" in XBOX_CHANNEL and
+        "sendTransitionInputData(data, len)" in XBOX_CHANNEL and
         "sendLatestInputData(data, len)" in XBOX_CHANNEL,
-        "Xbox input must split reliable transitions from replaceable snapshots")
-require("kInputHeartbeatInterval{250}" in XBOX_SESSION and
-        "heartbeat_due" in XBOX_SESSION and
-        "sameEncodedState(last_snapshot_state_, state)" in
-            (ROOT / "src/input/xbox_input_accumulator.cpp").read_text(),
-        "unchanged reliable input must be suppressed with a 250 ms heartbeat")
+        "Xbox v1 input must retain Green-NX's reliable ordered channel with bounded edge delivery")
+accumulator = (ROOT / "src/input/xbox_input_accumulator.cpp").read_text()
+accumulator_header = (
+    ROOT / "src/input/xbox_input_accumulator.h").read_text()
+require("kInputHeartbeatInterval" not in XBOX_SESSION and
+        "heartbeat_due" not in XBOX_SESSION and
+        "kInputSnapshotInterval" not in XBOX_SESSION and
+        "latest_dirty_ = true" in accumulator and
+        "kTransitionLifetimeNs = 50'000'000" in accumulator_header and
+        "transitions_" in accumulator,
+        "Xbox input must publish every 8 ms and expire digital edges after 50 ms")
 require("kPsInputInterval{8}" in PS_CONTROLLER and
         "input_thread_ = std::thread" in PS_CONTROLLER and
         "update();" in PS_CONTROLLER,

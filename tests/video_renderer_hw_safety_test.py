@@ -9,6 +9,8 @@ def require(condition, message):
 
 def main():
     renderer = Path("src/stream/video_renderer.cpp").read_text()
+    renderer_header = Path("src/stream/video_renderer.h").read_text()
+    media_header = Path("src/stream/media_pipeline.h").read_text()
     render_start = renderer.index("bool VideoRenderer::render(const VideoFrame&frame)")
     render_end = renderer.index("void VideoRenderer::present()", render_start)
     render = renderer[render_start:render_end]
@@ -22,8 +24,36 @@ def main():
     present_end = renderer.index("bool VideoRenderer::prepareDecoderReset()", present_start)
     present = renderer[present_start:present_end]
 
-    require("s->present_ring->begin(s->present_cb)" in present,
-            "hardware presentation must use the existing command-ring fence")
+    require("s->present_ring->begin(s->present_cb," in present and
+            "kCommandRingWaitTimeoutNs" in present,
+            "hardware presentation must use a bounded command-ring fence wait")
+    require("s->present_ring->begin(s->present_cb)" not in present,
+            "hardware presentation must never use an unbounded fence wait")
+    require("RenderFault::CommandFenceTimeout" in renderer and
+            "kCommandRingTimeoutFaultThreshold" in renderer,
+            "a persistent command-ring timeout must surface as renderer recovery")
+    require("kCommandRingTimeoutFaultThreshold = 45" in renderer,
+            "renderer recovery should start at 750 ms, leaving 250 ms before the 1 s watchdog")
+    require("consecutive_update_ring_timeouts" in renderer and
+            "consecutive_present_ring_timeouts" in renderer,
+            "descriptor progress must not hide consecutive presentation timeouts")
+    require("enum class VideoRenderStage" in media_header and
+            "setProgressSink" in renderer_header and
+            "setRenderStage" in renderer,
+            "renderer progress must be published without waiting for the stuck render thread")
+    require("VideoRenderStage::WaitingGpuMutex" in present and
+            "VideoRenderStage::WaitingRenderMutex" in present and
+            "VideoRenderStage::PresentFence" in present and
+            "VideoRenderStage::SubmitCommands" in present,
+            "renderer diagnostics must distinguish locks, fences, and command submission")
+    require("kCommandRingDiagnosticThreshold = 8" in renderer and
+            '"fence-stall' in renderer and '"fence-resumed' in renderer,
+            "meaningful transient fence stalls must be logged without per-frame spam")
+    require("duration_ms=%llu" in renderer and "queue_error=%d" in renderer and
+            "mappings=%zu" in renderer and "pending=%zu" in renderer,
+            "fence incidents must capture duration and GPU resource state")
+    require("~BoundedCmdMemRing() { memory_.destroy(); }" in renderer,
+            "the bounded command ring must release its command-memory slice")
     require("s->q.waitIdle()" not in present,
             "present must not block before Borealis endFrame/presentImage")
     require("submitted_frames" in present and "completed_frame" in present,
@@ -81,6 +111,16 @@ def main():
             "the decoder thread must not operate on UI-owned GPU resources")
     require("decoder_reset_cv.wait_for" in reset,
             "decoder recovery must wait for the UI command-ring handoff")
+
+    shutdown_start = renderer.index("void VideoRenderer::shutdown()", reset_end)
+    shutdown_end = renderer.index("\n}\n\n}\n#else", shutdown_start)
+    shutdown = renderer[shutdown_start:shutdown_end]
+    require("gpu_quarantine_required_" in renderer_header and
+            "phase=gpu-quarantine" in shutdown,
+            "a persistently stalled GPU context must be quarantined during shutdown")
+    require(shutdown.index("phase=gpu-quarantine") <
+            shutdown.index("s->q.waitIdle()"),
+            "fatal command-fence shutdown must not reach the unbounded queue wait")
 
     print("video renderer hardware safety test passed")
 

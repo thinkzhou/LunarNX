@@ -8,6 +8,7 @@
 namespace {
 
 using lunar::app::AdaptiveBitrateController;
+using lunar::app::AdaptiveBitrateSignal;
 using lunar::webrtc::NetworkPathEstimate;
 using lunar::webrtc::NetworkPathEstimator;
 using lunar::webrtc::NetworkPathMode;
@@ -153,12 +154,12 @@ void test_profile_specific_jitter_policy() {
     cloud_path.quality = NetworkPathQuality::Good;
     const auto cloud = computeVideoJitterPolicy(
         NetworkPathMode::Cloud, cloud_path);
-    require(cloud.frame_hold_ms == 100,
-            "stable cloud path uses bounded ordinary frame hold");
-    require(cloud.missing_packet_hold_ms == 150,
-            "cloud missing deadline is one RTT plus margin, not two RTTs");
-    require(cloud.max_head_blocked_frames == 6,
-            "cloud path tolerates a bounded frame backlog");
+    require(cloud.frame_hold_ms <= 60,
+            "stable cloud path does not spend one RTT on an unknown head frame");
+    require(cloud.missing_packet_hold_ms == 140,
+            "cloud missing deadline is one RTT plus a small repair margin");
+    require(cloud.max_head_blocked_frames == 3,
+            "cloud path bounds head-of-line backlog to three frames");
 
     auto high_rtt_path = estimate(3, 2000, 0, 0, 0, 0, 0,
                                   180, 180, 0);
@@ -166,11 +167,11 @@ void test_profile_specific_jitter_policy() {
     high_rtt_path.observed_quality = NetworkPathQuality::Good;
     const auto high_rtt = computeVideoJitterPolicy(
         NetworkPathMode::Cloud, high_rtt_path);
-    require(high_rtt.missing_packet_hold_ms >= 230,
+    require(high_rtt.missing_packet_hold_ms >= 235,
             "180 ms cloud path keeps one RTT plus retransmission margin");
-    require(high_rtt.missing_packet_hold_ms < 300,
+    require(high_rtt.missing_packet_hold_ms <= 240,
             "healthy high-RTT path remains below the legacy double-RTT hold");
-    require(high_rtt.head_blocked_hold_ms == 200,
+    require(high_rtt.head_blocked_hold_ms == 220,
             "180 ms cloud RTT stays inside the usable A/V-sync budget");
 
     auto very_high_rtt_path = estimate(4, 2000, 20'000, 40, 0,
@@ -179,11 +180,11 @@ void test_profile_specific_jitter_policy() {
     very_high_rtt_path.observed_quality = NetworkPathQuality::Poor;
     const auto very_high_rtt = computeVideoJitterPolicy(
         NetworkPathMode::Cloud, very_high_rtt_path);
-    require(very_high_rtt.missing_packet_hold_ms >= 410 &&
-                very_high_rtt.missing_packet_hold_ms < 440,
+    require(very_high_rtt.missing_packet_hold_ms >= 335 &&
+                very_high_rtt.missing_packet_hold_ms < 350,
             "poor 240 ms path covers the retransmission tail below legacy hold");
     require(very_high_rtt.head_blocked_hold_ms == 140,
-            "240 ms cloud RTT abandons HOL wait when one retry cannot be displayed");
+            "240 ms cloud RTT abandons HOL before an unusable retry adds latency");
 
     auto burst_path = estimate(5, 2000, 0, 60, 55, 0, 0,
                                85, 80, 5);
@@ -268,20 +269,20 @@ int main() {
     require(controller.targetKbps() == 20000,
             "severe congestion applies a multiplicative decrease");
 
-    for (uint64_t sequence = 8; sequence < 13; ++sequence) {
+    for (uint64_t sequence = 8; sequence < 14; ++sequence) {
         controller.observe(estimate(sequence));
     }
     require(controller.targetKbps() == 20000,
-            "post-congestion recovery waits for six clean windows");
-    controller.observe(estimate(13));
+            "post-congestion recovery observes cooldown and stable windows");
+    controller.observe(estimate(14));
     require(controller.targetKbps() == 25000,
             "stable cloud path restores one step after hysteresis");
 
-    controller.observe(estimate(13));
+    controller.observe(estimate(14));
     require(controller.targetKbps() == 25000,
             "duplicate estimator snapshots do not accelerate recovery");
 
-    for (uint64_t sequence = 14; sequence < 20; ++sequence) {
+    for (uint64_t sequence = 15; sequence <= 20; ++sequence) {
         controller.observe(estimate(sequence));
     }
     require(controller.targetKbps() == 30000,
@@ -341,24 +342,77 @@ int main() {
     require(one_off_outage.targetKbps() == 20000,
             "one severe window protects the stream immediately");
     one_off_outage.observe(estimate(6));
-    one_off_outage.observe(estimate(7));
+    require(one_off_outage.targetKbps() == 20000,
+            "single-window congestion waits for one clean confirmation window");
+    for (uint64_t sequence = 7; sequence <= 8; ++sequence) {
+        one_off_outage.observe(estimate(sequence));
+    }
     require(one_off_outage.targetKbps() == 25000,
-            "single-window congestion recovers one tier after two clean windows");
-    one_off_outage.observe(estimate(8));
-    one_off_outage.observe(estimate(9));
+            "single-window congestion restores one tier after bounded hysteresis");
+    for (uint64_t sequence = 9; sequence <= 10; ++sequence) {
+        one_off_outage.observe(estimate(sequence));
+    }
     require(one_off_outage.targetKbps() == 30000,
-            "single-window congestion quickly restores its pre-event cap");
+            "one-off congestion restores the selected cap without a long quality penalty");
+
+    AdaptiveBitrateController oversized_cloud(NetworkPathMode::Cloud, 30000);
+    AdaptiveBitrateSignal oversized_signal;
+    oversized_signal.requested_width = 1920;
+    oversized_signal.requested_height = 1080;
+    oversized_signal.decoded_width = 2560;
+    oversized_signal.decoded_height = 1440;
+    oversized_cloud.observe(estimate(1), oversized_signal);
+    require(oversized_cloud.targetKbps() == 20000,
+            "unexpected 1440p stream clamps an HQ probe to the safe cloud tier");
+    for (uint64_t sequence = 2; sequence <= 20; ++sequence) {
+        oversized_cloud.observe(estimate(sequence), oversized_signal);
+    }
+    require(oversized_cloud.targetKbps() == 20000,
+            "oversized stream cannot immediately probe above its receiver guard");
+
+    AdaptiveBitrateSignal recovery_signal = oversized_signal;
+    recovery_signal.hard_recovery = true;
+    oversized_cloud.observe(estimate(21), recovery_signal);
+    require(oversized_cloud.targetKbps() == 15000,
+            "hard video recovery immediately lowers the protected stream one tier");
+    recovery_signal.hard_recovery = false;
+    for (uint64_t sequence = 22; sequence <= 35; ++sequence) {
+        oversized_cloud.observe(estimate(sequence), recovery_signal);
+    }
+    require(oversized_cloud.targetKbps() == 15000,
+            "hard recovery cooldown prevents an early return to the failed tier");
+
+    AdaptiveBitrateController home_recovery(NetworkPathMode::Home, 20000);
+    AdaptiveBitrateSignal home_recovery_signal;
+    home_recovery_signal.hard_recovery = true;
+    home_recovery.observe(estimate(1, 2000, 0, 0, 0, 0, 0,
+                                   5, 5, 0), home_recovery_signal);
+    require(home_recovery.targetKbps() == 15000,
+            "local decoder recovery protects the receiver by one tier");
+    home_recovery_signal.hard_recovery = false;
+    for (uint64_t sequence = 2; sequence <= 5; ++sequence) {
+        home_recovery.observe(estimate(sequence, 2000, 0, 0, 0, 0, 0,
+                                       5, 5, 0), home_recovery_signal);
+    }
+    require(home_recovery.targetKbps() == 20000,
+            "local hard recovery restores quality after four clean seconds");
+
+    home_recovery_signal.hard_recovery = true;
+    home_recovery.observe(estimate(5, 2000, 0, 0, 0, 0, 0,
+                                   5, 5, 0), home_recovery_signal);
+    require(home_recovery.targetKbps() == 15000,
+            "hard recovery edge bypasses duplicate path snapshots");
 
     AdaptiveBitrateController mild_recovered(NetworkPathMode::Cloud, 30000);
     mild_recovered.observe(estimate(1, 2000, 60'000, 120, 0, 1));
     require(mild_recovered.targetKbps() == 15000,
             "receiver queue loss still causes an immediate reduction");
-    for (uint64_t sequence = 2; sequence <= 3; ++sequence) {
+    for (uint64_t sequence = 2; sequence <= 4; ++sequence) {
         mild_recovered.observe(estimate(sequence, 2000, 0, 2, 2,
                                         0, 0, 80, 80, 0, 15000));
     }
     require(mild_recovered.targetKbps() == 20000,
-            "small fully recovered loss permits post-congestion recovery");
+            "small fully recovered loss permits recovery after cooldown");
 
     AdaptiveBitrateController random_loss(NetworkPathMode::Home, 20000);
     random_loss.observe(estimate(1, 2000, 4'000, 8, 0,

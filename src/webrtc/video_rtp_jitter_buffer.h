@@ -46,6 +46,12 @@ struct VideoRtpJitterStats {
     uint64_t max_arrival_gap_ms = 0;
 };
 
+struct VideoRtpLatencyWindow {
+    uint64_t assembly_total_us = 0;
+    uint64_t assembly_max_us = 0;
+    uint32_t assembly_samples = 0;
+};
+
 class VideoRtpJitterBuffer {
 public:
     using EmitCallback =
@@ -93,6 +99,7 @@ public:
                  const SourceDiscontinuityCallback& source_discontinuity = {});
 
     VideoRtpJitterStats stats() const;
+    VideoRtpLatencyWindow takeLatencyWindow();
     VideoRtpReceiverReport receiverReport();
     bool waitingForKeyframe() const;
 

@@ -15,6 +15,10 @@ def main():
     tracked_patch = Path("tools/libpeer_legacy/legacy-libpeer-switch.patch").read_text()
     rtp = Path("lib/libpeer/src/rtp.c").read_text()
     socket = Path("lib/libpeer/src/socket.c").read_text()
+    socket_header = Path("lib/libpeer/src/socket.h").read_text()
+    dtls_srtp = Path("lib/libpeer/src/dtls_srtp.c").read_text()
+    agent = Path("lib/libpeer/src/agent.c").read_text()
+    agent_header = Path("lib/libpeer/src/agent.h").read_text()
     peer_manager = Path("src/webrtc/peer_manager.cpp").read_text()
     web_rtc_transport = Path("src/app/web_rtc_transport.cpp").read_text()
 
@@ -35,10 +39,13 @@ def main():
             "sctp_advance_stream_sequence" in sctp and
             "outbound_stream_sequence" in sctp,
             "SCTP ordered DATA chunks should advance per-stream sequence numbers only after sending")
-    require("return dtls_srtp_write" in sctp and
+    require("const int write_result = dtls_srtp_write" in sctp and
+            "if (write_result >= 0)" in sctp and
+            "return EAGAIN;" in sctp and
+            "return EIO;" in sctp and
             "if (write_ret < 0)" in sctp and
             "sctp->tsn++;" in sctp,
-            "Custom SCTP must propagate DTLS failures before committing TSN state")
+            "SCTP output must normalize usrsctp success and propagate DTLS failures before committing custom TSN state")
     require("sctp_send_sack" in sctp,
             "Custom SCTP should acknowledge inbound DATA chunks with an explicit SACK helper")
     require("sack_chunk->a_rwnd = htonl(0x100000);" in sctp,
@@ -49,14 +56,14 @@ def main():
             "Custom SCTP should handle DCEP control messages separately from app payload")
     require("sack_chunk->blocks" not in sctp,
             "Custom SCTP should not append outbound DCEP ACK DATA inside the SACK gap block area")
-    require("sctp_add_stream_mapping(&pc->sctp, label, sid)" in peer_connection,
+    require("sctp_add_stream_mapping(&pc->sctp, label, sid," in peer_connection,
             "Locally opened data channels must register SID-to-label mapping before inbound app messages arrive")
     require("if (sctp->stream_table[i].sid == sid)" in sctp and
-            "return;" in sctp[sctp.index("void sctp_add_stream_mapping"):sctp.index("void sctp_parse_data_channel_open")],
+            "return;" in sctp[sctp.index("static SctpStreamEntry* sctp_find_stream"):sctp.index("void sctp_parse_data_channel_open")],
             "SCTP stream mapping should ignore duplicate SID registrations")
-    require("msg[1] = (char)channel_type" in peer_connection or
+    require("msg[1] = (char)channel_type" in peer_connection and
             "msg[1] = (char)channel_type" in tracked_patch,
-            "DCEP OPEN must serialize the negotiated channel type byte")
+            "active and reproducible libpeer must serialize the DCEP channel type")
 
     require("pc->agent.binding_request_time > 0" in peer_connection,
             "WebRTC keepalive timeout must not close a fresh connection with timestamp 0")
@@ -172,6 +179,22 @@ def main():
             "peer_connection_is_transient_send_error" in peer_manager and
             "completeOutboundCommand" in peer_manager,
             "PeerManager should retain reliable commands across transient DTLS failures")
+    require("last_send_error" in socket_header and
+            "udp_socket_is_temporary_send_error" in socket_header and
+            "udp_socket->last_send_error = send_error" in socket,
+            "UDP sends must preserve errno and classify temporary socket pressure")
+    require("agent_last_send_error" in agent and
+            "agent_last_send_error" in agent_header,
+            "the selected ICE socket must expose its last send errno")
+    require("MBEDTLS_ERR_SSL_WANT_WRITE" in dtls_srtp and
+            "udp_socket_is_temporary_send_error" in dtls_srtp and
+            "agent_last_send_error" in peer_connection and
+            "udp_socket_is_temporary_send_error" in peer_connection,
+            "temporary UDP send pressure must propagate through DTLS as WANT_WRITE")
+    require("last_send_error" in tracked_patch and
+            "udp_socket_is_temporary_send_error" in tracked_patch and
+            "agent_last_send_error" in tracked_patch,
+            "tracked legacy libpeer patch must preserve UDP send error classification")
     require("void PeerManager::setMediaEnabled" in peer_manager and
             "peer_connection_set_media_enabled(pc_" in peer_manager,
             "PeerManager should allow the app to defer RTP decode until control channels are ready")

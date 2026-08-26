@@ -11,12 +11,12 @@ SDK_PATH = $(shell xcrun --show-sdk-path)
 COMMON_INCLUDES = -isysroot $(SDK_PATH) \
 		           -I$(SDK_PATH)/usr/include/c++/v1 \
 		           -I$(SDK_PATH)/usr/include \
-		           -I/opt/homebrew/include \
 	           -I/opt/homebrew/include/SDL2 \
 		           -Isrc -Ilib \
 		           -Ilib/libpeer/third_party/mbedtls/include \
 		           -Ilib/libpeer/third_party/libsrtp/include \
 		           -Ilib/libpeer/third_party/libsrtp/crypto/include \
+		           -I/opt/homebrew/include \
 		           -idirafter lib/libpeer/include -idirafter lib/libpeer/include/sys \
 		           -Ilib/libpeer/src \
 	           -Ilib/libpeer/build/dist/include \
@@ -24,6 +24,12 @@ COMMON_INCLUDES = -isysroot $(SDK_PATH) \
 	           -Ilib/libpeer/third_party/coreHTTP/source/interface
 COMMON_DEFINES = -DPLATFORM_DESKTOP -DCONFIG_USE_LWIP=0 -DCONFIG_IPV6=1 -DCONFIG_USE_USRSCTP=0 \
 		         -DCONFIG_DTLS_USE_ECDSA=1 -DCONFIG_IFACE_PREFIX=\"en0\"
+APP_DIAG ?= 0
+DROP_DIAG ?= 0
+LATENCY_DIAG ?= 0
+COMMON_DEFINES += -DLUNARNX_DIAGNOSTIC_LOG=$(APP_DIAG) \
+	-DLUNARNX_DROP_DIAGNOSTIC_LOG=$(DROP_DIAG) \
+	-DLUNARNX_LATENCY_DIAGNOSTIC_LOG=$(LATENCY_DIAG)
 # ICE diagnostics for sdp_probe / desktop WAN debugging. Override with
 # AGENT_ICE_DEBUG=0 to silence pair/conncheck logs.
 AGENT_ICE_DEBUG ?= 0
@@ -127,6 +133,12 @@ XCLOUD_TEST_OBJS = $(BUILD)/tests/xcloud_session_support_test.o
 ADAPTIVE_BITRATE_TEST_OBJS = \
 	$(BUILD)/tests/adaptive_bitrate_controller_test.o
 
+VIDEO_WATCHDOG_POLICY_TEST_OBJS = \
+	$(BUILD)/tests/video_watchdog_policy_test.o
+
+REALTIME_LATENCY_POLICY_TEST_OBJS = \
+	$(BUILD)/tests/realtime_latency_policy_test.o
+
 NETWORK_STRATEGY_SIM_OBJS = \
 	$(BUILD)/tools/network_strategy_ab_sim.o
 
@@ -215,7 +227,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 RHO_SRCS = src/rho/rho_main.cpp
 RHO_OBJS = $(RHO_SRCS:%.cpp=$(BUILD)/%.o)
 
-.PHONY: xcloud_session_support_test adaptive_bitrate_tests network_strategy_sim xbox_local_latency_sim all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests xbox_input_accumulator_tests stream_input_router_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
+.PHONY: xcloud_session_support_test adaptive_bitrate_tests video_watchdog_policy_tests realtime_latency_policy_tests network_strategy_sim xbox_local_latency_sim xbox_input_strategy_sim video_recovery_sim all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests srtcp_capacity_tests input_tests xbox_input_accumulator_tests stream_input_router_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
 
 all:  $(TARGET)
 	@echo "=== Desktop Build Complete ==="
@@ -258,12 +270,28 @@ adaptive_bitrate_tests: $(ADAPTIVE_BITRATE_TEST_OBJS)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/adaptive_bitrate_controller_test $(ADAPTIVE_BITRATE_TEST_OBJS)
 	./$(BUILD)/adaptive_bitrate_controller_test
 
+video_watchdog_policy_tests: $(VIDEO_WATCHDOG_POLICY_TEST_OBJS)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/video_watchdog_policy_test $(VIDEO_WATCHDOG_POLICY_TEST_OBJS)
+	./$(BUILD)/video_watchdog_policy_test
+
+realtime_latency_policy_tests: $(REALTIME_LATENCY_POLICY_TEST_OBJS)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/realtime_latency_policy_test $(REALTIME_LATENCY_POLICY_TEST_OBJS)
+	./$(BUILD)/realtime_latency_policy_test
+
 network_strategy_sim: $(NETWORK_STRATEGY_SIM_OBJS)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/network_strategy_ab_sim $(NETWORK_STRATEGY_SIM_OBJS)
 	./$(BUILD)/network_strategy_ab_sim
 
 xbox_local_latency_sim:
 	python3 tools/xbox_local_pipeline_sim.py
+	python3 tools/xbox_realtime_latency_ab_sim.py
+
+xbox_input_strategy_sim:
+	python3 tools/xbox_input_strategy_sim.py
+
+video_recovery_sim:
+	python3 tools/video_recovery_ab_sim.py
+	python3 tools/keyframe_recovery_ab_sim.py
 
 stream_tests: $(STREAM_TEST_OBJS) h264_rtp_tests xcloud_session_support_test adaptive_bitrate_tests
 	@mkdir -p $(BUILD)

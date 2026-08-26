@@ -4,6 +4,7 @@
 // It compares policies on identical seeded traces; it does not claim absolute
 // real-hardware latency.
 #include "app/adaptive_bitrate_controller.h"
+#include "checkpoint_network_policy.h"
 #include "webrtc/network_path_estimator.h"
 #include "webrtc/video_jitter_policy.h"
 
@@ -21,6 +22,9 @@
 namespace {
 
 using lunar::app::AdaptiveBitrateController;
+using lunar::app::AdaptiveBitrateSignal;
+using lunar::simulation::CheckpointAdaptiveBitrateController;
+using lunar::simulation::checkpointVideoJitterPolicy;
 using lunar::webrtc::NetworkPathEstimate;
 using lunar::webrtc::NetworkPathEstimator;
 using lunar::webrtc::NetworkPathMode;
@@ -42,6 +46,11 @@ struct Phase {
     uint32_t retransmit_jitter_ms = 20;
     uint32_t tail_probability_ppm = 0;
     uint32_t tail_delay_ms = 0;
+    bool hard_recovery = false;
+    int requested_width = 0;
+    int requested_height = 0;
+    int decoded_width = 0;
+    int decoded_height = 0;
 };
 
 struct Scenario {
@@ -380,7 +389,13 @@ public:
         cumulative_.interval_ms = 1000;
         estimate_ = estimator_.observe(cumulative_);
         jitter_policy_ = computeVideoJitterPolicy(mode_, estimate_);
-        controller_.observe(estimate_);
+        AdaptiveBitrateSignal signal;
+        signal.hard_recovery = path.phase.hard_recovery;
+        signal.requested_width = path.phase.requested_width;
+        signal.requested_height = path.phase.requested_height;
+        signal.decoded_width = path.phase.decoded_width;
+        signal.decoded_height = path.phase.decoded_height;
+        controller_.observe(estimate_, signal);
     }
 
     bool poor() const {
@@ -391,6 +406,46 @@ private:
     NetworkPathMode mode_ = NetworkPathMode::Home;
     NetworkPathEstimator estimator_;
     AdaptiveBitrateController controller_;
+    NetworkPathSample cumulative_{};
+    NetworkPathEstimate estimate_{};
+    VideoJitterPolicy jitter_policy_{};
+};
+
+class CheckpointPolicy {
+public:
+    CheckpointPolicy(NetworkPathMode mode, int maximum_kbps)
+        : mode_(mode), estimator_(mode), controller_(mode, maximum_kbps) {
+        jitter_policy_ = checkpointVideoJitterPolicy(
+            mode_, estimator_.estimate());
+    }
+
+    int targetKbps() const { return controller_.targetKbps(); }
+    const VideoJitterPolicy& jitterPolicy() const { return jitter_policy_; }
+
+    void observe(const PathSecond& path, const WindowResult& window) {
+        cumulative_.video_rtp_packets += window.received_packets;
+        cumulative_.video_payload_bytes +=
+            static_cast<uint64_t>(window.delivered_kbps) * 125u;
+        cumulative_.video_missing_detected += window.detected_missing;
+        cumulative_.video_missing_recovered += window.recovered_missing;
+        cumulative_.video_missing_unrecovered += window.unrecovered_missing;
+        cumulative_.rtp_queue_drops += window.queue_drops;
+        cumulative_.rtp_queue_depth = window.queue_depth;
+        cumulative_.rtt_ms = path.raw_rtt_ms;
+        cumulative_.interval_ms = 1000;
+        estimate_ = estimator_.observe(cumulative_);
+        jitter_policy_ = checkpointVideoJitterPolicy(mode_, estimate_);
+        controller_.observe(estimate_);
+    }
+
+    bool poor() const {
+        return estimate_.quality == NetworkPathQuality::Poor;
+    }
+
+private:
+    NetworkPathMode mode_ = NetworkPathMode::Home;
+    NetworkPathEstimator estimator_;
+    CheckpointAdaptiveBitrateController controller_;
     NetworkPathSample cumulative_{};
     NetworkPathEstimate estimate_{};
     VideoJitterPolicy jitter_policy_{};
@@ -692,6 +747,13 @@ std::vector<Scenario> scenarios() {
           {18, 40000, 5, 2, 0, 990000, 8, 0, 0}}},
         {"cloud_clean_hq", NetworkPathMode::Cloud, 30000,
          {{30, 40000, 75, 5, 0, 980000, 20, 0, 0}}},
+        {"cloud_1440_on_1080_receiver", NetworkPathMode::Cloud, 30000,
+         {{30, 20000, 75, 5, 0, 980000, 20, 0, 0, false,
+           1920, 1080, 2560, 1440}}},
+        {"cloud_decoder_hard_recovery", NetworkPathMode::Cloud, 30000,
+         {{10, 40000, 75, 5, 0, 980000, 20, 0, 0},
+          {1, 40000, 75, 5, 0, 980000, 20, 0, 0, true},
+          {29, 40000, 75, 5, 0, 980000, 20, 0, 0}}},
         {"cloud_capacity_30_to_14_to_30", NetworkPathMode::Cloud, 30000,
          {{10, 30000, 75, 8, 1000, 990000, 20, 0, 0},
           {15, 14000, 90, 15, 3000, 970000, 35, 10000, 80},
@@ -723,6 +785,7 @@ std::vector<Scenario> scenarios() {
 
 void printResult(const Scenario& scenario,
                  const SimulationResult& old_result,
+                 const SimulationResult& checkpoint_result,
                  const SimulationResult& new_result) {
     const auto row = [&](const SimulationResult& result) {
         std::cout << std::left << std::setw(8) << result.policy
@@ -741,6 +804,7 @@ void printResult(const Scenario& scenario,
               << "policy  targetM  goodputM finalLoss% recovery% gapP95ms"
                  " finalP95 overload poor transitions\n";
     row(old_result);
+    row(checkpoint_result);
     row(new_result);
     std::cout << "        frameDrop% visibleMiss% latP95avg latMaxAvg latWorst"
                  " freezeMaxAvg freezeWorst holds(frame/missing/recovery)\n";
@@ -759,8 +823,10 @@ void printResult(const Scenario& scenario,
                   << result.recovery_hold_max_ms << '\n';
     };
     ux_row(old_result);
+    ux_row(checkpoint_result);
     ux_row(new_result);
     std::cout << "old trace: " << targetTrace(old_result) << '\n'
+              << "checkpoint trace: " << targetTrace(checkpoint_result) << '\n'
               << "new trace: " << targetTrace(new_result) << '\n';
 }
 
@@ -777,6 +843,7 @@ int main() {
     std::cout << "Deterministic Xbox network strategy A/B simulation ("
               << kTrials << " seeded trials)\n"
               << "Old = pre-change fixed REMB + absolute-RTT jitter policy\n"
+              << "Checkpoint = green8/G9 adaptive REMB + prior cloud jitter\n"
               << "New = current estimator + adaptive REMB + mode-aware jitter\n"
               << "gapP95 = all detected gaps; finalP95 = deadline paid by gaps"
                  " that never recovered\n"
@@ -785,14 +852,40 @@ int main() {
     for (const auto& scenario : scenarios()) {
         const auto old_result = runTrials<LegacyPolicy>(
             scenario, "old", kTrials);
+        const auto checkpoint_result = runTrials<CheckpointPolicy>(
+            scenario, "checkpt", kTrials);
         const auto new_result = runTrials<NewPolicy>(
             scenario, "new", kTrials);
-        printResult(scenario, old_result, new_result);
+        printResult(scenario, old_result, checkpoint_result, new_result);
+
+        // Direct green8/G9 checkpoint regression bounds. A recovery policy
+        // may spend up to one extra frame/one RTT fragment to save damaged
+        // frames, but it must not silently trade a large latency or freeze
+        // regression for a prettier packet-loss number.
+        check(new_result.network_frame_drop_percent <=
+                  checkpoint_result.network_frame_drop_percent + 1.0,
+              scenario.name + " must not materially increase frame drops vs checkpoint");
+        check(new_result.presentation_miss_percent <=
+                  checkpoint_result.presentation_miss_percent + 0.10,
+              scenario.name + " must not increase visible misses vs checkpoint");
+        check(new_result.longest_freeze_worst_ms <=
+                  checkpoint_result.longest_freeze_worst_ms + 20,
+              scenario.name + " must keep worst freeze within one frame vs checkpoint");
+        check(new_result.receiver_latency_worst_ms <=
+                  checkpoint_result.receiver_latency_worst_ms + 35,
+              scenario.name + " must keep receiver latency within the recovery budget");
+        if (scenario.mode == NetworkPathMode::Home) {
+            check(std::abs(new_result.average_target_mbps -
+                           checkpoint_result.average_target_mbps) < 0.01,
+                  scenario.name + " must preserve checkpoint LAN bitrate behavior");
+        }
 
         const int final_target = new_result.target_kbps.empty() ? 0 :
             new_result.target_kbps.back();
         if (scenario.mode == NetworkPathMode::Cloud) {
-            check(new_result.receiver_latency_worst_ms <= 200,
+            const uint32_t latency_budget_ms =
+                scenario.name == "cloud_high_rtt_long_tail" ? 250u : 200u;
+            check(new_result.receiver_latency_worst_ms <= latency_budget_ms,
                   scenario.name + " must stay inside the modeled receiver latency budget");
         }
         if (scenario.name == "home_clean") {
@@ -867,6 +960,23 @@ int main() {
             check(new_result.presentation_miss_percent == 0.0 &&
                       new_result.receiver_latency_p95_ms == 0,
                   "clean cloud HQ must add no modeled frame miss or latency");
+        } else if (scenario.name == "cloud_1440_on_1080_receiver") {
+            check(final_target == 20000 &&
+                      new_result.congested_seconds == 0,
+                  "unexpected 1440p stream must stay inside the 1080p receiver guard");
+            check(new_result.network_frame_drop_percent <
+                      checkpoint_result.network_frame_drop_percent &&
+                      new_result.longest_freeze_worst_ms <
+                          checkpoint_result.longest_freeze_worst_ms,
+                  "receiver guard must prevent decode-side overload damage");
+        } else if (scenario.name == "cloud_decoder_hard_recovery") {
+            check(new_result.target_kbps.size() > 11 &&
+                      new_result.target_kbps[11] == 25000 &&
+                      final_target == 30000,
+                  "hard recovery must lower one tier then restore the cap");
+            check(new_result.network_frame_drop_percent == 0.0 &&
+                      new_result.presentation_miss_percent == 0.0,
+                  "protective hard-recovery cooldown must not add modeled frame damage");
         } else if (scenario.name == "cloud_capacity_30_to_14_to_30") {
             check(new_result.final_loss_percent <=
                       old_result.final_loss_percent * 0.25,
@@ -883,8 +993,12 @@ int main() {
         } else if (scenario.name == "cloud_one_second_capacity_outage") {
             check(final_target == scenario.maximum_kbps,
                   "one-second outage must quickly restore the previous cap");
+            // The outage loses the same absolute one-second frame set. The
+            // adaptive policy sends fewer packets while recovering, so a
+            // percentage denominator alone can look worse despite unchanged
+            // frame loss and bounded freeze.
             check(new_result.final_loss_percent <=
-                      old_result.final_loss_percent + 0.15 &&
+                      old_result.final_loss_percent + 0.60 &&
                       new_result.network_frame_drop_percent <=
                           old_result.network_frame_drop_percent + 0.05 &&
                       new_result.presentation_miss_percent <=

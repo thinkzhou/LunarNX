@@ -3,6 +3,7 @@
 #include "../common.h"
 #include "audio_decoder.h"
 #include "perf_stats.h"
+#include "realtime_latency_policy.h"
 #include <array>
 #include <cstddef>
 #include <mutex>
@@ -19,8 +20,11 @@ public:
     AudioPlayer();
     ~AudioPlayer();
 
-    bool initialize(int sample_rate = 48000, int channels = 2);
+    bool initialize(int sample_rate = 48000, int channels = 2,
+                    AudioLatencyMode latency_mode =
+                        AudioLatencyMode::Resilient);
     bool play(const AudioFrame& frame);
+    bool setLatencyMode(AudioLatencyMode mode);
     // Drop queued samples without tearing down the audio device. This is used
     // when a new WebRTC association becomes the active media source.
     void flush();
@@ -34,21 +38,24 @@ private:
     int channels_ = 2;
     float volume_ = 1.0f;
     bool initialized_ = false;
+    AudioLatencyMode latency_mode_ = AudioLatencyMode::Resilient;
+    AudioLatencyMode requested_latency_mode_ = AudioLatencyMode::Resilient;
     PerfStats* perf_ = nullptr;
 
     std::mutex mutex_;
 
 #ifdef __SWITCH__
-    static constexpr size_t BUFFER_COUNT = 5;
+    static constexpr size_t MAX_BUFFER_COUNT = 5;
 
     int freeWavebufIndex() const;
     uint32_t queuedWavebufCount() const;
+    bool tryApplyRequestedLatencyModeLocked();
     void recordAudioLatencyStats(size_t queued_samples);
     size_t appendAudio(const void* data, size_t size);
     bool writeAudio(const void* data, size_t size);
 
     AudioDriver driver_{};
-    std::array<AudioDriverWaveBuf, BUFFER_COUNT> wavebufs_{};
+    std::array<AudioDriverWaveBuf, MAX_BUFFER_COUNT> wavebufs_{};
     AudioDriverWaveBuf* current_wavebuf_ = nullptr;
     Mutex update_lock_{};
     void* mempool_ = nullptr;
@@ -56,6 +63,8 @@ private:
     size_t mempool_size_ = 0;
     size_t buffer_size_ = 0;
     size_t samples_per_buffer_ = 0;
+    size_t active_buffer_count_ = MAX_BUFFER_COUNT;
+    size_t audren_frames_per_buffer_ = 5;
     size_t current_size_ = 0;
     size_t total_queued_samples_ = 0;
     bool wavebuf_enqueue_failed_ = false;

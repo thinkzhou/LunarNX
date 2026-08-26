@@ -8,6 +8,8 @@ and aggressive queue recovery are not enabled. Values are comparative, not
 input-to-photon measurements.
 """
 
+from __future__ import annotations
+
 from collections import deque
 from dataclasses import dataclass
 import heapq

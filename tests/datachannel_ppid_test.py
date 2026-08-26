@@ -19,8 +19,10 @@ def main() -> None:
     input_method_end = peer_manager.index("bool PeerManager::sendControlData")
     input_method = peer_manager[input_method_start:input_method_end]
     assert "enqueueData(OutboundType::InputReliable" in input_method
-    assert "sendInputTransitionData" in peer_manager
-    assert "OutboundType::InputTransition" in peer_manager
+    assert "sendLatestInputData" in input_method
+    assert "sendTransitionInputData" in input_method
+    assert "enqueueData(OutboundType::InputTransition" in input_method
+    assert "kInputTransitionTtl" in input_method
     outbound_start = peer_manager.index("int PeerManager::sendOutboundCommand")
     outbound_end = peer_manager.index("void PeerManager::drainOutboundCommands")
     outbound_method = peer_manager[outbound_start:outbound_end]

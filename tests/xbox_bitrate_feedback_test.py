@@ -39,7 +39,8 @@ def main():
             "sendReceiverFeedback" in session,
             "stream loop must send periodic receiver feedback")
     require("AdaptiveBitrateController" in session and
-            "bitrate_controller.observe(media_stats.network_path)" in session,
+            "bitrate_controller.observe(" in session and
+            "media_stats.network_path" in session,
             "receiver feedback must use the adaptive bitrate target")
     require("kCongestedWindowsToLower" in adaptive and
             "kCloudStableWindowsToRaise" in adaptive and

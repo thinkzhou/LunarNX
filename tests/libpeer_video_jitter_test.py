@@ -54,13 +54,12 @@ def main():
         and "Cloud," in estimator
         and "rtt_inflation_ms" in estimator
         and "missing_packet_hold_ms" in policy
-        and "max_head_blocked_frames = 3" in policy
-        and "max_head_blocked_frames = 6" in policy
+        and policy.count("max_head_blocked_frames = 3") >= 2
         and "setHeadBlockedPolicy" in jitter_header
         and "kMediaStatsCacheInterval{250}" in peer_manager
         and "networkStatsSnapshot" in peer_manager
         and "setVideoJitterMode" in peer_manager,
-        "Adaptive jitter must use the shared path estimate and profile-specific bounds",
+        "Adaptive jitter must use the shared path estimate and mode-aware bounds",
     )
     jitter_source = Path("src/webrtc/video_rtp_jitter_buffer.cpp").read_text()
     require(

@@ -63,6 +63,7 @@ private:
 
     bool ps5_ = false;
     bool blocked_until_release_ = false;
+    uint32_t blocked_finger_id_ = 0;
     GestureState gesture_ = GestureState::Idle;
     std::array<TrackedTouch, CHIAKI_CONTROLLER_TOUCHES_MAX> touches_{};
     uint32_t primary_finger_id_ = 0;

@@ -1,126 +1,103 @@
 #include "xbox_input_accumulator.h"
 
-#include <algorithm>
+#include <chrono>
 
 namespace lunar::input {
 
 void XboxInputAccumulator::reset() {
     std::lock_guard<std::mutex> lock(mutex_);
-    transitions_.clear();
     latest_state_ = {};
-    last_sampled_state_ = {};
-    last_snapshot_state_ = {};
-    next_transition_id_ = 1;
     latest_generation_ = 0;
+    latest_sampled_at_ns_ = 0;
     latest_dirty_ = false;
     has_sampled_state_ = false;
-    force_snapshot_ = false;
-    overflow_fault_ = false;
-    has_snapshot_state_ = false;
+    next_transition_id_ = 1;
+    transitions_.clear();
 }
 
 void XboxInputAccumulator::publish(const GamepadState& state,
-                                   bool delivery_ready,
-                                   bool mark_latest,
-                                   bool force_snapshot) {
+                                   bool delivery_ready) {
+    const uint64_t sampled_at_ns = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    publishAt(state, delivery_ready, sampled_at_ns);
+}
+
+void XboxInputAccumulator::publishAt(const GamepadState& state,
+                                     bool delivery_ready,
+                                     uint64_t sampled_at_ns) {
     std::lock_guard<std::mutex> lock(mutex_);
-    const bool snapshot_changed = !has_snapshot_state_ ||
-        !sameEncodedState(last_snapshot_state_, state);
-    const bool transition = has_sampled_state_ &&
-                            hasDigitalTransition(last_sampled_state_, state);
-    if (transition && delivery_ready) {
+    if (delivery_ready && has_sampled_state_ &&
+        hasDigitalTransition(latest_state_, state)) {
         if (transitions_.size() >= kMaxPendingTransitions) {
-            overflow_fault_ = true;
-        } else {
-            transitions_.push_back({next_transition_id_++, state});
+            transitions_.pop_front();
         }
+        Snapshot transition;
+        transition.state = state;
+        transition.sampled_at_ns = sampled_at_ns;
+        transition.transition_id = next_transition_id_++;
+        transitions_.push_back(transition);
     }
     latest_state_ = state;
-    last_sampled_state_ = state;
+    latest_sampled_at_ns_ = sampled_at_ns;
     has_sampled_state_ = true;
-    // The input channel is reliable and ordered, so repeatedly enqueueing an
-    // unchanged state only builds a backlog of identical packets. A snapshot
-    // is still marked dirty when its wire-visible state changes, on reconnect,
-    // or when the caller requests the periodic idle heartbeat.
-    if (transition || force_snapshot || (mark_latest && snapshot_changed)) {
+    // Match Green-NX: every 8 ms sample becomes a fresh complete-state packet.
+    // The owner thread may overwrite an older unsent packet, but it must never
+    // replay a stale press after a newer release has been sampled.
+    if (delivery_ready) {
         latest_dirty_ = true;
         ++latest_generation_;
     }
-    if (mark_latest || force_snapshot) {
-        last_snapshot_state_ = state;
-        has_snapshot_state_ = true;
-    }
-    if (force_snapshot) {
-        force_snapshot_ = true;
-    }
 }
 
-std::optional<XboxInputAccumulator::Batch> XboxInputAccumulator::peekBatch() const {
+std::optional<XboxInputAccumulator::Snapshot>
+XboxInputAccumulator::peekLatest() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!has_sampled_state_ ||
-        (transitions_.empty() && !latest_dirty_ && !force_snapshot_)) {
+    if (!has_sampled_state_ || !latest_dirty_) {
         return std::nullopt;
     }
-
-    Batch batch;
-    batch.reliable = !transitions_.empty() || force_snapshot_;
-    const size_t transition_count = std::min(
-        transitions_.size(), XInputEncoder::kMaxGamepadFrames);
-    batch.frames.reserve(XInputEncoder::kMaxGamepadFrames);
-    for (size_t i = 0; i < transition_count; ++i) {
-        batch.frames.push_back(transitions_[i].state);
-        batch.last_transition_id = transitions_[i].id;
-    }
-
-    const bool included_all_transitions = transition_count == transitions_.size();
-    if (included_all_transitions &&
-        batch.frames.size() < XInputEncoder::kMaxGamepadFrames &&
-        (latest_dirty_ || force_snapshot_)) {
-        if (batch.frames.empty() ||
-            !sameEncodedState(batch.frames.back(), latest_state_)) {
-            batch.frames.push_back(latest_state_);
-        }
-        batch.includes_latest = true;
-        batch.latest_generation = latest_generation_;
-    }
-    return batch.frames.empty() ? std::nullopt
-                                : std::optional<Batch>(std::move(batch));
+    return Snapshot{latest_state_, latest_generation_, latest_sampled_at_ns_, 0};
 }
 
-void XboxInputAccumulator::commitBatch(const Batch& batch) {
+std::optional<XboxInputAccumulator::Snapshot>
+XboxInputAccumulator::peekTransition(uint64_t now_ns) {
     std::lock_guard<std::mutex> lock(mutex_);
-    while (!transitions_.empty() &&
-           transitions_.front().id <= batch.last_transition_id) {
+    while (!transitions_.empty()) {
+        const auto& transition = transitions_.front();
+        if (now_ns >= transition.sampled_at_ns &&
+            now_ns - transition.sampled_at_ns > kTransitionLifetimeNs) {
+            transitions_.pop_front();
+            continue;
+        }
+        return transition;
+    }
+    return std::nullopt;
+}
+
+void XboxInputAccumulator::commitTransition(const Snapshot& snapshot) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!transitions_.empty() && snapshot.transition_id != 0 &&
+        transitions_.front().transition_id == snapshot.transition_id) {
         transitions_.pop_front();
     }
-    if (batch.includes_latest &&
-        latest_generation_ == batch.latest_generation) {
+}
+
+void XboxInputAccumulator::commitLatest(const Snapshot& snapshot) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (latest_generation_ == snapshot.generation) {
         latest_dirty_ = false;
-        force_snapshot_ = false;
     }
 }
 
 void XboxInputAccumulator::prepareForReconnect() {
     std::lock_guard<std::mutex> lock(mutex_);
+    // A transition sampled for the old SCTP association is stale by the time
+    // the new association is ready. Resync with only the current full state.
     transitions_.clear();
     if (has_sampled_state_) {
         latest_dirty_ = true;
         ++latest_generation_;
-        force_snapshot_ = true;
     }
-    overflow_fault_ = false;
-}
-
-bool XboxInputAccumulator::consumeOverflowFault() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const bool fault = overflow_fault_;
-    overflow_fault_ = false;
-    return fault;
-}
-
-size_t XboxInputAccumulator::pendingTransitionCount() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return transitions_.size();
 }
 
 bool XboxInputAccumulator::hasDigitalTransition(
@@ -136,28 +113,8 @@ bool XboxInputAccumulator::hasDigitalTransition(
            previous.lt != current.lt || previous.rt != current.rt ||
            previous.l3 != current.l3 || previous.r3 != current.r3 ||
            previous.view != current.view || previous.menu != current.menu ||
-           previous.guide != current.guide;
-}
-
-bool XboxInputAccumulator::sameEncodedState(const GamepadState& left,
-                                            const GamepadState& right) {
-    return left.a == right.a && left.b == right.b &&
-           left.x == right.x && left.y == right.y &&
-           left.dpad_up == right.dpad_up &&
-           left.dpad_down == right.dpad_down &&
-           left.dpad_left == right.dpad_left &&
-           left.dpad_right == right.dpad_right &&
-           left.lb == right.lb && left.rb == right.rb &&
-           left.lt == right.lt && left.rt == right.rt &&
-           left.l3 == right.l3 && left.r3 == right.r3 &&
-           left.view == right.view && left.menu == right.menu &&
-           left.guide == right.guide &&
-           left.left_stick_x == right.left_stick_x &&
-           left.left_stick_y == right.left_stick_y &&
-           left.right_stick_x == right.right_stick_x &&
-           left.right_stick_y == right.right_stick_y &&
-           left.left_trigger == right.left_trigger &&
-           left.right_trigger == right.right_trigger;
+           previous.guide != current.guide ||
+           previous.touchpad != current.touchpad;
 }
 
 } // namespace lunar::input

@@ -23,21 +23,19 @@ struct PeerManagerQueueTestAccess {
         assert(!peer.outbound_commands_.empty());
         return peer.outbound_commands_.front();
     }
-    static std::vector<Type> types(const PeerManager& peer) {
-        std::lock_guard<std::mutex> lock(peer.outbound_mutex_);
-        std::vector<Type> result;
-        for (const auto& command : peer.outbound_commands_) {
-            result.push_back(command.type);
-        }
-        return result;
-    }
-    static bool complete(PeerManager& peer, const Command& command, int result) {
-        return peer.completeOutboundCommand(command, result);
+    static bool complete(PeerManager& peer,
+                         const Command& command,
+                         int result,
+                         bool data_channel_connected = false) {
+        return peer.completeOutboundCommand(command, result,
+                                            data_channel_connected);
     }
     static bool select(const PeerManager& peer,
                        Command& command,
-                       bool allow_sctp) {
-        return peer.selectOutboundCommand(command, allow_sctp);
+                       bool allow_sctp,
+                       bool realtime_input_only = false) {
+        return peer.selectOutboundCommand(command, allow_sctp,
+                                          realtime_input_only);
     }
     static bool enqueueNack(PeerManager& peer, uint16_t pid, uint16_t blp) {
         return peer.enqueueNack(pid, blp);
@@ -53,13 +51,13 @@ struct PeerManagerQueueTestAccess {
     static void commitInput(PeerManager& peer, int result) {
         peer.commitSequencedInputResult(result);
     }
-    static std::optional<lunar::webrtc::InputDeliveryResult>
-    consumeInputResult(PeerManager& peer) {
-        return peer.consumeInputDeliveryResult();
-    }
-    static void observe(PeerManager& peer, Type type, int result,
-                        uint32_t attempts = 1) {
-        peer.observeSctpSendResult(type, result, attempts);
+    static void observe(PeerManager& peer,
+                        Type type,
+                        int result,
+                        uint32_t attempts = 1,
+                        bool data_channel_connected = true) {
+        peer.observeSctpSendResult(type, result, attempts,
+                                   data_channel_connected);
     }
     static void resetHealth(PeerManager& peer) {
         peer.resetDataChannelHealth();
@@ -171,9 +169,11 @@ int main() {
     assert(readU32(wire_packet, 2) == 0);
     Access::commitInput(sequenced, kWantWrite);
     assert(Access::nextInputSequence(sequenced) == 0);
-    assert(Access::complete(
+    // A backpressured realtime packet is dropped immediately. The next 8 ms
+    // complete-state snapshot repairs it without replaying stale input.
+    assert(!Access::complete(
         sequenced, sequenced_command, kWantWrite));
-    assert(Access::size(sequenced) == 1);
+    assert(Access::size(sequenced) == 0);
 
     assert(sequenced.sendLatestInputData(input_draft_a, sizeof(input_draft_a)));
     sequenced_command = Access::front(sequenced);
@@ -183,34 +183,6 @@ int main() {
     assert(Access::nextInputSequence(sequenced) == 1);
     assert(!Access::complete(
         sequenced, sequenced_command, static_cast<int>(wire_packet.size())));
-
-    const uint64_t transition_ticket = sequenced.sendInputTransitionData(
-        input_draft_a, sizeof(input_draft_a));
-    assert(transition_ticket != 0);
-    auto transition_command = Access::front(sequenced);
-    assert(transition_command.type == Access::Type::InputTransition);
-    assert(Access::complete(sequenced, transition_command, kWantWrite));
-    assert(!Access::consumeInputResult(sequenced));
-    transition_command = Access::front(sequenced);
-    assert(!Access::complete(sequenced, transition_command,
-                             static_cast<int>(sizeof(input_draft_a))));
-    const auto transition_result = Access::consumeInputResult(sequenced);
-    assert(transition_result && transition_result->ticket == transition_ticket);
-    assert(transition_result->sent);
-
-    // A transition supersedes any unsent absolute snapshot. Otherwise a
-    // queued neutral snapshot could arrive after A-down and roll it back.
-    PeerManager superseded_snapshot;
-    Access::connect(superseded_snapshot);
-    assert(superseded_snapshot.sendLatestInputData(
-        input_draft_a, sizeof(input_draft_a)));
-    const uint64_t superseding_ticket =
-        superseded_snapshot.sendInputTransitionData(
-            input_draft_b, sizeof(input_draft_b));
-    assert(superseding_ticket != 0);
-    const auto superseded_types = Access::types(superseded_snapshot);
-    assert(superseded_types.size() == 1);
-    assert(superseded_types.front() == Access::Type::InputTransition);
 
     assert(sequenced.sendInputData(input_draft_a, sizeof(input_draft_a)));
     sequenced_command = Access::front(sequenced);
@@ -245,40 +217,52 @@ int main() {
     assert(new_input.id != old_input.id);
     assert(new_input.payload == std::vector<uint8_t>(latest_input,
                                                       latest_input + 2));
-    assert(Access::complete(peer, new_input, kWantWrite));
-    assert(Access::size(peer) == 1);
-    const auto retried_input = Access::front(peer);
-    assert(!Access::complete(peer, retried_input,
-                             static_cast<int>(sizeof(latest_input))));
+    assert(!Access::complete(peer, new_input, kWantWrite));
     assert(Access::size(peer) == 0);
 
-    // A latest snapshot may be briefly backpressured, but it must remain
-    // available for a short retry window instead of waiting for heartbeat.
-    PeerManager latest_retry;
-    Access::connect(latest_retry);
-    assert(latest_retry.sendLatestInputData(latest_input,
-                                             sizeof(latest_input)));
-    auto latest_retry_command = Access::front(latest_retry);
-    assert(Access::complete(latest_retry, latest_retry_command, kWantWrite));
-    assert(Access::size(latest_retry) == 1);
-    latest_retry_command = Access::front(latest_retry);
-    assert(latest_retry_command.attempts == 1);
-    assert(!Access::complete(latest_retry, latest_retry_command,
-                             static_cast<int>(sizeof(latest_input))));
-    assert(Access::size(latest_retry) == 0);
+    // libpeer historically collapses an underlying UDP send error to -1.
+    // While SCTP still reports connected, one such realtime-input failure is
+    // ambiguous: drop this replaceable snapshot and let the next 8 ms sample
+    // repair it instead of tearing down the entire WebRTC session.
+    PeerManager recoverable_io_failure;
+    Access::connect(recoverable_io_failure);
+    assert(recoverable_io_failure.sendLatestInputData(
+        latest_input, sizeof(latest_input)));
+    const auto recoverable_input = Access::front(recoverable_io_failure);
+    assert(!Access::complete(recoverable_io_failure, recoverable_input, -1,
+                             true));
+    assert(Access::size(recoverable_io_failure) == 0);
+    assert(!Access::dataChannelFailed(recoverable_io_failure));
+    assert(!recoverable_io_failure.consumeDataChannelFailure());
 
-    // Replacing a backpressured snapshot starts a fresh retry budget for the
-    // newer absolute state.
-    PeerManager latest_retry_reset;
-    Access::connect(latest_retry_reset);
-    assert(latest_retry_reset.sendLatestInputData(input_draft_a,
-                                                  sizeof(input_draft_a)));
-    auto old_retry = Access::front(latest_retry_reset);
-    assert(Access::complete(latest_retry_reset, old_retry, kWantWrite));
-    assert(latest_retry_reset.sendLatestInputData(input_draft_b,
-                                                  sizeof(input_draft_b)));
-    const auto new_retry = Access::front(latest_retry_reset);
-    assert(new_retry.attempts == 0);
+    assert(recoverable_io_failure.sendLatestInputData(
+        input_draft_b, sizeof(input_draft_b)));
+    const auto repaired_input = Access::front(recoverable_io_failure);
+    assert(!Access::complete(recoverable_io_failure, repaired_input,
+                             static_cast<int>(sizeof(input_draft_b)), true));
+    assert(!Access::dataChannelFailed(recoverable_io_failure));
+
+    PeerManager recoverable_io_timeout;
+    Access::connect(recoverable_io_timeout);
+    Access::observe(recoverable_io_timeout, Access::Type::InputLatest,
+                    -1, 1, true);
+    assert(!Access::dataChannelFailed(recoverable_io_timeout));
+    Access::ageFailureStreak(recoverable_io_timeout,
+                             std::chrono::milliseconds(251));
+    Access::observe(recoverable_io_timeout, Access::Type::InputLatest,
+                    -1, 2, true);
+    assert(Access::dataChannelFailed(recoverable_io_timeout));
+    assert(recoverable_io_timeout.consumeDataChannelFailure());
+
+    // A fresh snapshot after backpressure starts from the current state and
+    // does not carry the dropped packet's retry bookkeeping.
+    assert(peer.sendLatestInputData(input_draft_b, sizeof(input_draft_b)));
+    const auto fresh_input = Access::front(peer);
+    assert(fresh_input.payload == std::vector<uint8_t>(
+        input_draft_b, input_draft_b + sizeof(input_draft_b)));
+    assert(fresh_input.attempts == 0);
+    assert(!Access::complete(peer, fresh_input,
+                             static_cast<int>(sizeof(input_draft_b))));
 
     PeerManager latest_failure;
     Access::connect(latest_failure);
@@ -296,7 +280,7 @@ int main() {
     PeerManager aged_failure;
     Access::connect(aged_failure);
     Access::observe(aged_failure, Access::Type::InputLatest, kWantWrite);
-    Access::ageFailureStreak(aged_failure, std::chrono::milliseconds(501));
+    Access::ageFailureStreak(aged_failure, std::chrono::milliseconds(251));
     Access::observe(aged_failure, Access::Type::InputLatest, kWantWrite);
     assert(Access::dataChannelFailed(aged_failure));
     assert(aged_failure.consumeDataChannelFailure());
@@ -316,7 +300,7 @@ int main() {
 
     PeerManager fatal;
     Access::connect(fatal);
-    Access::observe(fatal, Access::Type::InputLatest, -1);
+    Access::observe(fatal, Access::Type::InputLatest, -1, 1, false);
     assert(Access::dataChannelFailed(fatal));
     assert(fatal.consumeDataChannelFailure());
 
@@ -348,9 +332,38 @@ int main() {
     Access::Command selected_order;
     assert(Access::select(peer, selected_order, true));
     assert(selected_order.type == Access::Type::Pli);
+    const auto priority_pli = selected_order;
 
-    pli = selected_order;
-    assert(!Access::complete(peer, pli, 12));
+    // The pre-receive drain bypasses recovery/control commands only for the
+    // newest replaceable input snapshot. This prevents a slow inbound pump
+    // from adding its entire duration to controller latency without changing
+    // the normal post-receive priority order.
+    assert(Access::select(peer, selected_order, true, true));
+    assert(selected_order.type == Access::Type::InputLatest);
+
+    // LunarNX keeps Green-NX's replaceable current-state packet, but a short
+    // digital edge gets one higher-priority send opportunity. The edge is
+    // never retried after local SCTP backpressure and carries a 50 ms TTL.
+    PeerManager transition_input;
+    Access::connect(transition_input);
+    assert(transition_input.sendLatestInputData(
+        input_draft_b, sizeof(input_draft_b)));
+    const auto transition_enqueued_at = std::chrono::steady_clock::now();
+    assert(transition_input.sendTransitionInputData(
+        input_draft_a, sizeof(input_draft_a)));
+    assert(Access::select(transition_input, selected_order, true, true));
+    assert(selected_order.type == Access::Type::InputTransition);
+    assert(selected_order.expires_at >= transition_enqueued_at +
+               std::chrono::milliseconds(49));
+    assert(selected_order.expires_at <= std::chrono::steady_clock::now() +
+               std::chrono::milliseconds(51));
+    assert(!Access::complete(transition_input, selected_order, kWantWrite,
+                             true));
+    assert(!Access::dataChannelFailed(transition_input));
+    assert(Access::select(transition_input, selected_order, true, true));
+    assert(selected_order.type == Access::Type::InputLatest);
+
+    assert(!Access::complete(peer, priority_pli, 12));
     assert(Access::select(peer, selected_order, true));
     assert(selected_order.type == Access::Type::InputLatest);
     assert(!Access::complete(peer, selected_order, 12));

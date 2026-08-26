@@ -21,7 +21,6 @@ namespace lunar::stream {
 namespace {
 
 constexpr int kAudrenVoiceId = 0;
-constexpr int kAudioLatencyFrames = 5;
 constexpr uint32_t kAudioOverflowMs = 500;
 constexpr uint8_t kSinkChannels[] = {0, 1};
 constexpr AudioRendererConfig kAudrenConfig{
@@ -71,16 +70,25 @@ void logAudioPlayerDetail(const char* format, ...) {
 AudioPlayer::AudioPlayer() = default;
 AudioPlayer::~AudioPlayer() { shutdown(); }
 
-bool AudioPlayer::initialize(int sample_rate, int channels) {
+bool AudioPlayer::initialize(int sample_rate, int channels,
+                             AudioLatencyMode latency_mode) {
     sample_rate_ = sample_rate;
     channels_ = channels;
+    latency_mode_ = latency_mode;
+    requested_latency_mode_ = latency_mode;
 
 #ifdef __SWITCH__
     g_audio_player_logs = 0;
     g_audio_player_detail_logs = 0;
-    lunar::diagnosticLog("audio-player", "initialize begin sample_rate=%d channels=%d",
+    const auto buffer_config = audioBufferConfig(latency_mode);
+    active_buffer_count_ = buffer_config.buffer_count;
+    audren_frames_per_buffer_ = buffer_config.audren_frames_per_buffer;
+    lunar::diagnosticLog("audio-player", "initialize begin sample_rate=%d channels=%d mode=%s frames_per_buffer=%zu buffers=%zu",
                          sample_rate,
-                         channels);
+                         channels,
+                         audioLatencyModeName(latency_mode),
+                         audren_frames_per_buffer_,
+                         active_buffer_count_);
     if (sample_rate != 48000 || channels != 2) {
         fprintf(stderr, "[audio] audren only supports 48kHz stereo PCM for now\n");
         lunar::diagnosticLog("audio-player", "unsupported format");
@@ -91,9 +99,13 @@ bool AudioPlayer::initialize(int sample_rate, int channels) {
     mutexInit(&update_lock_);
     samples_per_buffer_ = static_cast<size_t>(AUDREN_SAMPLES_PER_FRAME_48KHZ);
     buffer_size_ = samples_per_buffer_ * static_cast<size_t>(channels) * sizeof(int16_t);
-    buffer_size_ *= kAudioLatencyFrames;
-    samples_per_buffer_ *= kAudioLatencyFrames;
-    mempool_size_ = alignUp(buffer_size_ * BUFFER_COUNT, AUDREN_MEMPOOL_ALIGNMENT);
+    buffer_size_ *= audren_frames_per_buffer_;
+    samples_per_buffer_ *= audren_frames_per_buffer_;
+    // Allocate the full five-buffer geometry once. Cloud Balanced and
+    // Recovery share the same 25 ms wave-buffer size and can then move between
+    // four and five active buffers without rebuilding Audren mid-stream.
+    mempool_size_ = alignUp(buffer_size_ * MAX_BUFFER_COUNT,
+                            AUDREN_MEMPOOL_ALIGNMENT);
     mempool_ = memalign(AUDREN_MEMPOOL_ALIGNMENT, mempool_size_);
     if (!mempool_) {
         fprintf(stderr, "[audio] audren mempool alloc failed\n");
@@ -129,7 +141,7 @@ bool AudioPlayer::initialize(int sample_rate, int channels) {
     driver_initialized_ = true;
     lunar::diagnosticLog("audio-player", "audrvCreate done");
 
-    for (size_t i = 0; i < BUFFER_COUNT; i++) {
+    for (size_t i = 0; i < MAX_BUFFER_COUNT; i++) {
         wavebufs_[i].data_raw = mempool_;
         wavebufs_[i].size = mempool_size_;
         wavebufs_[i].start_sample_offset = static_cast<u32>(i * samples_per_buffer_);
@@ -182,6 +194,37 @@ bool AudioPlayer::initialize(int sample_rate, int channels) {
     initialized_=true;
     return true;
 #endif
+}
+
+bool AudioPlayer::setLatencyMode(AudioLatencyMode mode) {
+    std::lock_guard<std::mutex> lock(mutex_);
+#ifdef __SWITCH__
+    const auto config = audioBufferConfig(mode);
+    if (initialized_ &&
+        config.audren_frames_per_buffer != audren_frames_per_buffer_) {
+        // Reinterpreting live wave-buffer offsets would corrupt playback.
+        // Xbox cloud only switches Balanced <-> Resilient, which both use
+        // 25 ms buffers; home Realtime remains fixed at 20 ms.
+        return false;
+    }
+    requested_latency_mode_ = mode;
+    const bool applied = tryApplyRequestedLatencyModeLocked();
+#else
+    requested_latency_mode_ = mode;
+    latency_mode_ = mode;
+#endif
+    lunar::diagnosticLog("audio-player",
+                         "latency mode request=%s active=%s capacity_ms=%zu%s",
+                         audioLatencyModeName(mode),
+                         audioLatencyModeName(latency_mode_),
+                         audioBufferCapacityMs(latency_mode_)
+#ifdef __SWITCH__
+                         , applied ? "" : " deferred-until-drained"
+#else
+                         , ""
+#endif
+                         );
+    return true;
 }
 
 bool AudioPlayer::play(const AudioFrame& frame) {
@@ -272,7 +315,7 @@ size_t AudioPlayer::queuedSampleCount() {
 
 #ifdef __SWITCH__
 int AudioPlayer::freeWavebufIndex() const {
-    for (size_t i = 0; i < wavebufs_.size(); i++) {
+    for (size_t i = 0; i < active_buffer_count_; i++) {
         auto state = wavebufs_[i].state;
         if (state == AudioDriverWaveBufState_Free ||
             state == AudioDriverWaveBufState_Done) {
@@ -284,7 +327,8 @@ int AudioPlayer::freeWavebufIndex() const {
 
 uint32_t AudioPlayer::queuedWavebufCount() const {
     uint32_t count = 0;
-    for (const auto& wavebuf : wavebufs_) {
+    for (size_t i = 0; i < active_buffer_count_; i++) {
+        const auto& wavebuf = wavebufs_[i];
         if (wavebuf.state == AudioDriverWaveBufState_Queued ||
             wavebuf.state == AudioDriverWaveBufState_Playing) {
             count++;
@@ -292,6 +336,25 @@ uint32_t AudioPlayer::queuedWavebufCount() const {
     }
     if (current_wavebuf_) count++;
     return count;
+}
+
+bool AudioPlayer::tryApplyRequestedLatencyModeLocked() {
+    const auto requested = audioBufferConfig(requested_latency_mode_);
+    const size_t requested_count =
+        std::min(requested.buffer_count, MAX_BUFFER_COUNT);
+    if (requested_count < active_buffer_count_) {
+        for (size_t i = requested_count; i < active_buffer_count_; ++i) {
+            const auto state = wavebufs_[i].state;
+            if (&wavebufs_[i] == current_wavebuf_ ||
+                state == AudioDriverWaveBufState_Queued ||
+                state == AudioDriverWaveBufState_Playing) {
+                return false;
+            }
+        }
+    }
+    active_buffer_count_ = requested_count;
+    latency_mode_ = requested_latency_mode_;
+    return true;
 }
 
 void AudioPlayer::recordAudioLatencyStats(size_t queued_samples) {
@@ -375,6 +438,10 @@ bool AudioPlayer::writeAudio(const void* data, size_t size) {
     mutexLock(&update_lock_);
     audrvUpdate(&driver_);
     mutexUnlock(&update_lock_);
+    // Expanding the ring is immediate. A recovery -> balanced downshift waits
+    // until the fifth descriptor has naturally drained, so lowering latency
+    // never discards already queued PCM.
+    tryApplyRequestedLatencyModeLocked();
     logAudioPlayerDetail("write initial audrvUpdate done");
 
     size_t played_samples = audrvVoiceGetPlayedSampleCount(&driver_, kAudrenVoiceId);
@@ -393,6 +460,7 @@ bool AudioPlayer::writeAudio(const void* data, size_t size) {
     }
 
     size_t written = 0;
+    size_t consecutive_waits = 0;
     while (written < size) {
         logAudioPlayerDetail("write loop written=%zu size=%zu", written, size);
         size_t step = appendAudio(static_cast<const uint8_t*>(data) + written,
@@ -403,12 +471,18 @@ bool AudioPlayer::writeAudio(const void* data, size_t size) {
             mutexLock(&update_lock_);
             audrvUpdate(&driver_);
             mutexUnlock(&update_lock_);
+            if (freeWavebufIndex() >= 0) {
+                consecutive_waits = 0;
+                continue;
+            }
+            if (consecutive_waits >= audren_frames_per_buffer_) return false;
             logAudioPlayerDetail("write wait frame begin");
             audrenWaitFrame();
             logAudioPlayerDetail("write wait frame done");
-            if (freeWavebufIndex() < 0) return false;
+            consecutive_waits++;
             continue;
         }
+        consecutive_waits = 0;
         written += step;
     }
 
@@ -447,12 +521,16 @@ void AudioPlayer::shutdown() {
     mempool_size_ = 0;
     buffer_size_ = 0;
     samples_per_buffer_ = 0;
+    active_buffer_count_ = MAX_BUFFER_COUNT;
+    audren_frames_per_buffer_ = 5;
     current_size_ = 0;
     total_queued_samples_ = 0;
 #else
     if (audio_dev_) { SDL_CloseAudioDevice(audio_dev_); audio_dev_=0; }
 #endif
     initialized_ = false;
+    latency_mode_ = AudioLatencyMode::Resilient;
+    requested_latency_mode_ = AudioLatencyMode::Resilient;
     if (perf_) perf_->recordAudioQueuedBuffers(0);
 }
 

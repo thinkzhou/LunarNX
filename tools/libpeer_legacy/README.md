@@ -5,12 +5,19 @@ LunarNX currently builds Switch WebRTC with the legacy local clone at
 embedded git checkout with generated build outputs and third-party dependency
 trees.
 
-The local Switch/Xbox changes are stored as an ordered three-patch series. The
+The local Switch/Xbox changes are stored as an ordered four-patch series. The
 first two patches preserve commits that previously existed only in the local
-embedded checkout; `legacy-libpeer-switch.patch` contains the later working-tree
-changes. Local commits in libpeer's libsrtp, mbedtls, and usrsctp submodules are
-stored separately under `nested/`; the setup script applies them to the pinned
-upstream submodule revisions instead of recording unreachable gitlink commits.
+embedded checkout; `legacy-libpeer-switch.patch` contains the later media and
+transport changes; `0003-enable-usrsctp-datachannel-policy.patch` enables the
+full SCTP send policy used by the Switch build. Local commits in libpeer's
+libsrtp, mbedtls, and usrsctp submodules are stored separately under `nested/`;
+the setup script applies them to the pinned upstream submodule revisions instead
+of recording unreachable gitlink commits.
+
+The tracked transport patch normalizes libpeer's DTLS write result to
+usrsctp's `0`-on-success / positive-`errno` output callback contract. Returning
+the successful byte count makes usrsctp treat every emitted packet as a send
+error even though DTLS delivered it to the network.
 
 ```sh
 git clone https://github.com/sepfy/libpeer.git lib/libpeer
@@ -18,6 +25,7 @@ git -C lib/libpeer checkout 9319aa434cb9e893faed0293ba9d2a21eca59c8b
 git -C lib/libpeer apply ../../tools/libpeer_legacy/0001-switch-adapt-libpeer-WebRTC-path.patch
 git -C lib/libpeer apply ../../tools/libpeer_legacy/0002-fix-H264-access-unit-flush-and-quiet-SCTP-logs.patch
 git -C lib/libpeer apply ../../tools/libpeer_legacy/legacy-libpeer-switch.patch
+git -C lib/libpeer apply ../../tools/libpeer_legacy/0003-enable-usrsctp-datachannel-policy.patch
 ./scripts/setup_dependencies.sh
 ```
 
@@ -48,6 +56,32 @@ cap WANT_READ/WANT_WRITE retries and propagate backpressure without advancing
 custom SCTP TSN or stream-sequence state. LunarNX retains reliable startup
 commands and PLI for a later owner-thread pump, replaces stale input, and
 permits bounded NACK/feedback drops.
+
+Outbound UDP sends retain their socket `errno`. Temporary pressure
+(`EAGAIN`/`EWOULDBLOCK`, `EINTR`, or `ENOBUFS`) is propagated through DTLS as
+`WANT_WRITE`. A remaining generic send failure is treated as ambiguous while
+SCTP still reports connected: replaceable input is repaired by the next
+complete-state sample, reliable commands use a 250 ms retry budget, and only a
+confirmed SCTP closure or an exhausted failure budget rebuilds the session.
+
+Switch builds use the full usrsctp stack, including SACK processing,
+retransmission, congestion control, and PR-SCTP Forward TSN support. The input
+DCEP OPEN is advertised as unordered with zero retransmissions, matching
+Green-NX's realtime gamepad channel. libpeer preserves that policy by SID and
+sets `SCTP_UNORDERED` plus `SCTP_PR_SCTP_RTX` on outgoing input snapshots;
+control, message, chat, and DCEP packets remain reliable and ordered.
+The local SID-to-policy table holds 16 streams instead of the legacy limit of
+five. LunarNX currently opens four Xbox channels, but the larger bounded table
+keeps additional remote channels from losing their negotiated policy while
+remaining far below the 300 streams negotiated by the usrsctp association.
+Association teardown closes and deregisters every usrsctp socket. If the
+global stack is still retiring an abortive close, a fast reconnect reuses that
+live stack instead of initializing its mutexes and timer thread a second time.
+
+The canonical Switch build configures libsrtp with its mbedTLS crypto backend
+and points CMake at the same static mbedTLS libraries already built for DTLS.
+This avoids the generic built-in AES/HMAC path without adding another crypto
+library, and the build fails if CMake silently leaves `ENABLE_MBEDTLS` disabled.
 
 Media stats expose cumulative monotonic timing for socket receive, the full
 receive/classification loop, and RTP queue drain, together with packet counts.

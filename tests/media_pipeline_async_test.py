@@ -68,6 +68,10 @@ def main():
     require("hasVideoRecoveryRequest" in header and
             "clearVideoRecoveryRequest" in header,
             "MediaPipeline should expose throttled keyframe recovery state")
+    require("hasRendererRecoveryPending" in header and
+            "requestRendererRecovery" in header and
+            "video_renderer_recovery_wakeup_" in header,
+            "Presentation-only recovery must have its own worker wakeup state")
     require("prepareForNewMediaSource" in header and
             "audio_source_epoch_" in header and
             "audio_source_reset_pending_" in header,
@@ -126,6 +130,17 @@ def main():
     require("resetVideoDecoderForKeyframe()" in worker and
             "packet.contains_idr" in worker,
             "Only the video worker may reset the decoder before a recovery IDR")
+    require("videoDecodeCatchUpDecision" in worker and
+            "packet.suppress_output" in worker,
+            "The video worker must decode stale dependencies without presenting them")
+    renderer_recovery_start = worker.index("if (renderer_recovery_requested)")
+    renderer_recovery_end = worker.index("if (reset_requested)",
+                                         renderer_recovery_start)
+    renderer_recovery = worker[renderer_recovery_start:renderer_recovery_end]
+    require("video_renderer_->prepareDecoderReset()" in renderer_recovery and
+            "resetVideoDecoderForKeyframe" not in renderer_recovery and
+            "video_decoder_->" not in renderer_recovery,
+            "Renderer-only recovery must retire GPU-owned frames without flushing FFmpeg")
     process_video = method_body(
         impl, "void MediaPipeline::processVideoPacket(const QueuedVideoPacket& packet)")
     require("boundedVideoPacketIsCurrent" in process_video and
@@ -133,6 +148,15 @@ def main():
             "Stale epochs and non-IDR recovery packets must not reach the decoder")
     require('beginHardVideoRecovery("video decoder error", true)' in process_video,
             "A recovery IDR decode failure must force a fresh decoder reset epoch")
+    require("suppressed_video_timestamps_.push_back(packet.timestamp)" in
+            process_video,
+            "Catch-up suppression must follow the submitted RTP timestamp")
+    frame_handler = method_body(
+        impl, "void MediaPipeline::handleVideoFrame(const VideoFrame& frame,")
+    require("suppressed_video_timestamps_" in frame_handler and
+            "frame.timestamp" in frame_handler and
+            "recordDecodedCatchUpSuppressed" in frame_handler,
+            "Catch-up frames must match delayed decoder output by timestamp")
     require("pre_copy_admission" in impl and
             impl.index("pre_copy_admission") <
             impl.index("packet.data.assign(data, data + len);"),
@@ -146,6 +170,21 @@ def main():
             "last_presented_video_ns_" in health_body and
             "consecutive_render_faults_" in health_body,
             "Media health reads must use an atomic present snapshot, not the renderer lifetime lock")
+    require("video_renderer_->setProgressSink(&renderer_stage_," in impl and
+            "renderer_stage_started_ns_" in health_body and
+            "stats.renderer_stage_age_ms" in health_body,
+            "renderer stage diagnostics must remain readable when the present thread is blocked")
+
+    present_body = method_body(impl, "void MediaPipeline::presentVideoFrame()")
+    require("fault == RenderFault::CommandFenceTimeout" in present_body and
+            "requestRendererRecovery" in present_body and
+            "beginHardVideoRecovery" in present_body,
+            "Command-fence timeouts must use renderer recovery while other faults keep hard recovery")
+    require("successful_present_before" in present_body and
+            "successful_present_after" in present_body and
+            "video_renderer_recovery_pending_.exchange(" in present_body and
+            "false, std::memory_order_acq_rel" in present_body,
+            "a late successful present must clear stale renderer recovery state")
 
     audio_handler = method_body(
         impl,

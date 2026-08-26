@@ -15,10 +15,8 @@ namespace lunar::webrtc {
 
 namespace {
 constexpr uint32_t kMaxReliableSendAttempts = 128;
-constexpr uint32_t kMaxLatestSendAttempts = 4;
 constexpr uint32_t kMaxConsecutiveSctpSendFailures = 128;
-constexpr std::chrono::milliseconds kMaxSctpTransientFailureAge{500};
-constexpr std::chrono::milliseconds kMaxLatestTransientFailureAge{32};
+constexpr std::chrono::milliseconds kMaxSctpRecoverableFailureAge{250};
 constexpr std::chrono::milliseconds kMediaStatsCacheInterval{250};
 uint64_t elapsedNs(std::chrono::steady_clock::time_point start) {
     if (start.time_since_epoch().count() == 0) return 0;
@@ -500,8 +498,7 @@ bool PeerManager::enqueueData(OutboundType type,
                               const uint8_t* data,
                               size_t len,
                               bool replace_existing,
-                              uint64_t input_ticket,
-                              bool invalidate_pending_snapshot) {
+                              std::chrono::milliseconds ttl) {
     if (!data || len == 0 || len > kMaxOutboundPayloadBytes ||
         !connected_.load() || data_channel_failed_.load()) {
         if (data && len > kMaxOutboundPayloadBytes) {
@@ -512,21 +509,24 @@ bool PeerManager::enqueueData(OutboundType type,
     }
     try {
         std::lock_guard<std::mutex> lock(outbound_mutex_);
-        if (invalidate_pending_snapshot) {
-            for (auto it = outbound_commands_.begin();
-                 it != outbound_commands_.end();) {
-                if (it->type == OutboundType::InputLatest) {
-                    it = outbound_commands_.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        }
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        const auto enqueued_at = std::chrono::steady_clock::now();
+#endif
         if (replace_existing) {
             for (auto& command : outbound_commands_) {
                 if (command.type == type) {
                     command.payload.assign(data, data + len);
                     command.id = next_outbound_command_id_++;
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+                    command.enqueued_at = enqueued_at;
+                    latency_input_enqueued_.fetch_add(
+                        1, std::memory_order_relaxed);
+                    if (type == OutboundType::InputLatest) {
+                        latency_input_replaced_.fetch_add(
+                            1, std::memory_order_relaxed);
+                    }
+                    recordOutboundQueueDepthLocked();
+#endif
                     command.attempts = 0;
                     command.first_attempt_at = {};
                     command.expires_at = {};
@@ -542,8 +542,21 @@ bool PeerManager::enqueueData(OutboundType type,
         command.type = type;
         command.payload.assign(data, data + len);
         command.id = next_outbound_command_id_++;
-        command.input_ticket = input_ticket;
+        if (ttl.count() > 0) {
+            command.expires_at = std::chrono::steady_clock::now() + ttl;
+        }
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        command.enqueued_at = enqueued_at;
+#endif
         outbound_commands_.push_back(std::move(command));
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        if (type == OutboundType::InputReliable ||
+            type == OutboundType::InputTransition ||
+            type == OutboundType::InputLatest) {
+            latency_input_enqueued_.fetch_add(1, std::memory_order_relaxed);
+        }
+        recordOutboundQueueDepthLocked();
+#endif
         return true;
     } catch (...) {
         return false;
@@ -562,6 +575,9 @@ bool PeerManager::enqueueSimple(OutboundCommand command, bool high_priority) {
                 if (queued.type == OutboundType::ReceiverFeedback) {
                     command.id = next_outbound_command_id_++;
                     queued = std::move(command);
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+                    recordOutboundQueueDepthLocked();
+#endif
                     return true;
                 }
             }
@@ -603,6 +619,9 @@ bool PeerManager::enqueueSimple(OutboundCommand command, bool high_priority) {
         } else {
             outbound_commands_.push_back(std::move(command));
         }
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        recordOutboundQueueDepthLocked();
+#endif
         return true;
     } catch (...) {
         return false;
@@ -647,6 +666,9 @@ bool PeerManager::enqueueNack(uint16_t pid, uint16_t blp) {
                        queued.type != OutboundType::Nack;
             });
         outbound_commands_.insert(position, std::move(command));
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        recordOutboundQueueDepthLocked();
+#endif
         return true;
     } catch (...) {
         return false;
@@ -657,29 +679,13 @@ bool PeerManager::sendInputData(const uint8_t* data, size_t len) {
     return enqueueData(OutboundType::InputReliable, data, len, false);
 }
 
-uint64_t PeerManager::sendInputTransitionData(const uint8_t* data, size_t len) {
-    if (!data || len == 0 || len > kMaxOutboundPayloadBytes ||
-        !connected_.load() || data_channel_failed_.load()) {
-        return 0;
-    }
-    const uint64_t ticket = next_input_delivery_ticket_++;
-    if (!enqueueData(OutboundType::InputTransition, data, len, false,
-                     ticket, true)) {
-        return 0;
-    }
-    return ticket;
+bool PeerManager::sendTransitionInputData(const uint8_t* data, size_t len) {
+    return enqueueData(OutboundType::InputTransition, data, len, false,
+                       kInputTransitionTtl);
 }
 
 bool PeerManager::sendLatestInputData(const uint8_t* data, size_t len) {
     return enqueueData(OutboundType::InputLatest, data, len, true);
-}
-
-std::optional<InputDeliveryResult> PeerManager::consumeInputDeliveryResult() {
-    std::lock_guard<std::mutex> lock(outbound_mutex_);
-    if (input_delivery_results_.empty()) return std::nullopt;
-    const auto result = input_delivery_results_.front();
-    input_delivery_results_.pop_front();
-    return result;
 }
 
 bool PeerManager::sendControlData(const uint8_t* data, size_t len) {
@@ -711,13 +717,26 @@ bool PeerManager::sendReceiverFeedback(uint32_t bitrate_bps) {
 
 bool PeerManager::isReliableCommand(OutboundType type) {
     return type == OutboundType::InputReliable ||
-           type == OutboundType::InputTransition ||
            type == OutboundType::Control ||
            type == OutboundType::Message;
 }
 
 bool PeerManager::isSctpCommand(OutboundType type) {
-    return isReliableCommand(type) || type == OutboundType::InputLatest;
+    return isReliableCommand(type) ||
+           type == OutboundType::InputTransition ||
+           type == OutboundType::InputLatest;
+}
+
+bool PeerManager::isRecoverableSctpSendError(
+    int result,
+    bool data_channel_connected) {
+    if (result >= 0) return false;
+    if (peer_connection_is_transient_send_error(result)) return true;
+    // Legacy libpeer returns a generic -1 for UDP send failures. If SCTP still
+    // reports connected, that result is ambiguous rather than proof that the
+    // association died. Latest-state input can be dropped and repaired by the
+    // next 8 ms snapshot; reliable commands retain their bounded retry budget.
+    return result == -1 && data_channel_connected;
 }
 
 int PeerManager::outboundPriority(OutboundType type) {
@@ -725,25 +744,30 @@ int PeerManager::outboundPriority(OutboundType type) {
         case OutboundType::Pli: return 0;
         case OutboundType::Nack: return 1;
         case OutboundType::ReceiverFeedback: return 2;
-        // A transition cannot be overtaken by an absolute snapshot on the
-        // ordered input channel. Latest still beats stale bootstrap/control
-        // retries, which is the latency optimization this queue needs.
+        // Realtime input stays ahead of startup/control retries and is always
+        // replaced with the newest complete state before it is sent.
         case OutboundType::InputTransition: return 3;
         case OutboundType::InputLatest: return 4;
         case OutboundType::InputReliable: return 5;
         case OutboundType::Control:
         case OutboundType::Message: return 6;
     }
-    return 5;
+    return 6;
 }
 
 bool PeerManager::selectOutboundCommand(OutboundCommand& command,
-                                        bool allow_sctp) const {
+                                        bool allow_sctp,
+                                        bool realtime_input_only) const {
     std::lock_guard<std::mutex> lock(outbound_mutex_);
     auto selected = outbound_commands_.end();
     int selected_priority = 7;
     for (auto it = outbound_commands_.begin();
          it != outbound_commands_.end(); ++it) {
+        if (realtime_input_only &&
+            it->type != OutboundType::InputTransition &&
+            it->type != OutboundType::InputLatest) {
+            continue;
+        }
         if (!allow_sctp && isSctpCommand(it->type)) continue;
         const int priority = outboundPriority(it->type);
         if (priority < selected_priority) {
@@ -786,6 +810,7 @@ void PeerManager::logOutboundDrop(const char* reason,
 int PeerManager::sendOutboundCommand(const OutboundCommand& command) {
     if (!pc_ || !connected_.load()) return -1;
     if ((command.type == OutboundType::InputReliable ||
+         command.type == OutboundType::InputTransition ||
          command.type == OutboundType::InputLatest ||
          command.type == OutboundType::Control ||
          command.type == OutboundType::Message) &&
@@ -854,25 +879,67 @@ int PeerManager::sendInputCommand(const OutboundCommand& command) {
 }
 
 void PeerManager::drainOutboundCommands(
-    std::chrono::steady_clock::time_point deadline) {
-    constexpr size_t kMaxCommandsPerPump = 8;
+    std::chrono::steady_clock::time_point deadline,
+    bool realtime_input_only) {
+    const size_t max_commands = realtime_input_only ? 1 : 8;
     bool allow_sctp = true;
-    for (size_t sent = 0; sent < kMaxCommandsPerPump; ++sent) {
+    for (size_t sent = 0; sent < max_commands; ++sent) {
         OutboundCommand command;
         try {
-            if (!selectOutboundCommand(command, allow_sctp)) return;
+            if (!selectOutboundCommand(command, allow_sctp,
+                                       realtime_input_only)) {
+                return;
+            }
         } catch (...) {
             logOutboundDrop("snapshot_failed", OutboundType::InputReliable);
             return;
         }
         if (command.expires_at.time_since_epoch().count() != 0 &&
             std::chrono::steady_clock::now() >= command.expires_at) {
-            completeOutboundCommand(command, 0);
+            completeOutboundCommand(command, 0, false);
             logOutboundDrop("expired", command.type);
             continue;
         }
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        const bool is_input = command.type == OutboundType::InputReliable ||
+                              command.type == OutboundType::InputTransition ||
+                              command.type == OutboundType::InputLatest;
+        const auto send_started = std::chrono::steady_clock::now();
+        if (is_input && command.enqueued_at.time_since_epoch().count() != 0) {
+            const uint64_t queue_us = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    send_started - command.enqueued_at).count());
+            latency_input_queue_total_us_.fetch_add(
+                queue_us, std::memory_order_relaxed);
+            latency_input_queue_samples_.fetch_add(
+                1, std::memory_order_relaxed);
+            recordLatencyMaximum(latency_input_queue_max_us_, queue_us);
+        }
+#endif
         const int result = sendOutboundCommand(command);
-        if (completeOutboundCommand(command, result)) {
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        if (is_input) {
+            const uint64_t send_us = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - send_started).count());
+            latency_input_send_total_us_.fetch_add(
+                send_us, std::memory_order_relaxed);
+            latency_input_send_samples_.fetch_add(
+                1, std::memory_order_relaxed);
+            recordLatencyMaximum(latency_input_send_max_us_, send_us);
+            if (result >= 0) {
+                latency_input_sent_.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                latency_input_send_failures_.fetch_add(
+                    1, std::memory_order_relaxed);
+            }
+        }
+#endif
+        const bool data_channel_connected =
+            result < 0 && isSctpCommand(command.type) && pc_ &&
+            peer_connection_is_datachannel_connected(pc_);
+        if (completeOutboundCommand(command, result,
+                                    data_channel_connected)) {
             if (!isSctpCommand(command.type)) return;
             allow_sctp = false;
             continue;
@@ -882,25 +949,21 @@ void PeerManager::drainOutboundCommands(
 }
 
 bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
-                                          int result) {
+                                          int result,
+                                          bool data_channel_connected) {
     const auto now = std::chrono::steady_clock::now();
-    const bool transient =
-        result < 0 && peer_connection_is_transient_send_error(result);
+    const bool recoverable =
+        isRecoverableSctpSendError(result, data_channel_connected);
     const auto first_attempt =
         command.first_attempt_at.time_since_epoch().count() == 0
             ? now
             : command.first_attempt_at;
     const bool reliable_budget_available =
         command.attempts + 1 < kMaxReliableSendAttempts &&
-        now - first_attempt < kMaxSctpTransientFailureAge;
-    const bool latest_budget_available =
-        command.attempts + 1 < kMaxLatestSendAttempts &&
-        now - first_attempt < kMaxLatestTransientFailureAge;
+        now - first_attempt < kMaxSctpRecoverableFailureAge;
     const bool keep_for_retry =
-        (transient && isReliableCommand(command.type) &&
+        (recoverable && isReliableCommand(command.type) &&
          reliable_budget_available) ||
-        (transient && command.type == OutboundType::InputLatest &&
-         latest_budget_available) ||
         (result < 0 && command.type == OutboundType::Nack &&
          command.attempts == 0) ||
         (result < 0 && command.type == OutboundType::Pli &&
@@ -912,12 +975,10 @@ bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
             [&command](const OutboundCommand& candidate) {
                 return candidate.id == command.id;
             });
-        const bool command_present = queued != outbound_commands_.end();
         if (queued != outbound_commands_.end() && !keep_for_retry) {
             outbound_commands_.erase(queued);
         } else if (queued != outbound_commands_.end() &&
                    (isReliableCommand(command.type) ||
-                    command.type == OutboundType::InputLatest ||
                     command.type == OutboundType::Nack ||
                     command.type == OutboundType::Pli)) {
             queued->attempts++;
@@ -925,42 +986,42 @@ bool PeerManager::completeOutboundCommand(const OutboundCommand& command,
                 queued->first_attempt_at = now;
             }
         }
-        if (command.type == OutboundType::InputTransition &&
-            command.input_ticket != 0 && !keep_for_retry &&
-            command_present) {
-            input_delivery_results_.push_back(
-                {command.input_ticket, result >= 0});
-        }
     }
     if (isSctpCommand(command.type)) {
-        observeSctpSendResult(command.type, result, command.attempts + 1);
+        observeSctpSendResult(command.type, result, command.attempts + 1,
+                              data_channel_connected);
     }
     if (result >= 0) return false;
     if (keep_for_retry) {
         logOutboundDrop("send_retry", command.type, result);
         return true;
     }
-    logOutboundDrop(transient ? "transient_drop" : "send_failed",
+    logOutboundDrop(recoverable ? "recoverable_drop" : "send_failed",
                     command.type, result);
-    if (isReliableCommand(command.type) && transient &&
+    if (isReliableCommand(command.type) && recoverable &&
         !reliable_budget_available) {
         markDataChannelFailed("sctp-reliable-retry-exhausted",
-                              command.type, result, command.attempts + 1);
+                              command.type, result, command.attempts + 1,
+                              data_channel_connected);
     }
     return false;
 }
 
 void PeerManager::observeSctpSendResult(OutboundType type,
                                         int result,
-                                        uint32_t attempts) {
+                                        uint32_t attempts,
+                                        bool data_channel_connected) {
     if (result >= 0) {
         consecutive_sctp_send_failures_ = 0;
         first_sctp_send_failure_ = {};
         return;
     }
-    if (!peer_connection_is_transient_send_error(result)) {
+    const bool recoverable =
+        isRecoverableSctpSendError(result, data_channel_connected);
+    if (!recoverable) {
         markDataChannelFailed("sctp-fatal-send-failure",
-                              type, result, attempts);
+                              type, result, attempts,
+                              data_channel_connected);
         return;
     }
     const auto now = std::chrono::steady_clock::now();
@@ -969,16 +1030,20 @@ void PeerManager::observeSctpSendResult(OutboundType type,
     }
     if (consecutive_sctp_send_failures_ >=
             kMaxConsecutiveSctpSendFailures ||
-        now - first_sctp_send_failure_ >= kMaxSctpTransientFailureAge) {
-        markDataChannelFailed("sctp-transient-budget-exhausted",
-                              type, result, attempts);
+        now - first_sctp_send_failure_ >= kMaxSctpRecoverableFailureAge) {
+        const char* reason = peer_connection_is_transient_send_error(result)
+            ? "sctp-transient-budget-exhausted"
+            : "sctp-ambiguous-budget-exhausted";
+        markDataChannelFailed(reason, type, result, attempts,
+                              data_channel_connected);
     }
 }
 
 void PeerManager::markDataChannelFailed(const char* reason,
                                         OutboundType type,
                                         int result,
-                                        uint32_t attempts) {
+                                        uint32_t attempts,
+                                        bool data_channel_connected) {
     if (data_channel_failed_.exchange(true)) return;
     data_channel_failure_event_ = true;
     const auto age_ms = first_sctp_send_failure_.time_since_epoch().count() == 0
@@ -987,11 +1052,16 @@ void PeerManager::markDataChannelFailed(const char* reason,
               std::chrono::steady_clock::now() - first_sctp_send_failure_).count();
     lunar::persistentEventLog(
         "webrtc-outbound",
-        "%s type=%d result=%d transient=%s consecutive=%u age_ms=%lld "
-        "attempts=%u action=reconnect",
+        "%s type=%d result=%d transient=%s recoverable=%s "
+        "data_channel_connected=%s socket_errno=%d consecutive=%u "
+        "age_ms=%lld attempts=%u action=reconnect",
         reason ? reason : "sctp-send-failure",
         static_cast<int>(type), result,
         peer_connection_is_transient_send_error(result) ? "true" : "false",
+        isRecoverableSctpSendError(result, data_channel_connected)
+            ? "true" : "false",
+        data_channel_connected ? "true" : "false",
+        pc_ ? peer_connection_get_last_send_error(pc_) : 0,
         consecutive_sctp_send_failures_,
         static_cast<long long>(age_ms), attempts);
 }
@@ -1006,10 +1076,16 @@ void PeerManager::resetDataChannelHealth() {
 void PeerManager::clearOutboundCommands() {
     std::lock_guard<std::mutex> lock(outbound_mutex_);
     outbound_commands_.clear();
-    input_delivery_results_.clear();
     next_outbound_command_id_ = 1;
-    next_input_delivery_ticket_ = 1;
 }
+
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+void PeerManager::recordOutboundQueueDepthLocked() noexcept {
+    const uint32_t depth = static_cast<uint32_t>(std::min<size_t>(
+        UINT32_MAX, outbound_commands_.size()));
+    recordLatencyMaximum(latency_outbound_queue_high_watermark_, depth);
+}
+#endif
 
 bool PeerManager::isConnected() const {
     return connected_ && !data_channel_failed_;
@@ -1184,13 +1260,114 @@ PeerMediaStats PeerManager::getMediaStats() const {
     return stats;
 }
 
+PeerLatencyWindow PeerManager::takeLatencyWindow() {
+    PeerLatencyWindow window;
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+    window.pump_total_us = latency_pump_total_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.pump_max_us = latency_pump_max_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.pump_samples = latency_pump_samples_.exchange(
+        0, std::memory_order_relaxed);
+    window.pump_gap_total_us = latency_pump_gap_total_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.pump_gap_max_us = latency_pump_gap_max_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.pump_gap_samples = latency_pump_gap_samples_.exchange(
+        0, std::memory_order_relaxed);
+    window.peer_loop_total_us = latency_peer_loop_total_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.peer_loop_max_us = latency_peer_loop_max_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.socket_total_us = latency_socket_total_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.socket_max_us = latency_socket_max_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.receive_loop_total_us = latency_receive_loop_total_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.receive_loop_max_us = latency_receive_loop_max_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.rtp_drain_total_us = latency_rtp_drain_total_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.rtp_drain_max_us = latency_rtp_drain_max_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.outbound_total_us = latency_outbound_total_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.outbound_max_us = latency_outbound_max_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.other_total_us = latency_other_total_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.other_max_us = latency_other_max_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.socket_packets = latency_socket_packets_.exchange(
+        0, std::memory_order_relaxed);
+    window.rtp_packets_decoded = latency_rtp_packets_decoded_.exchange(
+        0, std::memory_order_relaxed);
+    window.input_enqueued = latency_input_enqueued_.exchange(
+        0, std::memory_order_relaxed);
+    window.input_replaced = latency_input_replaced_.exchange(
+        0, std::memory_order_relaxed);
+    window.input_sent = latency_input_sent_.exchange(
+        0, std::memory_order_relaxed);
+    window.input_send_failures = latency_input_send_failures_.exchange(
+        0, std::memory_order_relaxed);
+    window.input_queue_total_us = latency_input_queue_total_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.input_queue_max_us = latency_input_queue_max_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.input_queue_samples = latency_input_queue_samples_.exchange(
+        0, std::memory_order_relaxed);
+    window.input_send_total_us = latency_input_send_total_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.input_send_max_us = latency_input_send_max_us_.exchange(
+        0, std::memory_order_relaxed);
+    window.input_send_samples = latency_input_send_samples_.exchange(
+        0, std::memory_order_relaxed);
+    window.outbound_queue_high_watermark =
+        latency_outbound_queue_high_watermark_.exchange(
+            0, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(outbound_mutex_);
+        window.outbound_queue_depth = static_cast<uint32_t>(
+            std::min<size_t>(UINT32_MAX, outbound_commands_.size()));
+    }
+    window.video_jitter = video_jitter_.takeLatencyWindow();
+#endif
+    return window;
+}
+
 void PeerManager::processEvents() {
     if (pc_) {
         const auto pump_started = std::chrono::steady_clock::now();
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        if (latency_last_pump_started_.time_since_epoch().count() != 0) {
+            const uint64_t gap_us = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    pump_started - latency_last_pump_started_).count());
+            latency_pump_gap_total_us_.fetch_add(
+                gap_us, std::memory_order_relaxed);
+            latency_pump_gap_samples_.fetch_add(1, std::memory_order_relaxed);
+            recordLatencyMaximum(latency_pump_gap_max_us_, gap_us);
+        }
+        latency_last_pump_started_ = pump_started;
+#endif
         int log_index = process_event_logs_.fetch_add(1);
         if (log_index < 16) {
             lunar::diagnosticLog("webrtc", "processEvents begin index=%d", log_index);
         }
+        // The owner loop has just published its newest controller snapshot.
+        // Send only that replaceable state before inbound socket/RTP work so a
+        // busy peer loop cannot add its full duration to input latency. Normal
+        // recovery and reliable-control priority is preserved by the full
+        // drain after peer_connection_loop().
+        constexpr bool realtime_input_only = true;
+        const auto realtime_outbound_started =
+            std::chrono::steady_clock::now();
+        drainOutboundCommands(realtime_outbound_started +
+                                  std::chrono::microseconds(500),
+                              realtime_input_only);
+        const auto realtime_outbound_finished =
+            std::chrono::steady_clock::now();
         constexpr int kMaxDrainPasses = 8;
         constexpr auto kMaxDrainTime = std::chrono::milliseconds(3);
         const auto drain_start = std::chrono::steady_clock::now();
@@ -1264,12 +1441,41 @@ void PeerManager::processEvents() {
         const uint64_t total_us = elapsed_us(pump_started, pump_finished);
         const uint64_t peer_loop_us = elapsed_us(peer_loop_started,
                                                  peer_loop_finished);
-        const uint64_t outbound_us = elapsed_us(outbound_started,
-                                                outbound_finished);
+        const uint64_t outbound_us =
+            elapsed_us(realtime_outbound_started,
+                       realtime_outbound_finished) +
+            elapsed_us(outbound_started, outbound_finished);
         const uint64_t accounted_us = receive_loop_us + rtp_drain_us + outbound_us;
         const uint64_t other_us = total_us > accounted_us
             ? total_us - accounted_us
             : 0;
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_pump_total_us_.fetch_add(total_us, std::memory_order_relaxed);
+        latency_pump_samples_.fetch_add(1, std::memory_order_relaxed);
+        recordLatencyMaximum(latency_pump_max_us_, total_us);
+        latency_peer_loop_total_us_.fetch_add(peer_loop_us,
+                                              std::memory_order_relaxed);
+        recordLatencyMaximum(latency_peer_loop_max_us_, peer_loop_us);
+        latency_socket_total_us_.fetch_add(socket_us,
+                                           std::memory_order_relaxed);
+        recordLatencyMaximum(latency_socket_max_us_, socket_us);
+        latency_receive_loop_total_us_.fetch_add(receive_loop_us,
+                                                 std::memory_order_relaxed);
+        recordLatencyMaximum(latency_receive_loop_max_us_, receive_loop_us);
+        latency_rtp_drain_total_us_.fetch_add(rtp_drain_us,
+                                              std::memory_order_relaxed);
+        recordLatencyMaximum(latency_rtp_drain_max_us_, rtp_drain_us);
+        latency_outbound_total_us_.fetch_add(outbound_us,
+                                             std::memory_order_relaxed);
+        recordLatencyMaximum(latency_outbound_max_us_, outbound_us);
+        latency_other_total_us_.fetch_add(other_us,
+                                          std::memory_order_relaxed);
+        recordLatencyMaximum(latency_other_max_us_, other_us);
+        latency_socket_packets_.fetch_add(socket_packets,
+                                          std::memory_order_relaxed);
+        latency_rtp_packets_decoded_.fetch_add(rtp_decoded,
+                                               std::memory_order_relaxed);
+#endif
         constexpr uint64_t kSlowPumpThresholdUs = 10000;
         if (total_us >= kSlowPumpThresholdUs) {
             slow_pump_count_++;
@@ -1330,6 +1536,9 @@ void PeerManager::disconnect() {
     network_path_estimator_.reset(video_jitter_mode_);
     network_path_estimate_ = network_path_estimator_.estimate();
     network_path_window_started_ = {};
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+    latency_last_pump_started_ = {};
+#endif
     invalidateMediaStatsCache();
     video_jitter_.reset();
     nack_logs_ = 0;

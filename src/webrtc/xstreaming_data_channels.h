@@ -14,14 +14,14 @@ struct XStreamingDataChannel {
 };
 
 inline constexpr XStreamingDataChannel kXStreamingDataChannels[] = {
-    // Gamepad state is a realtime stream: the application queue coalesces an
-    // older unsent complete snapshot into the newest one. The channel itself
-    // must stay reliable and ordered because XStreaming input packets carry a
-    // contiguous sequence shared with the startup metadata packet.
-    {"input", "1.0", 0, true, -1},
-    {"chat", "chatV1", 2, true, -1},
-    {"control", "controlV1", 4, true, -1},
-    {"message", "messageV1", 6, true, -1},
+    // Match Green-NX and the official legacy XStreaming setup. Protocol 1.0
+    // carries a contiguous sequence, so input must remain reliable/ordered;
+    // ordinary loss on an unreliable channel leaves the server waiting for
+    // the missing sequence and presents as permanently lost controls.
+    {"control", "controlV1", 0, true, -1},
+    {"input", "1.0", 2, true, -1},
+    {"message", "messageV1", 4, true, -1},
+    {"chat", "chatV1", 6, true, -1},
 };
 
 inline constexpr const char* xstreamingDataChannelProtocol(std::string_view label) {

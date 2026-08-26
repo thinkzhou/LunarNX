@@ -56,28 +56,33 @@ inline VideoJitterPolicy computeVideoJitterPolicy(
         return policy;
     }
 
-    policy.frame_hold_ms = std::clamp<uint64_t>(rtt_ms + 25, 80, 180);
-    const uint64_t high_rtt_extra_ms = deadline_rtt_ms > 100
-        ? deadline_rtt_ms - 100 : 0;
+    // Complete frames bypass these deadlines. Keep the no-marker/no-NACK
+    // timeout small so an incomplete head cannot add a full RTT before we
+    // even know which packet to repair.
+    policy.frame_hold_ms = std::clamp<uint64_t>(
+        40 + rtt_ms / 4, 50, 100);
     const uint64_t margin_ms =
-        deadline_quality == NetworkPathQuality::Good ? 75 :
-        deadline_quality == NetworkPathQuality::Fair
-            ? 115 + high_rtt_extra_ms / 2
-            : 130 + high_rtt_extra_ms / 3;
+        deadline_quality == NetworkPathQuality::Good ? 65 :
+        deadline_quality == NetworkPathQuality::Fair ? 75 : 100;
     const uint64_t cap_ms =
-        deadline_quality == NetworkPathQuality::Good ? 320 :
-        deadline_quality == NetworkPathQuality::Fair ? 400 : 480;
+        deadline_quality == NetworkPathQuality::Good ? 240 :
+        deadline_quality == NetworkPathQuality::Fair ? 300 : 400;
     policy.missing_packet_hold_ms = std::max<uint64_t>(
         policy.frame_hold_ms,
-        std::clamp<uint64_t>(deadline_rtt_ms + margin_ms, 80, cap_ms));
+        std::clamp<uint64_t>(deadline_rtt_ms + margin_ms, 60, cap_ms));
     policy.recovery_hold_ms = std::clamp<uint64_t>(
-        180 + deadline_rtt_ms * 2, 300, 500);
-    policy.max_head_blocked_frames = 6;
-    // Bound cloud head-of-line waiting independently from the larger missing
-    // packet deadline. On very high RTT paths a retransmission cannot arrive
-    // inside this low-latency budget, so release later frames instead of
-    // extending every dependent frame behind one missing packet.
-    const uint64_t head_latency_budget_ms = deadline_rtt_ms >= 200 ? 140 : 200;
+        200 + deadline_rtt_ms, 280, 480);
+    policy.max_head_blocked_frames = 3;
+    // Normal cloud paths get a much tighter HOL budget. High-RTT paths retain
+    // enough time for one useful retransmission instead of timing out before
+    // a packet can physically make the round trip.
+    const uint64_t head_latency_budget_ms =
+        deadline_rtt_ms >= 220
+            ? 140
+            : deadline_rtt_ms >= 150
+                ? std::min<uint64_t>(220, deadline_rtt_ms + 40)
+                : deadline_quality == NetworkPathQuality::Good ? 160
+                : deadline_quality == NetworkPathQuality::Fair ? 170 : 190;
     policy.head_blocked_hold_ms = std::min<uint64_t>(
         policy.missing_packet_hold_ms, head_latency_budget_ms);
     return policy;

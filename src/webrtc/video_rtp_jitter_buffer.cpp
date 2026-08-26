@@ -290,6 +290,9 @@ struct VideoRtpJitterBuffer::Impl {
     uint32_t last_packet_timestamp = 0;
 
     VideoRtpJitterStats counters;
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+    VideoRtpLatencyWindow latency_window;
+#endif
 
     void clearFrames() {
         frames.clear();
@@ -327,6 +330,9 @@ struct VideoRtpJitterBuffer::Impl {
         pending_nack_count = 0;
         have_ssrc = false;
         counters = {};
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        latency_window = {};
+#endif
     }
 
     void resetForSource(uint32_t new_ssrc) {
@@ -980,6 +986,14 @@ struct VideoRtpJitterBuffer::Impl {
                 result == AssembleResult::CompleteDiscontinuous) {
                 const uint32_t timestamp = front.timestamp;
                 const bool idr = containsIdr(access_unit);
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+                const uint64_t assembly_us =
+                    elapsedMs(now_ms, front.first_seen_ms) * 1000ULL;
+                latency_window.assembly_total_us += assembly_us;
+                latency_window.assembly_max_us = std::max(
+                    latency_window.assembly_max_us, assembly_us);
+                latency_window.assembly_samples++;
+#endif
                 filterPendingNacks([timestamp](const MissingRange& range) {
                     return range.timestamp != timestamp;
                 });
@@ -1248,6 +1262,15 @@ struct VideoRtpJitterBuffer::Impl {
         return result;
     }
 
+    VideoRtpLatencyWindow takeLatencyWindow() {
+        VideoRtpLatencyWindow result;
+#if LUNARNX_LATENCY_DIAGNOSTIC_LOG
+        result = latency_window;
+        latency_window = {};
+#endif
+        return result;
+    }
+
     VideoRtpReceiverReport receiverReport() {
         VideoRtpReceiverReport report;
         if (!have_sequence) return report;
@@ -1323,6 +1346,10 @@ void VideoRtpJitterBuffer::receive(const uint8_t* packet,
 
 VideoRtpJitterStats VideoRtpJitterBuffer::stats() const {
     return impl_->stats();
+}
+
+VideoRtpLatencyWindow VideoRtpJitterBuffer::takeLatencyWindow() {
+    return impl_->takeLatencyWindow();
 }
 
 VideoRtpReceiverReport VideoRtpJitterBuffer::receiverReport() {
