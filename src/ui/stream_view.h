@@ -29,6 +29,7 @@ private:
     brls::Button* resume_button_ = nullptr;
     brls::Button* disconnect_button_ = nullptr;
     brls::Box* confirm_box_ = nullptr;
+    brls::Box* stopping_overlay_ = nullptr;
     std::thread update_thread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_started_{false};

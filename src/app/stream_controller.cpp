@@ -6,6 +6,7 @@
 #include "stream_profile.h"
 #include <cJSON.h>
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
 #include <fstream>
@@ -1138,9 +1139,29 @@ void StreamController::stopStream() {
 }
 
 void StreamController::stopStream(bool set_disconnected) {
+    const auto stop_started_at = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("stream-controller",
+                              "stop stream begin set_disconnected=%s",
+                              set_disconnected ? "true" : "false");
     requestStreamStop();
+    const auto lock_started_at = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("stream-controller",
+                              "stop phase=operation-lock begin");
     std::lock_guard<std::mutex> operation_lock(stream_operation_mutex_);
+    const auto lock_wait = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - lock_started_at);
+    lunar::persistentEventLog(
+        "stream-controller",
+        "stop phase=operation-lock done wait_ms=%lld slow=%s",
+        static_cast<long long>(lock_wait.count()),
+        lock_wait >= std::chrono::seconds(3) ? "true" : "false");
     cleanupStreamResources(set_disconnected);
+    const auto total = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - stop_started_at);
+    lunar::persistentEventLog(
+        "stream-controller", "stop stream complete total_ms=%lld slow=%s",
+        static_cast<long long>(total.count()),
+        total >= std::chrono::seconds(3) ? "true" : "false");
 }
 
 bool StreamController::resumeAfterForeground() {

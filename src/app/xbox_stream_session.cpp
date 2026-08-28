@@ -441,6 +441,10 @@ bool XboxStreamSession::start(const StreamProfile& profile,
 }
 
 void XboxStreamSession::stop(bool delete_session) {
+    const auto stop_started_at = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("xbox-stream",
+                              "stop begin delete_session=%s",
+                              delete_session ? "true" : "false");
     stop_requested_ = true;
     streaming_ = false;
     input_loop_stop_ = true;
@@ -478,6 +482,8 @@ void XboxStreamSession::stop(bool delete_session) {
             input_thread_to_join = std::move(input_thread_);
         }
     }
+    const auto join_started_at = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("xbox-stream", "stop phase=worker-join begin");
     if (stream_thread_to_join.joinable()) {
         stream_thread_to_join.join();
     }
@@ -487,8 +493,20 @@ void XboxStreamSession::stop(bool delete_session) {
     if (input_thread_to_join.joinable()) {
         input_thread_to_join.join();
     }
+    const auto join_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - join_started_at);
+    lunar::persistentEventLog(
+        "xbox-stream", "stop phase=worker-join done elapsed_ms=%lld slow=%s",
+        static_cast<long long>(join_elapsed.count()),
+        join_elapsed >= std::chrono::seconds(3) ? "true" : "false");
 
     cleanupResources(delete_session);
+    const auto total = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - stop_started_at);
+    lunar::persistentEventLog(
+        "xbox-stream", "stop complete total_ms=%lld slow=%s",
+        static_cast<long long>(total.count()),
+        total >= std::chrono::seconds(3) ? "true" : "false");
 }
 
 std::string XboxStreamSession::sessionId() const {
@@ -2201,6 +2219,7 @@ void XboxStreamSession::controlLoop(std::string session_id,
 }
 
 void XboxStreamSession::cleanupResources(bool delete_session) {
+    const auto cleanup_started_at = std::chrono::steady_clock::now();
     lunar::diagnosticLog("xbox-stream", "cleanup begin delete_session=%s",
                          delete_session ? "true" : "false");
     std::string session_id;
@@ -2211,25 +2230,54 @@ void XboxStreamSession::cleanupResources(bool delete_session) {
     }
 
     streaming_ = false;
-    lunar::diagnosticLog("xbox-stream", "cleanup channels reset begin");
+    auto phase_started_at = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("xbox-stream", "cleanup phase=channels begin");
     channels_.reset();
-    lunar::diagnosticLog("xbox-stream", "cleanup channels reset done");
+    auto phase_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - phase_started_at);
+    lunar::persistentEventLog(
+        "xbox-stream", "cleanup phase=channels done elapsed_ms=%lld slow=%s",
+        static_cast<long long>(phase_elapsed.count()),
+        phase_elapsed >= std::chrono::seconds(3) ? "true" : "false");
+    phase_started_at = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("xbox-stream", "cleanup phase=session-delete begin");
     if (delete_session && !session_id.empty()) {
-        lunar::diagnosticLog("xbox-stream", "cleanup delete-session async begin id=%s",
-                             session_id.c_str());
         session_client_.deleteSessionAsync(session_id);
-        lunar::diagnosticLog("xbox-stream", "cleanup delete-session async done");
     }
-    lunar::diagnosticLog("xbox-stream", "cleanup transport disconnect begin");
+    phase_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - phase_started_at);
+    lunar::persistentEventLog(
+        "xbox-stream", "cleanup phase=session-delete done elapsed_ms=%lld slow=%s",
+        static_cast<long long>(phase_elapsed.count()),
+        phase_elapsed >= std::chrono::seconds(3) ? "true" : "false");
+    phase_started_at = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("xbox-stream", "cleanup phase=transport begin");
     transport_.disconnect();
-    lunar::diagnosticLog("xbox-stream", "cleanup transport disconnect done");
-    lunar::diagnosticLog("xbox-stream", "cleanup media shutdown begin");
+    phase_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - phase_started_at);
+    lunar::persistentEventLog(
+        "xbox-stream", "cleanup phase=transport done elapsed_ms=%lld slow=%s",
+        static_cast<long long>(phase_elapsed.count()),
+        phase_elapsed >= std::chrono::seconds(3) ? "true" : "false");
+    phase_started_at = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("xbox-stream", "cleanup phase=media begin");
     media_.shutdown();
-    lunar::diagnosticLog("xbox-stream", "cleanup media shutdown done");
-    lunar::diagnosticLog("xbox-stream", "cleanup rumble stop begin");
+    phase_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - phase_started_at);
+    lunar::persistentEventLog(
+        "xbox-stream", "cleanup phase=media done elapsed_ms=%lld slow=%s",
+        static_cast<long long>(phase_elapsed.count()),
+        phase_elapsed >= std::chrono::seconds(3) ? "true" : "false");
+    phase_started_at = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("xbox-stream", "cleanup phase=input begin");
     rumble_.stop();
     gamepad_.releaseCaptureButton();
-    lunar::diagnosticLog("xbox-stream", "cleanup rumble stop done");
+    phase_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - phase_started_at);
+    lunar::persistentEventLog(
+        "xbox-stream", "cleanup phase=input done elapsed_ms=%lld slow=%s",
+        static_cast<long long>(phase_elapsed.count()),
+        phase_elapsed >= std::chrono::seconds(3) ? "true" : "false");
     lunar::cloud1080CrashProbeLog(
         "crash-probe", "DEBUG-c1080 phase=session-cleanup normal=1");
     lunar::setCloud1080CrashProbeEnabled(false);
@@ -2250,7 +2298,23 @@ void XboxStreamSession::cleanupResources(bool delete_session) {
         static_cast<unsigned long long>(writer_stats.flushes),
         writer_stats.queue_depth,
         writer_stats.queue_high_watermark);
+    phase_started_at = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("xbox-stream",
+                              "cleanup phase=diagnostics-writer begin");
     lunar::stopDropDiagnosticWriter();
+    phase_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - phase_started_at);
+    lunar::persistentEventLog(
+        "xbox-stream",
+        "cleanup phase=diagnostics-writer done elapsed_ms=%lld slow=%s",
+        static_cast<long long>(phase_elapsed.count()),
+        phase_elapsed >= std::chrono::seconds(3) ? "true" : "false");
+    const auto cleanup_total = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - cleanup_started_at);
+    lunar::persistentEventLog(
+        "xbox-stream", "cleanup complete total_ms=%lld slow=%s",
+        static_cast<long long>(cleanup_total.count()),
+        cleanup_total >= std::chrono::seconds(3) ? "true" : "false");
     lunar::diagnosticLog("xbox-stream", "cleanup done");
 }
 
