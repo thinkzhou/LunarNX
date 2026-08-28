@@ -5,7 +5,7 @@
 #include "ps_console.h"
 #include "ps_credentials.h"
 #include "ps_console_repository.h"
-#include "ps_console_resolver.h"
+#include "ps_connection_plan.h"
 #include "ps_registration.h"
 #include "psn_auth_manager.h"
 #include <chiaki/log.h>
@@ -68,8 +68,9 @@ public:
     void wakeupHost(const std::string& host_addr, const std::string& host_id,
                     bool is_ps5, WakeupCallback cb);
 
-    // Resolve route for a console
-    ResolvedRoute resolveRoute(const PsConsole& console) const;
+    PsConnectionPlan planConnection(
+        const PsConsole& console,
+        PsConnectionPreference preference = PsConnectionPreference::Automatic) const;
 
 private:
     std::string psn_device_error_;

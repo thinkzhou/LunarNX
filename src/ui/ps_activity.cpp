@@ -1006,29 +1006,23 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
                   host.nickname.c_str(),
                   host.local.has_value() ? "true" : "false",
                   host.remote.has_value() ? "true" : "false");
-    ps::PsConsole selected = host;
-    if (source_ == PsConsoleSource::Local) selected.remote.reset();
-    else selected.local.reset();
-
-    const bool remote_enabled = selected.remote.has_value() &&
-        selected.remote->remoteplay_enabled && ps_manager_->hasStoredPsnSession();
-    if (!selected.credentials.has_value() && !remote_enabled) {
-        diagnosticLog("ui-ps", "connect blocked: no usable route credentials=%s remote_enabled=%s",
-                      selected.credentials.has_value() ? "true" : "false",
-                      remote_enabled ? "true" : "false");
-        if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/no_route"));
+    const auto preference = source_ == PsConsoleSource::Local
+        ? ps::PsConnectionPreference::LocalOnly
+        : ps::PsConnectionPreference::RemoteOnly;
+    auto plan = ps::PsConnectionPlanner::makePlan(
+        host, ps_manager_->hasStoredPsnSession(), preference);
+    if (plan.type == ps::PsConnectionPlanType::None) {
+        diagnosticLog("ui-ps", "connect blocked by planner error=%s",
+                      plan.error.c_str());
+        if (action_status_) action_status_->setText(plan.error);
         return;
     }
-    auto route = ps::PsConsoleResolver::resolve(
-        selected, ps_manager_->hasStoredPsnSession());
-    if (route.type == ps::ResolvedRouteType::None) {
-        diagnosticLog("ui-ps", "connect blocked by resolver error=%s", route.error.c_str());
-        if (action_status_) action_status_->setText(route.error);
-        return;
+    diagnosticLog("ui-ps", "connection plan resolved type=%d",
+                  static_cast<int>(plan.type));
+    const bool requested_remote = plan.isRemote();
+    if (action_status_) {
+        action_status_->setText(ps::PsConnectionPlanner::describe(plan));
     }
-    diagnosticLog("ui-ps", "connect route resolved type=%d", static_cast<int>(route.type));
-    const bool requested_remote = route.type == ps::ResolvedRouteType::Remote;
-    if (action_status_) action_status_->setText(ps::PsConsoleResolver::routeDescription(route));
 
     // Discovery owns a UDP socket and worker thread. Streaming no longer
     // needs it, and leaving it alive competes with Chiaki session sockets in
@@ -1040,7 +1034,7 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
                   settings.width, settings.height, settings.bitrate_kbps,
                   stream::videoCodecName(settings.video_codec));
     auto controller = std::make_shared<ps::PsStreamController>(
-        selected, ps_manager_->getPsnAccessToken(), ps_manager_->getPsnAccountId(),
+        plan, ps_manager_->getPsnAccessToken(), ps_manager_->getPsnAccountId(),
         settings.width, settings.height, 60, settings.bitrate_kbps,
         settings.video_codec);
     controller->setRumbleEnabled(settings.vibration_enabled);
@@ -1048,7 +1042,7 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
     diagnosticLog("ui-ps", "pushing PsConnectActivity");
     brls::Application::pushActivity(
         new PsConnectActivity(controller, ps_manager_, requested_remote,
-            selected.nickname.empty() ? brls::getStr("lunarnx/ps/console_default") : selected.nickname),
+            host.nickname.empty() ? brls::getStr("lunarnx/ps/console_default") : host.nickname),
         brls::TransitionAnimation::NONE);
     diagnosticLog("ui-ps", "PsConnectActivity push complete");
 }

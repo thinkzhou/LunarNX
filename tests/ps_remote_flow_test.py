@@ -14,6 +14,7 @@ def ordered(source, markers):
 
 def main():
     connector = Path("src/ps/ps_remote_connector.cpp").read_text()
+    retry_policy = Path("src/ps/ps_remote_retry_policy.h").read_text()
     connector_header = Path("src/ps/ps_remote_connector.h").read_text()
     auth_manager = Path("src/ps/psn_auth_manager.cpp").read_text()
     controller = Path("src/ps/ps_stream_controller.cpp").read_text()
@@ -29,8 +30,9 @@ def main():
         "chiaki_holepunch_session_start",
         "CHIAKI_HOLEPUNCH_PORT_TYPE_CTRL",
     ]), "remote connector must follow chiaki-ng control-hole ordering")
-    require("chiaki_holepunch_upnp_discover" not in connector,
-            "Switch connector must not pull in unavailable miniupnpc symbols")
+    require("chiaki_holepunch_upnp_discover" in connector and
+            "if (err == CHIAKI_ERR_SUCCESS && attempt_profile.discover_upnp)" in connector,
+            "UPnP must be available only on the post-failure NAT compatibility path")
     require("CHIAKI_HOLEPUNCH_PORT_TYPE_DATA" not in connector,
             "remote connector must leave the data hole to ChiakiSession")
     require("chiaki_get_holepunch_sock" not in connector,
@@ -51,9 +53,22 @@ def main():
             "remote connector must select an explicit runtime network profile")
     require("chiaki_holepunch_session_set_port_guessing_socks" in connector,
             "remote connector must apply the configured NAT probe socket count")
-    require("kNativePortGuessingSockets = 64" in connector and
+    require("kPsFastNatSockets = 64" in retry_policy and
             "chiaki_holepunch_session_force_port_guessing(session, true)" in connector,
             "native Switch must retain bounded port-rewriting NAT traversal")
+    require("kPsCompatibilityNatSockets = 120" in retry_policy and
+            "kPsCompatibilityPortGuesses = 96" in retry_policy and
+            'phase == "control punch"' in retry_policy,
+            "CTRL candidate failure must enable a bounded wider NAT fallback")
+    require("chiaki_holepunch_session_get_stun_allocation" in connector and
+            "retry_policy.recordStunAllocation(random_allocation)" in connector and
+            'on_status("Preparing media channel for restrictive NAT...")' in connector,
+            "random CTRL STUN allocation must upgrade the later DATA holepunch")
+    require("UPnP is an optional candidate source" in connector and
+            "return false" not in connector.split(
+                "const ChiakiErrorCode upnp_err", 1)[1].split(
+                    "if (err == CHIAKI_ERR_SUCCESS)", 1)[0],
+            "missing router UPnP support must not abort STUN traversal")
     require("Ryubing UDP relay is unavailable with Akira Chiaki" in connector,
             "Ryubing profile must fail visibly when using unpatched Akira Chiaki")
     require("kRemoteMaxAttempts = 3" in connector and
@@ -80,7 +95,7 @@ def main():
     require("CHIAKI_EVENT_HOLEPUNCH" in session,
             "session must surface Chiaki-owned data-hole progress")
     require("connect_info_.morning" in session and
-            "console_.credentials->rp_key" in controller,
+            "plan_.credentials->rp_key" in controller,
             "LAN sessions must pass both Akira registration keys to Chiaki")
     require("CHIAKI_EVENT_LOGIN_PIN_REQUEST" in session and
             "PIN required - re-register the console" not in session,

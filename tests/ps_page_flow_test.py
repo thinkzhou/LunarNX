@@ -58,7 +58,7 @@ def main():
     require("chiaki_discovery_service_init" in discovery,
             "LAN search must actively send discovery packets")
     wakeup = manager.split("void PsManager::wakeupHost", 1)[1].split(
-        "ResolvedRoute PsManager::resolveRoute", 1)[0]
+        "PsConnectionPlan PsManager::planConnection", 1)[0]
     require("strtoull" in wakeup and
             "cred->rp_regist_key" in wakeup and
             "memcpy(&user_credential" not in wakeup,

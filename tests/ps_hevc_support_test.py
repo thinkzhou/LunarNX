@@ -31,7 +31,7 @@ def main():
     replay = Path("src/ps/ps_mock_replay_session.cpp").read_text()
     fixture = Path("tools/ps_media_replay/generate_fixture.sh").read_text()
 
-    require("console.target >= 1000000" in controller and
+    require("plan.isPs5()" in controller and
             "stream::VideoCodec::H264" in controller,
             "PS4 must force H.264 even when HEVC is selected")
     require("CHIAKI_CODEC_H265" in session and "CHIAKI_CODEC_H264" in session,

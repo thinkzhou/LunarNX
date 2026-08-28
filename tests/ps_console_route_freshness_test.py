@@ -21,7 +21,7 @@ def main() -> None:
                 LIBCXX,
                 f"-I{ROOT / 'src'}",
                 str(ROOT / "tests/ps_console_route_freshness_test.cpp"),
-                str(ROOT / "src/ps/ps_console_resolver.cpp"),
+                str(ROOT / "src/ps/ps_connection_plan.cpp"),
                 "-o",
                 str(binary),
             ],

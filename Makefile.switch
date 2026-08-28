@@ -175,7 +175,7 @@ CXX_SRCS = src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_proces
     src/ps/ps_mock_replay_session.cpp \
     src/ps/ps_stream_session.cpp src/ps/ps_stream_controller.cpp \
     src/ps/psn_auth_manager.cpp src/ps/psn_auth_utils.cpp src/ps/ps_pairing_account_codec.cpp src/ps/ps_pairing_account_store.cpp src/ps/ps_pairing_account.cpp src/ps/ps_phone_pairing_server.cpp src/ps/psn_callback_server.cpp src/ps/ps_console_repository.cpp \
-    src/ps/ps_console_resolver.cpp src/ps/ps_remote_connector.cpp \
+    src/ps/ps_connection_plan.cpp src/ps/ps_remote_connector.cpp \
     src/tools/ps_mock_lifecycle_activity.cpp \
     src/webrtc/peer_manager.cpp src/webrtc/video_rtp_jitter_buffer.cpp \
     src/webrtc/xbox_input_feedback.cpp \

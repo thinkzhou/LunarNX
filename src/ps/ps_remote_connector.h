@@ -2,6 +2,7 @@
 
 #ifdef __SWITCH__
 
+#include "ps_connection_plan.h"
 #include <netinet/in.h>
 #include <chiaki/remote/holepunch.h>
 #include <chiaki/log.h>
@@ -32,7 +33,7 @@ public:
     PsRemoteConnector(const PsRemoteConnector&) = delete;
     PsRemoteConnector& operator=(const PsRemoteConnector&) = delete;
 
-    bool connect(int console_type, const uint8_t* console_uid,
+    bool connect(const PsConnectionPlan& plan,
                  StatusCallback on_status, PsRemoteResult& result);
     void cancel();
 

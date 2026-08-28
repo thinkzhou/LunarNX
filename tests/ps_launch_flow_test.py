@@ -12,9 +12,11 @@ def main():
     controller = Path("src/ps/ps_stream_controller.h").read_text()
     session = Path("src/ps/ps_stream_session.cpp").read_text()
 
-    require("PsConsoleSource::Local" in ui and "selected.remote.reset()" in ui,
+    require("PsConsoleSource::Local" in ui and
+            "PsConnectionPreference::LocalOnly" in ui,
             "local tab must force a local route")
-    require("PsConsoleSource::Remote" in ui and "selected.local.reset()" in ui,
+    require("PsConsoleSource::Remote" in ui and
+            "PsConnectionPreference::RemoteOnly" in ui,
             "remote tab must force a PSN route")
     require("LaunchCallback" in controller and "setLaunchCallback" in controller,
             "PS controller must expose launch progress")

@@ -11,6 +11,15 @@ namespace lunar::ps {
 
 enum class PsConsoleType { Unknown, PS4, PS5 };
 enum class PsConsoleState { Unknown, Ready, Standby };
+enum class PsRemoteEndpointKind { MainPS4, DevicePS5 };
+
+constexpr int kPs5TargetThreshold = 1000000;
+constexpr int kPs4RemoteTarget = 1000;
+constexpr int kPs5RemoteTarget = 1000100;
+
+inline bool isPs5Target(int target) {
+    return target >= kPs5TargetThreshold;
+}
 
 inline std::optional<std::string> normalizeHexId(std::string_view text, size_t bytes) {
     std::string normalized;
@@ -67,6 +76,7 @@ struct PsLocalEndpoint {
 };
 
 struct PsRemoteEndpoint {
+    PsRemoteEndpointKind kind = PsRemoteEndpointKind::DevicePS5;
     std::string duid;
     std::string device_name;
     bool remoteplay_enabled = false;

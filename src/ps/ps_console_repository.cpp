@@ -14,6 +14,19 @@
 #include <cstdio>
 
 namespace lunar::ps {
+namespace {
+
+PsConsole makeMainPs4RemoteConsole() {
+    PsConsole console;
+    console.stable_id = "psn:main-ps4";
+    console.nickname = "Main PS4";
+    console.target = kPs4RemoteTarget;
+    console.remote = PsRemoteEndpoint{
+        PsRemoteEndpointKind::MainPS4, "", console.nickname, true};
+    return console;
+}
+
+} // namespace
 
 PsConsoleRepository::PsConsoleRepository(ChiakiLog* log) : log_(log) {}
 
@@ -26,6 +39,12 @@ bool PsConsoleRepository::loadPsnCache(const std::string& account_id) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         psn_consoles_.clear();
+        if (!account_id.empty()) {
+            // Sony exposes the primary PS4 as an account-scoped endpoint. It
+            // does not come from the PS5 device list and remains usable even
+            // when that cache is absent or cannot be parsed.
+            psn_consoles_.push_back(makeMainPs4RemoteConsole());
+        }
     }
     if (account_id.empty()) return false;
     FILE* file = std::fopen(lunar::get_ps_console_cache_path(), "rb");
@@ -61,12 +80,13 @@ bool PsConsoleRepository::loadPsnCache(const std::string& account_id) {
         console.stable_id = "duid:" + console.psn_duid;
         console.nickname = name->valuestring;
         console.target = CHIAKI_TARGET_PS5_1;
-        console.remote = PsRemoteEndpoint{console.psn_duid, console.nickname,
-                                           cJSON_IsTrue(enabled)};
+        console.remote = PsRemoteEndpoint{
+            PsRemoteEndpointKind::DevicePS5, console.psn_duid,
+            console.nickname, cJSON_IsTrue(enabled) != 0};
         cached.push_back(std::move(console));
     }
     cJSON_Delete(root);
-    if (cached.empty()) return false;
+    cached.push_back(makeMainPs4RemoteConsole());
     const size_t cached_count = cached.size();
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -92,7 +112,9 @@ bool PsConsoleRepository::savePsnCache(const std::string& account_id) const {
     cJSON_AddStringToObject(root, "account_id", account_id.c_str());
     cJSON* array = cJSON_CreateArray();
     for (const auto& console : consoles) {
-        if (console.psn_duid.empty() || !console.remote.has_value()) continue;
+        if (!console.remote.has_value() ||
+            console.remote->kind != PsRemoteEndpointKind::DevicePS5 ||
+            console.psn_duid.empty()) continue;
         cJSON* item = cJSON_CreateObject();
         cJSON_AddStringToObject(item, "duid", console.psn_duid.c_str());
         cJSON_AddStringToObject(item, "name", console.nickname.c_str());
@@ -251,10 +273,16 @@ bool PsConsoleRepository::fetchPsnDevices(const std::string& access_token,
         console.psn_duid = uid;
         console.nickname = name->valuestring;
         console.target = CHIAKI_TARGET_PS5_1;
-        console.remote = PsRemoteEndpoint{uid, name->valuestring, remoteplay_enabled};
+        console.remote = PsRemoteEndpoint{
+            PsRemoteEndpointKind::DevicePS5, uid,
+            name->valuestring, remoteplay_enabled};
         fetched.push_back(std::move(console));
     }
     cJSON_Delete(root);
+    // PS4 Remote Play addresses the account's Main PS4. Sony does not expose
+    // it through the PS5 DUID list; Chiaki learns its DUID from the PSN
+    // session notification after wake-up.
+    fetched.push_back(makeMainPs4RemoteConsole());
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -307,8 +335,12 @@ std::vector<PsConsole> PsConsoleRepository::getUnifiedList() const {
     for (const auto& psn : psn_consoles_) {
         auto it = std::find_if(unified.begin(), unified.end(),
             [&](const PsConsole& console) {
+                if (psn.remote.has_value() &&
+                    psn.remote->kind == PsRemoteEndpointKind::MainPS4) {
+                    return console.stable_id == psn.stable_id;
+                }
                 return !console.psn_duid.empty() &&
-                       console.psn_duid == psn.psn_duid;
+                    console.psn_duid == psn.psn_duid;
             });
         if (it != unified.end()) {
             it->remote = psn.remote;

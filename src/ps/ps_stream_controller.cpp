@@ -2,7 +2,6 @@
 
 #include "ps_stream_controller.h"
 #include "ps_media_bridge.h"
-#include "ps_console_resolver.h"
 #include "psn_auth_utils.h"
 #include "chiaki_log_adapter.h"
 #include "../diagnostics.h"
@@ -30,19 +29,19 @@ void PsStreamController::releasePendingRemoteResult() {
     remote_result_ = {};
 }
 
-PsStreamController::PsStreamController(const PsConsole& console,
+PsStreamController::PsStreamController(const PsConnectionPlan& plan,
                                         const std::string& psn_access_token,
                                         const std::string& psn_account_id,
                                         int width, int height, int fps, int bitrate_kbps,
                                         stream::VideoCodec video_codec)
-    : console_(console)
+    : plan_(plan)
     , psn_access_token_(psn_access_token)
     , psn_account_id_(psn_account_id)
     , width_(width)
     , height_(height)
     , fps_(fps)
     , bitrate_kbps_(bitrate_kbps)
-    , video_codec_(console.target >= 1000000
+    , video_codec_(plan.isPs5()
           ? video_codec : stream::VideoCodec::H264)
     , video_backend_(stream::VideoBackend::HardwareZeroCopy) {}
 
@@ -91,32 +90,26 @@ bool PsStreamController::startStream() {
     input_transition_logs_ = 0;
 
     const bool mock_replay = psMockReplayEnabled();
-    diagnosticLog("ps-controller", "video codec=%s target_ps5=%d",
+    diagnosticLog("ps-controller", "video codec=%s plan=%d target_ps5=%d",
                   stream::videoCodecName(video_codec_),
-                  console_.target >= 1000000 ? 1 : 0);
-    bool has_token = !psn_access_token_.empty();
-    ResolvedRoute route;
+                  static_cast<int>(plan_.type), plan_.isPs5() ? 1 : 0);
     if (mock_replay) {
-        route.type = ResolvedRouteType::Local;
-        route.host_addr = "mock-replay";
         diagnosticLog("ps-controller", "development mock replay selected");
-    } else {
-        route = PsConsoleResolver::resolve(console_, has_token);
     }
 
-    if (route.type == ResolvedRouteType::None) {
-        last_error_ = route.error.empty() ? "No route available" : route.error;
+    if (!mock_replay && plan_.type == PsConnectionPlanType::None) {
+        last_error_ = plan_.error.empty() ? "No route available" : plan_.error;
         setState(app::StreamState::Error, last_error_);
         return false;
     }
 
     // Remote path: punch holes
-    if (!mock_replay && route.type == ResolvedRouteType::Remote) {
+    if (!mock_replay && plan_.isRemote()) {
         setState(app::StreamState::Connecting, "Connecting via PSN...");
 
-        diagnosticLog("ps-controller", "remote target=%d ps5=%d duid=%s",
-                      console_.target, console_.target >= 1000000 ? 1 : 0,
-                      route.console_duid.c_str());
+        diagnosticLog("ps-controller", "remote target=%d ps5=%d has_uid=%d",
+                      plan_.target, plan_.isPs5() ? 1 : 0,
+                      plan_.has_console_uid ? 1 : 0);
 
         std::string account_id_bytes;
         if (!base64Decode(psn_account_id_, account_id_bytes) ||
@@ -138,19 +131,12 @@ bool PsStreamController::startStream() {
             return false;
         }
 
-        uint8_t console_uid[32]{};
-        if (!decodeDuid(route.console_duid, console_uid)) {
-            last_error_ = "PSN console ID is invalid";
-            setState(app::StreamState::Error, last_error_);
-            return false;
-        }
-
         PsRemoteConnector* connector = nullptr;
         {
             std::lock_guard<std::mutex> lock(remote_connector_mutex_);
             connector = remote_connector_.get();
         }
-        if (!connector->connect(console_.target, console_uid,
+        if (!connector->connect(plan_,
                 [this](const std::string& phase) {
                     setState(app::StreamState::Connecting, phase);
                 },
@@ -189,7 +175,7 @@ bool PsStreamController::startStream() {
         input::ButtonMappingProfile::PlayStation);
     rumble_ = std::make_unique<input::RumbleController>();
     input_mapper_ = std::make_unique<PsInputMapper>();
-    touchpad_reader_ = std::make_unique<PsTouchpadReader>(console_.target >= 1000000);
+    touchpad_reader_ = std::make_unique<PsTouchpadReader>(plan_.isPs5());
     motion_reader_ = std::make_unique<PsMotionReader>();
     if (gamepad_) gamepad_->initialize();
     if (motion_reader_) motion_reader_->initialize();
@@ -201,18 +187,17 @@ bool PsStreamController::startStream() {
 
     uint8_t regist_key[0x10]{};
     uint8_t morning[0x10]{};
-    if (!mock_replay && route.type == ResolvedRouteType::Local) {
-        if (!console_.credentials.has_value()) {
+    if (!mock_replay && plan_.isLocal()) {
+        if (!plan_.credentials.has_value()) {
             last_error_ = "Console is not paired for local play";
             setState(app::StreamState::Error, last_error_);
             return false;
         }
-        std::memcpy(regist_key, console_.credentials->rp_regist_key,
+        std::memcpy(regist_key, plan_.credentials->rp_regist_key,
                     sizeof(regist_key));
-        std::memcpy(morning, console_.credentials->rp_key, sizeof(morning));
+        std::memcpy(morning, plan_.credentials->rp_key, sizeof(morning));
     }
-    std::string host_addr = route.type == ResolvedRouteType::Local
-        ? route.host_addr : "";
+    std::string host_addr = mock_replay ? "mock-replay" : plan_.host_addr;
 
     media_->setVideoReadyCallback([this]() {
         // DROP_DIAG used to compile this writer out. Starting it before PSN
@@ -237,7 +222,7 @@ bool PsStreamController::startStream() {
             *bridge_, fps_, video_codec_);
     } else {
         session_ = std::make_unique<PsStreamSession>(
-            host_addr, regist_key, morning, console_.target,
+            host_addr, regist_key, morning, plan_.target,
             width_, height_, fps_, bitrate_kbps_, video_codec_, *bridge_);
     }
 
@@ -282,7 +267,7 @@ bool PsStreamController::startStream() {
     bool ok;
     if (mock_replay) {
         ok = mock_session_->start(std::move(callbacks));
-    } else if (route.type == ResolvedRouteType::Remote) {
+    } else if (plan_.isRemote()) {
         ok = session_->startRemote(std::move(remote_result_), std::move(callbacks));
     } else {
         ok = session_->start(std::move(callbacks));

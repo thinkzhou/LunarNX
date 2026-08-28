@@ -2,7 +2,7 @@
 
 #ifdef __SWITCH__
 
-#include "ps_console.h"
+#include "ps_connection_plan.h"
 #include "psn_auth_manager.h"
 #include "ps_remote_connector.h"
 #include "../app/stream_runtime.h"
@@ -33,7 +33,7 @@ public:
     using LaunchCallback = std::function<void(app::StreamState, const std::string&)>;
     using LoginPinCallback = std::function<void(bool incorrect)>;
 
-    PsStreamController(const PsConsole& console,
+    PsStreamController(const PsConnectionPlan& plan,
                        const std::string& psn_access_token,
                        const std::string& psn_account_id,
                        int width, int height, int fps, int bitrate_kbps,
@@ -78,7 +78,7 @@ private:
     bool requestRecoveryIDR();
     void releasePendingRemoteResult();
 
-    PsConsole console_;
+    PsConnectionPlan plan_;
     std::string psn_access_token_;
     std::string psn_account_id_;
     int width_, height_, fps_, bitrate_kbps_;

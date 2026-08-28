@@ -265,8 +265,11 @@ void PsManager::wakeupHost(const std::string& host_addr, const std::string& host
     else cb(false, chiaki_error_string(err));
 }
 
-ResolvedRoute PsManager::resolveRoute(const PsConsole& console) const {
-    return PsConsoleResolver::resolve(console, psn_auth_.hasValidToken());
+PsConnectionPlan PsManager::planConnection(
+    const PsConsole& console,
+    PsConnectionPreference preference) const {
+    return PsConnectionPlanner::makePlan(
+        console, psn_auth_.hasStoredSession(), preference);
 }
 
 } // namespace lunar::ps
