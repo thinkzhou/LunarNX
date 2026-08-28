@@ -14,12 +14,29 @@ def require(condition: bool, message: str) -> None:
 start = SOURCE.index("void StreamView::stopAndReturn()")
 end = SOURCE.index("void StreamView::setQuickMenuVisible", start)
 body = SOURCE[start:end]
-worker = body.index('startNetworkWorker(\n        "stop-stream"')
-pop = body.index("brls::Application::popActivity")
+block = body.find("brls::Application::blockInputs")
+worker = body.find('startNetworkWorker(\n        "stop-stream"')
+stop = body.find("runtime->stopStream", worker)
+sync = body.find("brls::sync", stop)
+unblock = body.find("brls::Application::unblockInputs", sync)
+pop = body.find("brls::Application::popActivity")
 
 require(
-    worker < pop and "brls::sync" not in body,
-    "StreamView navigation must not wait for background stream cleanup",
+    min(block, worker, stop, sync, unblock, pop) >= 0,
+    "StreamView stop navigation lifecycle is incomplete",
+)
+require(
+    block < worker < stop < sync < unblock < pop,
+    "StreamView must return only after background stream cleanup completes",
+)
+require(
+    "if (!alive->load()) return;" in body[unblock:pop],
+    "StreamView completion must not navigate after the activity is destroyed",
+)
+require(
+    body.count("brls::Application::unblockInputs") == 2 and
+    "if (!started)" in body[unblock:],
+    "StreamView must restore input when the stop worker cannot start",
 )
 
 print("stream exit navigation test passed")

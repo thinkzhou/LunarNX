@@ -573,22 +573,30 @@ brls::View* StreamView::createContentView() {
 
 void StreamView::stopAndReturn() {
     if (stop_started_.exchange(true)) return;
+    brls::Application::blockInputs();
     running_ = false;
     runtime_->inputRouter().setOwner(input::StreamInputOwner::Game);
     auto runtime = runtime_;
+    auto alive = alive_;
     const auto state = runtime_->getState();
     const bool report_disconnect =
         state != app::StreamState::Disconnected && state != app::StreamState::Error;
     const bool started = lunar::platform::startNetworkWorker(
-        "stop-stream", [runtime, report_disconnect]() {
+        "stop-stream", [runtime, alive, report_disconnect]() {
             runtime->stopStream(report_disconnect);
+            brls::sync([alive]() {
+                brls::Application::unblockInputs();
+                if (!alive->load()) return;
+                brls::Application::popActivity(
+                    brls::TransitionAnimation::NONE);
+            });
         });
     if (!started) {
+        brls::Application::unblockInputs();
         stop_started_ = false;
         running_ = true;
         return;
     }
-    brls::Application::popActivity(brls::TransitionAnimation::NONE);
 }
 
 void StreamView::setQuickMenuVisible(bool visible) {
