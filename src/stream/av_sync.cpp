@@ -39,6 +39,12 @@ void AVSync::updateAudioPts(uint64_t pts_ns) {
     last_audio_time_ = std::chrono::steady_clock::now();
 }
 
+void AVSync::invalidateAudioClock() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    audio_pts_ = 0;
+    have_audio_base_ = false;
+}
+
 AVSyncTiming AVSync::getVideoTiming(uint64_t frame_pts) const {
     std::lock_guard<std::mutex> lock(mutex_);
     AVSyncTiming timing;

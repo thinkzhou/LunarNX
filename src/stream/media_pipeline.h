@@ -272,6 +272,7 @@ private:
     void handleAudioFrame(const AudioFrame& frame,
                           uint32_t generation,
                           uint32_t source_epoch);
+    void openAudioStartupGateIfNeeded();
     bool submitDecodedAudio(const AudioFrame& frame,
                             uint32_t generation,
                             uint32_t source_epoch);
@@ -353,6 +354,12 @@ private:
     std::atomic<uint32_t> audio_source_epoch_{0};
     std::atomic<bool> audio_source_reset_pending_{false};
     std::atomic<uint32_t> audio_decode_epoch_{0};
+    std::atomic<AudioLatencyMode> audio_latency_mode_{
+        AudioLatencyMode::Resilient};
+    std::atomic<bool> audio_start_gate_open_{true};
+    std::atomic<bool> audio_start_primed_{true};
+    std::atomic<uint32_t> audio_startup_packets_skipped_{0};
+    bool audio_catch_up_pending_ = false;
 };
 
 } // namespace lunar::stream

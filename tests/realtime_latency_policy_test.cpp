@@ -76,17 +76,32 @@ int main() {
     const auto resilient = stream::audioBufferConfig(
         stream::AudioLatencyMode::Resilient);
     assert(realtime.audren_frames_per_buffer == 4);
-    assert(realtime.buffer_count == 4);
+    assert(realtime.buffer_count == 3);
+    assert(realtime.max_writer_wait_frames == 4);
     assert(stream::audioBufferCapacityMs(
-               stream::AudioLatencyMode::Realtime) == 80);
-    assert(balanced.audren_frames_per_buffer == 5);
+               stream::AudioLatencyMode::Realtime) == 60);
+    assert(balanced.audren_frames_per_buffer == 4);
     assert(balanced.buffer_count == 4);
+    assert(balanced.max_writer_wait_frames == 4);
     assert(stream::audioBufferCapacityMs(
-               stream::AudioLatencyMode::Balanced) == 100);
-    assert(resilient.audren_frames_per_buffer == 5);
+               stream::AudioLatencyMode::Balanced) == 80);
+    assert(resilient.audren_frames_per_buffer == 4);
     assert(resilient.buffer_count == 5);
+    assert(resilient.max_writer_wait_frames == 4);
     assert(stream::audioBufferCapacityMs(
-               stream::AudioLatencyMode::Resilient) == 125);
+               stream::AudioLatencyMode::Resilient) == 100);
+    assert(stream::audioIngressQueuePacketLimit(
+               stream::AudioLatencyMode::Realtime) == 6);
+    assert(stream::audioIngressQueuePacketLimit(
+               stream::AudioLatencyMode::Balanced) == 7);
+    assert(stream::audioIngressQueuePacketLimit(
+               stream::AudioLatencyMode::Resilient) == 7);
+    assert(stream::audioStartupPrebufferPackets(
+               stream::AudioLatencyMode::Realtime) == 3);
+    assert(stream::audioStartupPrebufferPackets(
+               stream::AudioLatencyMode::Balanced) == 3);
+    assert(stream::audioStartupPrebufferPackets(
+               stream::AudioLatencyMode::Resilient) == 4);
 
     webrtc::NetworkPathEstimate path;
     assert(app::xboxVideoPresentationMode(false, path) ==
@@ -116,7 +131,7 @@ int main() {
            stream::VideoPresentationMode::RealtimeAdaptive);
     assert(latency.video_decode_catch_up ==
            stream::VideoDecodeCatchUpMode::Realtime);
-    assert(latency.audio_latency == stream::AudioLatencyMode::Balanced);
+    assert(latency.audio_latency == stream::AudioLatencyMode::Realtime);
 
     path.quality = webrtc::NetworkPathQuality::Poor;
     path.observed_quality = webrtc::NetworkPathQuality::Poor;
@@ -143,6 +158,23 @@ int main() {
     assert(latency.mode == app::XboxLatencyMode::Recovery);
     latency = cloud_latency.observe(path, false);
     assert(latency.mode == app::XboxLatencyMode::Recovery);
+
+    app::XboxLatencyController home_latency(false);
+    latency = home_latency.state();
+    assert(latency.mode == app::XboxLatencyMode::Realtime);
+    assert(latency.audio_latency == stream::AudioLatencyMode::Realtime);
+    path.quality = webrtc::NetworkPathQuality::Poor;
+    path.observed_quality = webrtc::NetworkPathQuality::Poor;
+    ++path.sequence;
+    latency = home_latency.observe(path, false);
+    assert(latency.mode == app::XboxLatencyMode::Balanced);
+    assert(latency.audio_latency == stream::AudioLatencyMode::Balanced);
+    path.quality = webrtc::NetworkPathQuality::Good;
+    path.observed_quality = webrtc::NetworkPathQuality::Good;
+    ++path.sequence;
+    latency = home_latency.observe(path, false);
+    assert(latency.mode == app::XboxLatencyMode::Realtime);
+    assert(latency.audio_latency == stream::AudioLatencyMode::Realtime);
     assert(app::xboxAudioLatencyMode(false) ==
            stream::AudioLatencyMode::Realtime);
     assert(app::xboxAudioLatencyMode(true) ==

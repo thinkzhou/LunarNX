@@ -101,9 +101,9 @@ bool AudioPlayer::initialize(int sample_rate, int channels,
     buffer_size_ = samples_per_buffer_ * static_cast<size_t>(channels) * sizeof(int16_t);
     buffer_size_ *= audren_frames_per_buffer_;
     samples_per_buffer_ *= audren_frames_per_buffer_;
-    // Allocate the full five-buffer geometry once. Cloud Balanced and
-    // Recovery share the same 25 ms wave-buffer size and can then move between
-    // four and five active buffers without rebuilding Audren mid-stream.
+    // Allocate the full five-buffer geometry once. All latency modes share the
+    // same 20 ms wave-buffer size and can move between three, four and five
+    // active buffers without rebuilding Audren mid-stream.
     mempool_size_ = alignUp(buffer_size_ * MAX_BUFFER_COUNT,
                             AUDREN_MEMPOOL_ALIGNMENT);
     mempool_ = memalign(AUDREN_MEMPOOL_ALIGNMENT, mempool_size_);
@@ -202,9 +202,8 @@ bool AudioPlayer::setLatencyMode(AudioLatencyMode mode) {
     const auto config = audioBufferConfig(mode);
     if (initialized_ &&
         config.audren_frames_per_buffer != audren_frames_per_buffer_) {
-        // Reinterpreting live wave-buffer offsets would corrupt playback.
-        // Xbox cloud only switches Balanced <-> Resilient, which both use
-        // 25 ms buffers; home Realtime remains fixed at 20 ms.
+        // Reinterpreting live wave-buffer offsets would corrupt playback. All
+        // Xbox latency modes intentionally use the same 20 ms geometry.
         return false;
     }
     requested_latency_mode_ = mode;
@@ -315,7 +314,16 @@ size_t AudioPlayer::queuedSampleCount() {
 
 #ifdef __SWITCH__
 int AudioPlayer::freeWavebufIndex() const {
-    for (size_t i = 0; i < active_buffer_count_; i++) {
+    // A requested downshift must stop recycling descriptors outside the
+    // smaller ring. Otherwise each old descriptor is filled again as soon as
+    // it drains and tryApplyRequestedLatencyModeLocked() can never observe all
+    // of them free at once, leaving Recovery latency active indefinitely.
+    const size_t requested_count = std::min(
+        audioBufferConfig(requested_latency_mode_).buffer_count,
+        MAX_BUFFER_COUNT);
+    const size_t writable_count = std::min(active_buffer_count_,
+                                           requested_count);
+    for (size_t i = 0; i < writable_count; i++) {
         auto state = wavebufs_[i].state;
         if (state == AudioDriverWaveBufState_Free ||
             state == AudioDriverWaveBufState_Done) {
@@ -438,8 +446,8 @@ bool AudioPlayer::writeAudio(const void* data, size_t size) {
     mutexLock(&update_lock_);
     audrvUpdate(&driver_);
     mutexUnlock(&update_lock_);
-    // Expanding the ring is immediate. A recovery -> balanced downshift waits
-    // until the fifth descriptor has naturally drained, so lowering latency
+    // Expanding the ring is immediate. A downshift waits until descriptors
+    // outside the requested ring have naturally drained, so lowering latency
     // never discards already queued PCM.
     tryApplyRequestedLatencyModeLocked();
     logAudioPlayerDetail("write initial audrvUpdate done");
@@ -461,6 +469,11 @@ bool AudioPlayer::writeAudio(const void* data, size_t size) {
 
     size_t written = 0;
     size_t consecutive_waits = 0;
+    // During a downshift use the requested mode's budget. This lets the media
+    // queue's live-edge catch-up run promptly instead of spending the old,
+    // deeper mode's wait budget on audio that is already stale.
+    const size_t max_writer_wait_frames =
+        audioBufferConfig(requested_latency_mode_).max_writer_wait_frames;
     while (written < size) {
         logAudioPlayerDetail("write loop written=%zu size=%zu", written, size);
         size_t step = appendAudio(static_cast<const uint8_t*>(data) + written,
@@ -475,7 +488,14 @@ bool AudioPlayer::writeAudio(const void* data, size_t size) {
                 consecutive_waits = 0;
                 continue;
             }
-            if (consecutive_waits >= audren_frames_per_buffer_) return false;
+            if (consecutive_waits >= max_writer_wait_frames) {
+                logAudioPlayerDetail(
+                    "write drop full mode=%s waits=%zu queued=%zu",
+                    audioLatencyModeName(latency_mode_),
+                    consecutive_waits,
+                    queued_samples);
+                return false;
+            }
             logAudioPlayerDetail("write wait frame begin");
             audrenWaitFrame();
             logAudioPlayerDetail("write wait frame done");

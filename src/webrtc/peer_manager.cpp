@@ -214,8 +214,12 @@ void PeerManager::onVideoTrack(uint8_t* data,
                         frame_timestamp,
                         static_cast<unsigned long long>(arrival_ns));
                 }
+                const uint64_t anchor_arrival_ns =
+                    self->video_clock_.anchored()
+                        ? arrival_ns
+                        : self->recoverRtpClockAnchorArrivalNs("video");
                 const uint64_t mapped_timestamp =
-                    self->video_clock_.map(frame_timestamp, arrival_ns);
+                    self->video_clock_.map(frame_timestamp, anchor_arrival_ns);
                 if (self->callbacks_.on_video_frame) {
                     self->callbacks_.on_video_frame(access_unit,
                                                     access_unit_size,
@@ -280,7 +284,10 @@ void PeerManager::onAudioTrack(uint8_t* data,
                                uint32_t timestamp,
                                void* userdata) {
     auto* self = static_cast<PeerManager*>(userdata);
-    const uint64_t arrival_ns = elapsedNs(self->media_clock_start_);
+    const uint64_t callback_ns = elapsedNs(self->media_clock_start_);
+    const uint64_t arrival_ns = self->audio_clock_.anchored()
+        ? callback_ns
+        : self->recoverRtpClockAnchorArrivalNs("audio");
     const uint64_t mapped_timestamp = self->audio_clock_.map(timestamp, arrival_ns);
     int log_index = self->audio_callback_logs_.fetch_add(1);
     if (log_index < 8) {
@@ -294,6 +301,23 @@ void PeerManager::onAudioTrack(uint8_t* data,
     if (log_index < 8) {
         lunar::diagnosticLog("webrtc", "audio callback done");
     }
+}
+
+uint64_t PeerManager::recoverRtpClockAnchorArrivalNs(const char* track) const {
+    const uint64_t callback_ns = elapsedNs(media_clock_start_);
+    PeerConnectionMediaStats stats = {};
+    peer_connection_get_media_stats(pc_, &stats);
+    const uint64_t arrival_ns = recoverQueuedRtpArrivalNs(
+        callback_ns, stats.rtp_queue_oldest_age_ms);
+    lunar::diagnosticLog(
+        "webrtc-clock",
+        "%s anchor callback_ns=%llu queue_age_ms=%u arrival_ns=%llu depth=%u",
+        track ? track : "unknown",
+        static_cast<unsigned long long>(callback_ns),
+        stats.rtp_queue_oldest_age_ms,
+        static_cast<unsigned long long>(arrival_ns),
+        stats.rtp_queue_depth);
+    return arrival_ns;
 }
 
 void PeerManager::onDataChannelMessage(char* msg, size_t len, void* userdata, uint16_t sid) {

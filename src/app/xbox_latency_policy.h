@@ -130,7 +130,10 @@ private:
                     : stream::VideoPresentationMode::BufferedFifo;
             result.video_decode_catch_up =
                 stream::VideoDecodeCatchUpMode::Realtime;
-            result.audio_latency = stream::AudioLatencyMode::Realtime;
+            result.audio_latency =
+                mode_ == XboxLatencyMode::Realtime
+                    ? stream::AudioLatencyMode::Realtime
+                    : stream::AudioLatencyMode::Balanced;
             return result;
         }
         result.video_presentation =
@@ -141,10 +144,17 @@ private:
             mode_ == XboxLatencyMode::Realtime
                 ? stream::VideoDecodeCatchUpMode::Realtime
                 : stream::VideoDecodeCatchUpMode::Resilient;
-        result.audio_latency =
-            mode_ == XboxLatencyMode::Recovery
-                ? stream::AudioLatencyMode::Resilient
-                : stream::AudioLatencyMode::Balanced;
+        switch (mode_) {
+            case XboxLatencyMode::Realtime:
+                result.audio_latency = stream::AudioLatencyMode::Realtime;
+                break;
+            case XboxLatencyMode::Balanced:
+                result.audio_latency = stream::AudioLatencyMode::Balanced;
+                break;
+            case XboxLatencyMode::Recovery:
+                result.audio_latency = stream::AudioLatencyMode::Resilient;
+                break;
+        }
         return result;
     }
 

@@ -154,6 +154,8 @@ class AudioPolicy:
     buffer_ms: int
     buffers: int
     max_writer_wait_ms: int
+    ingress_packets: int = 512
+    startup_packets: int = 1
 
     @property
     def capacity_ms(self) -> int:
@@ -164,18 +166,98 @@ class AudioPolicy:
 class AudioScenario:
     name: str
     recovery_gap_ms: int = 0
+    periodic_gap_ms: int = 0
+    periodic_interval_ms: int = 0
 
 
 @dataclass
 class AudioResult:
-    queue_ms: list[float]
+    hardware_queue_ms: list[float]
+    total_backlog_ms: list[float]
     underrun_ms: int
     dropped_ms: int
+    startup_skipped_ms: int
+    live_edge_resets: int
 
 
-OLD_AUDIO = AudioPolicy("old", 25, 5, 25)
-NEW_BALANCED_AUDIO = AudioPolicy("new", 25, 4, 25)
-NEW_RECOVERY_AUDIO = AudioPolicy("new-recovery", 25, 5, 25)
+@dataclass(frozen=True)
+class AudioStrategy:
+    name: str
+    scope: str
+    realtime: AudioPolicy
+    balanced: AudioPolicy
+    recovery: AudioPolicy
+    startup_gate: bool = False
+    drain_downshift: bool = False
+    preserve_hardware_on_catchup: bool = False
+
+
+@dataclass(frozen=True)
+class AvSyncScenario:
+    name: str
+    callback_skew_ms: float
+    queued_audio_ms: float
+    corrected_arrival_skew_ms: float
+    new_audio_ms: float
+    base_video_ms: float = 15.0
+
+
+@dataclass(frozen=True)
+class AvSyncResult:
+    clock_error_ms: float
+    audible_skew_ms: float
+    video_latency_ms: float
+    audio_latency_ms: float
+    presentation_hold_ms: float
+
+
+def run_av_sync(scenario: AvSyncScenario, fixed: bool) -> AvSyncResult:
+    if not fixed:
+        audio_latency = scenario.queued_audio_ms
+        return AvSyncResult(
+            scenario.callback_skew_ms,
+            abs(audio_latency - scenario.base_video_ms),
+            scenario.base_video_ms,
+            audio_latency,
+            0.0)
+
+    # The fixed mapper subtracts libpeer's recorded queue age from each first
+    # callback. Startup audio is gated until video exists, so only the bounded
+    # hardware queue remains. Do not delay the two-slot video handoff to erase
+    # the final few milliseconds of skew: that can starve presentation.
+    clock_error = scenario.corrected_arrival_skew_ms
+    audio_latency = scenario.new_audio_ms
+    hold = 0.0
+    video_latency = scenario.base_video_ms
+    return AvSyncResult(
+        clock_error,
+        abs(audio_latency - video_latency),
+        video_latency,
+        audio_latency,
+        hold)
+
+
+OLD_HOME_AUDIO = AudioPolicy("home-old", 20, 4, 20)
+OLD_CLOUD_AUDIO = AudioPolicy("cloud-old", 25, 4, 25)
+OLD_CLOUD_RECOVERY_AUDIO = AudioPolicy("cloud-old-recovery", 25, 5, 25)
+NEW_REALTIME_AUDIO = AudioPolicy(
+    "new-realtime", 20, 3, 20, ingress_packets=6, startup_packets=3)
+NEW_BALANCED_AUDIO = AudioPolicy(
+    "new-balanced", 20, 4, 20, ingress_packets=7, startup_packets=3)
+NEW_RECOVERY_AUDIO = AudioPolicy(
+    "new-recovery", 20, 5, 20, ingress_packets=7, startup_packets=4)
+
+HOME_OLD = AudioStrategy(
+    "home-old", "home", OLD_HOME_AUDIO, OLD_HOME_AUDIO, OLD_HOME_AUDIO)
+HOME_NEW = AudioStrategy(
+    "home-new", "home", NEW_REALTIME_AUDIO,
+    NEW_BALANCED_AUDIO, NEW_BALANCED_AUDIO, True, True, True)
+CLOUD_OLD = AudioStrategy(
+    "cloud-old", "cloud", OLD_CLOUD_AUDIO,
+    OLD_CLOUD_AUDIO, OLD_CLOUD_RECOVERY_AUDIO)
+CLOUD_NEW = AudioStrategy(
+    "cloud-new", "cloud", NEW_REALTIME_AUDIO,
+    NEW_BALANCED_AUDIO, NEW_RECOVERY_AUDIO, True, True, True)
 
 
 @dataclass
@@ -297,73 +379,207 @@ def run_decode_catchup(scenario: DecodeCatchUpScenario,
         latest_present_delay_ms=latest_delay_ms)
 
 
-def audio_release_times(duration_ms: int, recovery_gap_ms: int) -> list[int]:
+def audio_release_times(duration_ms: int,
+                        scenario: AudioScenario) -> list[int]:
     packet_ms = 20
     packet_count = duration_ms // packet_ms
     release: list[int] = []
     recovery_until = -1
     for packet in range(packet_count):
         nominal = max(0, (packet - 4) * packet_ms)
-        if packet == 500 and recovery_gap_ms:
-            recovery_until = nominal + recovery_gap_ms
+        if packet == 500 and scenario.recovery_gap_ms:
+            recovery_until = nominal + scenario.recovery_gap_ms
         if recovery_until >= 0:
             nominal = max(nominal, recovery_until)
             if packet * packet_ms >= recovery_until + 80:
                 recovery_until = -1
+        if (scenario.periodic_gap_ms and
+                scenario.periodic_interval_ms > 0):
+            episode = nominal // scenario.periodic_interval_ms
+            if episode > 0:
+                episode_start = episode * scenario.periodic_interval_ms
+                if nominal < episode_start + scenario.periodic_gap_ms:
+                    nominal = episode_start + scenario.periodic_gap_ms
         release.append(nominal)
     return release
 
 
-def run_audio(policy: AudioPolicy,
-              scenario: AudioScenario,
-              recovery_policy: AudioPolicy | None = None) -> AudioResult:
+def requested_audio_policy(strategy: AudioStrategy,
+                           scenario: AudioScenario,
+                           now: int) -> AudioPolicy:
+    if strategy.scope == "home":
+        if not scenario.recovery_gap_ms:
+            return strategy.realtime
+        # Home switches to Balanced on the poor/recovery observation, then
+        # returns to Realtime on the first clean one-second path window.
+        recovery_end = 10_000 + scenario.recovery_gap_ms + 1_000
+        return (strategy.balanced
+                if 9_900 <= now < recovery_end else strategy.realtime)
+
+    # Cloud starts Balanced. Eight clean estimator windows promote it to
+    # Realtime; Recovery needs five clean windows to fall back to Balanced and
+    # another eight to reach Realtime again.
+    if not scenario.recovery_gap_ms:
+        return strategy.balanced if now < 8_000 else strategy.realtime
+    recovery_end = 10_000 + scenario.recovery_gap_ms + 5_000
+    if 9_900 <= now < recovery_end:
+        return strategy.recovery
+    if now < 8_000 or now < recovery_end + 8_000:
+        return strategy.balanced
+    return strategy.realtime
+
+
+def run_audio(strategy: AudioStrategy,
+              scenario: AudioScenario) -> AudioResult:
     duration_ms = 30_000
-    releases = audio_release_times(duration_ms, scenario.recovery_gap_ms)
+    releases = audio_release_times(duration_ms, scenario)
     arrivals: deque[int] = deque(releases)
     waiting: deque[int] = deque()
     queued = 0
-    queue_values: list[float] = []
+    hardware_values: list[float] = []
+    backlog_values: list[float] = []
     underrun = 0
     dropped = 0
+    startup_skipped = 0
+    live_edge_resets = 0
     started = False
-    recovery_capacity_active = False
+    ever_started = False
+    primed = not strategy.startup_gate
+    writer_wait_ms = 0
+    active_policy = requested_audio_policy(strategy, scenario, 0)
     for now in range(duration_ms):
-        active_policy = policy
-        if recovery_policy is not None and scenario.recovery_gap_ms:
-            # The path/recovery watchdog enters resilient mode as soon as the
-            # packet gap is observed, then keeps it for five clean windows.
-            recovery_start = 9_900
-            recovery_end = 10_000 + scenario.recovery_gap_ms + 5_000
-            if recovery_start <= now < recovery_end:
-                recovery_capacity_active = True
-            elif (recovery_capacity_active and
-                  (queued > policy.capacity_ms or waiting)):
-                # A live player cannot hide a still-queued fifth wave buffer.
-                # Let it drain before reducing the active ring from five to
-                # four; otherwise the policy change itself drops audio.
-                recovery_capacity_active = True
-            else:
-                recovery_capacity_active = False
-            if recovery_capacity_active:
-                active_policy = recovery_policy
+        requested_policy = requested_audio_policy(strategy, scenario, now)
         while arrivals and arrivals[0] <= now:
-            waiting.append(arrivals.popleft())
-        while waiting and queued + 20 <= active_policy.capacity_ms:
-            waiting.popleft()
-            queued += 20
-            started = True
-        while (waiting and
-               now - waiting[0] > active_policy.max_writer_wait_ms):
-            waiting.popleft()
-            dropped += 20
-        if started:
+            release = arrivals.popleft()
+            if strategy.startup_gate and release == 0:
+                startup_skipped += 20
+                continue
+            waiting.append(release)
+            if len(waiting) > requested_policy.ingress_packets:
+                newest = waiting[-1]
+                dropped += (len(waiting) - 1) * 20
+                waiting.clear()
+                waiting.append(newest)
+                if not strategy.preserve_hardware_on_catchup:
+                    queued = 0
+                    started = False
+                primed = strategy.preserve_hardware_on_catchup
+                writer_wait_ms = 0
+                live_edge_resets += 1
+        if (not primed and
+                len(waiting) >= requested_policy.startup_packets):
+            primed = True
+        if started and now > 0:
             if queued > 0:
                 queued -= 1
+        if (ever_started and queued == 0 and
+                1_000 <= now < duration_ms - 200):
+            underrun += 1
+        if requested_policy.capacity_ms >= active_policy.capacity_ms:
+            active_policy = requested_policy
+        elif queued <= requested_policy.capacity_ms:
+            # writeAudio asks Audren for fresh descriptor state before trying
+            # the downshift, so apply this after the millisecond of playback.
+            active_policy = requested_policy
+        # Model the serial audio worker, including writeAudio's bounded Audren
+        # wait. A requested downshift stops recycling descriptors outside the
+        # smaller ring, allowing the old ring to drain instead of remaining
+        # permanently full. Realtime then gives it 5 ms before shedding stale
+        # work; Balanced/Recovery tolerate one 20 ms Opus period.
+        blocked = False
+        while primed and waiting:
+            write_capacity_ms = active_policy.capacity_ms
+            if strategy.drain_downshift:
+                write_capacity_ms = min(write_capacity_ms,
+                                        requested_policy.capacity_ms)
+            if queued + 20 <= write_capacity_ms:
+                waiting.popleft()
+                queued += 20
+                writer_wait_ms = 0
+                started = True
+                ever_started = True
+                continue
+            wait_policy = (requested_policy if strategy.drain_downshift
+                           else active_policy)
+            if writer_wait_ms >= wait_policy.max_writer_wait_ms:
+                waiting.popleft()
+                dropped += 20
+                writer_wait_ms = 0
+                continue
+            blocked = True
+            break
+        if blocked:
+            writer_wait_ms += 1
+        elif not waiting:
+            writer_wait_ms = 0
+        # Exclude startup prebuffering and the synthetic source's finite tail.
+        if 1_000 <= now < duration_ms - 200:
+            hardware_values.append(float(queued))
+            backlog_values.append(float(queued + len(waiting) * 20))
+    return AudioResult(hardware_values, backlog_values, underrun, dropped,
+                       startup_skipped, live_edge_resets)
+
+
+@dataclass(frozen=True)
+class PresentationGateResult:
+    presented_fps: float
+    maximum_gap_ms: float
+    dropped_per_second: float
+
+
+def run_presentation_gate(delay_ms: float,
+                          rejected_gate: bool,
+                          duration_ms: int = 10_000) -> PresentationGateResult:
+    """Model render() handoff immediately before present() at 60 Hz.
+
+    The rejected implementation attached an A/V-clock release deadline to each
+    frame in the two-slot renderer queue. When a new frame arrived in the same
+    UI iteration that the head became ready, enqueue replaced that head before
+    present could consume it. The fixed policy keeps A/V timing out of this
+    bounded latest-frame handoff.
+    """
+    frame_period_ms = 1000.0 / SOURCE_FPS
+    pending: deque[tuple[float, float]] = deque()
+    next_frame_ms = 0.0
+    tick_ms = 0.0
+    presented_at: list[float] = []
+    dropped = 0
+    while tick_ms < duration_ms:
+        while next_frame_ms <= tick_ms + 1e-9:
+            release_ms = (next_frame_ms + delay_ms
+                          if rejected_gate else 0.0)
+            item = (next_frame_ms, release_ms)
+            if len(pending) == 2:
+                if rejected_gate and tick_ms < pending[0][1]:
+                    pending[-1] = item
+                else:
+                    pending.popleft()
+                    pending.append(item)
+                dropped += 1
             else:
-                underrun += 1
-        if now >= 1000:
-            queue_values.append(float(queued))
-    return AudioResult(queue_values, underrun, dropped)
+                pending.append(item)
+            next_frame_ms += frame_period_ms
+
+        head_ready = (pending and
+                      (not rejected_gate or
+                       tick_ms + 1e-9 >= pending[0][1]))
+        if head_ready:
+            while (len(pending) > 1 and
+                   (not rejected_gate or
+                    tick_ms + 1e-9 >= pending[1][1])):
+                pending.popleft()
+                dropped += 1
+            pending.popleft()
+            presented_at.append(tick_ms)
+        tick_ms += frame_period_ms
+
+    gaps = [new - old for old, new in
+            zip(presented_at, presented_at[1:])]
+    seconds = duration_ms / 1000.0
+    return PresentationGateResult(
+        presented_fps=len(presented_at) / seconds,
+        maximum_gap_ms=max(gaps) if gaps else duration_ms,
+        dropped_per_second=dropped / seconds)
 
 
 def main() -> None:
@@ -429,28 +645,68 @@ def main() -> None:
 
     audio_scenarios = [
         AudioScenario("clean"),
+        AudioScenario("jitter_30_every_2s", periodic_gap_ms=30,
+                      periodic_interval_ms=2_000),
+        AudioScenario("jitter_50_every_5s", periodic_gap_ms=50,
+                      periodic_interval_ms=5_000),
         AudioScenario("recovery_gap_50", 50),
         AudioScenario("recovery_gap_90", 90),
         AudioScenario("recovery_gap_150", 150),
+        AudioScenario("recovery_gap_250", 250),
     ]
     print("\nAudio A/B (20 ms Opus, five-packet startup burst)")
-    print("scenario          policy capacity queueAvg queueP95 underrun dropped")
+    print("scenario          policy      hwAvg  hwP95 totalAvg totalP95 "
+          "steadyP95 underrun dropped startupSkip catchup")
     audio_measurements: dict[tuple[str, str], AudioResult] = {}
+    audio_strategies = (HOME_OLD, HOME_NEW, CLOUD_OLD, CLOUD_NEW)
     for scenario in audio_scenarios:
-        for policy, recovery_policy in (
-                (OLD_AUDIO, None),
-                (NEW_BALANCED_AUDIO, NEW_RECOVERY_AUDIO)):
-            result = run_audio(policy, scenario, recovery_policy)
-            audio_measurements[(scenario.name, policy.name)] = result
-            capacity = (f"{policy.capacity_ms}->{recovery_policy.capacity_ms}"
-                        if recovery_policy is not None and
-                        scenario.recovery_gap_ms else
-                        str(policy.capacity_ms))
+        for strategy in audio_strategies:
+            result = run_audio(strategy, scenario)
+            audio_measurements[(scenario.name, strategy.name)] = result
             print(
-                f"{scenario.name:<17} {policy.name:<6} "
-                f"{capacity:>8} {mean(result.queue_ms):8.1f} "
-                f"{percentile(result.queue_ms, 0.95):8.1f} "
-                f"{result.underrun_ms:8d} {result.dropped_ms:7d}")
+                f"{scenario.name:<17} {strategy.name:<9} "
+                f"{mean(result.hardware_queue_ms):6.1f} "
+                f"{percentile(result.hardware_queue_ms, 0.95):6.1f} "
+                f"{mean(result.total_backlog_ms):8.1f} "
+                f"{percentile(result.total_backlog_ms, 0.95):8.1f} "
+                f"{percentile(result.total_backlog_ms[-6_000:], 0.95):9.1f} "
+                f"{result.underrun_ms:8d} {result.dropped_ms:7d} "
+                f"{result.startup_skipped_ms:11d} "
+                f"{result.live_edge_resets:7d}")
+
+    av_scenarios = [
+        AvSyncScenario("clean_lan", 5.0, 80.0, 5.0, 60.0),
+        AvSyncScenario("startup_300", 300.0, 380.0, 7.0, 60.0),
+        AvSyncScenario("recorded_900", 900.0, 980.0, 8.0, 60.0),
+        AvSyncScenario("recovery_150", 150.0, 250.0, 15.0, 100.0),
+    ]
+    print("\nA/V startup/recovery A/B (queue-age anchors + live-edge audio)")
+    print("scenario          policy clockErr avSkew videoLatency audioLatency hold")
+    av_measurements: dict[tuple[str, str], AvSyncResult] = {}
+    for scenario in av_scenarios:
+        for label, fixed in (("old", False), ("new", True)):
+            result = run_av_sync(scenario, fixed)
+            av_measurements[(scenario.name, label)] = result
+            print(
+                f"{scenario.name:<17} {label:<6} "
+                f"{result.clock_error_ms:8.1f} "
+                f"{result.audible_skew_ms:6.1f} "
+                f"{result.video_latency_ms:12.1f} "
+                f"{result.audio_latency_ms:12.1f} "
+                f"{result.presentation_hold_ms:5.1f}")
+
+    print("\nRenderer A/V-gate regression (60 fps render-before-present)")
+    print("delayMs policy   fps maxGap drops/s")
+    presentation_measurements: dict[
+        tuple[float, str], PresentationGateResult] = {}
+    for delay_ms in (0.0, 20.0, 40.0, 80.0, 200.0):
+        for label, rejected_gate in (("rejected", True), ("fixed", False)):
+            result = run_presentation_gate(delay_ms, rejected_gate)
+            presentation_measurements[(delay_ms, label)] = result
+            print(f"{delay_ms:7.1f} {label:<8} "
+                  f"{result.presented_fps:5.1f} "
+                  f"{result.maximum_gap_ms:6.1f} "
+                  f"{result.dropped_per_second:7.1f}")
 
     recorded_old = measurements[("recorded_home", "old")]
     recorded_new = measurements[("recorded_home", "new")]
@@ -477,13 +733,62 @@ def main() -> None:
     cloud_jitter_old = catchup_measurements[("cloud_jitter_50", "old")]
     cloud_jitter_new = catchup_measurements[("cloud_jitter_50", "new")]
     assert cloud_jitter_new == cloud_jitter_old
-    for scenario_name in ("recovery_gap_50", "recovery_gap_90",
-                          "recovery_gap_150"):
-        assert (audio_measurements[(scenario_name, "new")].underrun_ms <=
-                audio_measurements[(scenario_name, "old")].underrun_ms)
-        assert (audio_measurements[(scenario_name, "new")].dropped_ms <=
-                audio_measurements[(scenario_name, "old")].dropped_ms)
-    assert NEW_BALANCED_AUDIO.capacity_ms < OLD_AUDIO.capacity_ms
+    for scope in ("home", "cloud"):
+        old_clean = audio_measurements[("clean", f"{scope}-old")]
+        new_clean = audio_measurements[("clean", f"{scope}-new")]
+        assert mean(new_clean.hardware_queue_ms) + 15.0 < \
+            mean(old_clean.hardware_queue_ms)
+        assert mean(new_clean.total_backlog_ms) + 15.0 < \
+            mean(old_clean.total_backlog_ms)
+        assert percentile(new_clean.total_backlog_ms[-6_000:], 0.95) + 15.0 < \
+            percentile(old_clean.total_backlog_ms[-6_000:], 0.95)
+        assert new_clean.underrun_ms == old_clean.underrun_ms == 0
+        # Startup packets received before the first video frame are skipped,
+        # so they never become audible latency after the picture appears.
+        assert old_clean.dropped_ms == 0
+        # Cloud intentionally sheds one 20 ms packet when its clean-window
+        # policy contracts Balanced (60 ms) to Realtime (40 ms). Home starts
+        # at Realtime and does not need that one-time timeline contraction.
+        assert new_clean.dropped_ms <= (20 if scope == "cloud" else 0)
+        assert new_clean.startup_skipped_ms == 100
+        for scenario_name in ("recovery_gap_50", "recovery_gap_90",
+                              "recovery_gap_150", "recovery_gap_250"):
+            old = audio_measurements[(scenario_name, f"{scope}-old")]
+            new = audio_measurements[(scenario_name, f"{scope}-new")]
+            scenario_gap_ms = int(scenario_name.rsplit("_", 1)[1])
+            # The 60 ms realtime ring keeps one extra Opus packet of scheduling
+            # tolerance while remaining below the old 80/100 ms buffering.
+            # Longer stalls may still shed stale recovered packets.
+            assert new.underrun_ms <= old.underrun_ms + 80
+            assert new.dropped_ms <= scenario_gap_ms + 40
+            assert mean(new.total_backlog_ms) + 5.0 < \
+                mean(old.total_backlog_ms)
+            steady_limit = 120.0
+            assert percentile(new.total_backlog_ms[-6_000:], 0.95) <= \
+                steady_limit
+        for scenario_name in ("jitter_30_every_2s", "jitter_50_every_5s"):
+            old = audio_measurements[(scenario_name, f"{scope}-old")]
+            new = audio_measurements[(scenario_name, f"{scope}-new")]
+            assert new.underrun_ms <= old.underrun_ms + 20
+            assert new.dropped_ms == old.dropped_ms
+    assert NEW_REALTIME_AUDIO.capacity_ms < OLD_HOME_AUDIO.capacity_ms
+    assert NEW_REALTIME_AUDIO.capacity_ms < OLD_CLOUD_AUDIO.capacity_ms
+    recorded_av_old = av_measurements[("recorded_900", "old")]
+    recorded_av_new = av_measurements[("recorded_900", "new")]
+    assert recorded_av_old.clock_error_ms >= 800.0
+    assert recorded_av_new.clock_error_ms <= 10.0
+    assert recorded_av_old.audible_skew_ms >= 800.0
+    assert recorded_av_new.audible_skew_ms <= 50.0
+    for scenario in av_scenarios:
+        new = av_measurements[(scenario.name, "new")]
+        assert new.audible_skew_ms <= 90.0
+        assert new.video_latency_ms == scenario.base_video_ms
+        assert new.presentation_hold_ms == 0.0
+    assert presentation_measurements[(20.0, "rejected")].presented_fps < 10.0
+    for delay_ms in (0.0, 20.0, 40.0, 80.0, 200.0):
+        fixed = presentation_measurements[(delay_ms, "fixed")]
+        assert fixed.presented_fps >= 59.9
+        assert fixed.maximum_gap_ms <= FRAME_MS + 0.1
     print("\nAll realtime latency A/B assertions passed")
 
 

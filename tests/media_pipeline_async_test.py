@@ -157,6 +157,9 @@ def main():
             "frame.timestamp" in frame_handler and
             "recordDecodedCatchUpSuppressed" in frame_handler,
             "Catch-up frames must match delayed decoder output by timestamp")
+    require("successfulPresentCount() > 0" in frame_handler and
+            "audio_start_gate_open_.store(true" not in frame_handler,
+            "Hardware audio must not start merely because a frame was queued")
     require("pre_copy_admission" in impl and
             impl.index("pre_copy_admission") <
             impl.index("packet.data.assign(data, data + len);"),
@@ -185,6 +188,9 @@ def main():
             "video_renderer_recovery_pending_.exchange(" in present_body and
             "false, std::memory_order_acq_rel" in present_body,
             "a late successful present must clear stale renderer recovery state")
+    require("successful_present_after > successful_present_before" in
+            present_body and "openAudioStartupGateIfNeeded()" in present_body,
+            "Xbox audio must start only after the first successful presentation")
 
     audio_handler = method_body(
         impl,
@@ -203,6 +209,7 @@ def main():
     require("audio_source_epoch_.fetch_add" in source_reset and
             "audio_queue_.clear()" in source_reset and
             "decoded_audio_queue_.clear()" in source_reset and
+            "audio_start_gate_open_.store(false" in source_reset and
             "audio_queue_cv_.notify_one()" in impl,
             "A fresh media source must clear queued audio and wake its worker")
     audio_worker = method_body(impl, "void MediaPipeline::audioWorkerLoop()")
@@ -211,6 +218,22 @@ def main():
             "audio_player_->flush()" in audio_worker and
             "source_epoch" in audio_worker,
             "The audio worker must reset reorder, decoder, and playback state")
+    catchup_start = audio_worker.index("if (catch_up_audio)")
+    catchup_end = audio_worker.index("if (have_decoded)", catchup_start)
+    catchup = audio_worker[catchup_start:catchup_end]
+    require("reorder.reset()" in catchup and
+            "audio_decoder_->reset()" in catchup and
+            "audio_player_->flush()" not in catchup and
+            "invalidateAudioClock" not in catchup,
+            "Live-edge catch-up must reset encoded state without flushing queued PCM")
+    require("!reset_audio && !catch_up_audio" in audio_worker,
+            "Catch-up must run before the worker removes another queued packet")
+    enqueue_audio = method_body(
+        impl,
+        "bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,")
+    require("audio_catch_up_pending_ = true" in enqueue_audio and
+            "audio_start_primed_.store(true" in enqueue_audio,
+            "Live-edge catch-up must resume the retained newest packet immediately")
 
     initialize_body = method_body(
         impl,

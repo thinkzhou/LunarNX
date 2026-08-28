@@ -11,7 +11,10 @@ def require(condition, message):
 def main():
     makefile = Path("Makefile.switch").read_text()
     cmake = Path("CMakeLists.txt").read_text()
-    build_script = Path("tools/chiaki_switch/build_in_docker.sh").read_text()
+    docker_build_script = Path(
+        "tools/chiaki_switch/build_in_docker.sh").read_text()
+    container_build_script = Path(
+        "tools/chiaki_switch/build_in_container.sh").read_text()
     stun_patch = Path("tools/chiaki_switch/lunarnx-chiaki-stun-order.patch").read_text()
     reliability_patch = Path("tools/chiaki_switch/lunarnx-chiaki-holepunch-reliability.patch").read_text()
     rtt_patch = Path("tools/chiaki_switch/lunarnx-chiaki-stream-rtt.patch").read_text()
@@ -31,10 +34,11 @@ def main():
             "unpatched Akira curl handles must inherit LunarNX Switch TLS policy")
     require("CHIAKI_LIB_ENABLE_LIBNX_CRYPTO" in makefile,
             "Chiaki consumers must use the library's public crypto ABI define")
-    require("lunarnx-chiaki-stun-order.patch" in build_script and
-            "lunarnx-chiaki-holepunch-reliability.patch" in build_script and
-            "lunarnx-chiaki-stream-rtt.patch" in build_script and
-            "git -C \"$src\" apply" in build_script,
+    require("build_in_container.sh" in docker_build_script and
+            "lunarnx-chiaki-stun-order.patch" in container_build_script and
+            "lunarnx-chiaki-holepunch-reliability.patch" in container_build_script and
+            "lunarnx-chiaki-stream-rtt.patch" in container_build_script and
+            "git -C \"$src\" apply" in container_build_script,
             "Switch Chiaki build must apply focused reliability patches")
     require("first_send_ms" in rtt_patch and
             "event.data_ack.rtt_ms" in rtt_patch and

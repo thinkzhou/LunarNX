@@ -23,6 +23,7 @@ public:
     void start();
     void updateVideoPts(uint64_t pts_ns);
     void updateAudioPts(uint64_t pts_ns);
+    void invalidateAudioClock();
     AVSyncTiming getVideoTiming(uint64_t frame_pts) const;
     int64_t getVideoDelayNs(uint64_t frame_pts) const;
     void reset();

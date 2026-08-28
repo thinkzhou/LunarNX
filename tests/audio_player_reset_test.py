@@ -37,6 +37,19 @@ def main() -> None:
     assert "if (!audrvVoiceAddWaveBuf" in append
     assert "wave-buffer enqueue failed" in append
 
+    free_start = SOURCE.index("int AudioPlayer::freeWavebufIndex() const")
+    free_end = SOURCE.index("uint32_t AudioPlayer::queuedWavebufCount() const",
+                            free_start)
+    free_wavebuf = SOURCE[free_start:free_end]
+    assert "requested_latency_mode_" in free_wavebuf
+    assert "std::min(active_buffer_count_," in free_wavebuf
+
+    write_start = SOURCE.index("bool AudioPlayer::writeAudio")
+    write_end = SOURCE.index("void AudioPlayer::setVolume", write_start)
+    write = SOURCE[write_start:write_end]
+    assert ("audioBufferConfig(requested_latency_mode_)"
+            ".max_writer_wait_frames" in write)
+
     print("audio player reset regression checks passed")
 
 

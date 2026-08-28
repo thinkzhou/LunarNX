@@ -85,6 +85,13 @@ require('dropDiagnosticLog(\n                "ps-input"' in PS_CONTROLLER and
 require("startDropDiagnosticWriter()" in PS_CONTROLLER and
         "stopDropDiagnosticWriter()" in PS_CONTROLLER,
         "PS sessions must own the asynchronous diagnostic writer lifecycle")
+ps_writer_start = PS_CONTROLLER.index("startDropDiagnosticWriter()")
+ps_remote_connect = PS_CONTROLLER.index("connector->connect(")
+ps_video_ready_callback = PS_CONTROLLER.index("media_->setVideoReadyCallback(")
+require(ps_writer_start > ps_remote_connect and
+        ps_writer_start > ps_video_ready_callback,
+        "PS diagnostics must not consume a Switch thread until the remote "
+        "session has connected and delivered its first displayable frame")
 require("std::shared_lock<std::shared_mutex> operation_lock(stream_operation_mutex_)" in
         PS_CONTROLLER,
         "input and presentation must share lifetime protection without blocking each other")

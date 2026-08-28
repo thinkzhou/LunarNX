@@ -335,6 +335,7 @@ private:
                              uint16_t sequence,
                              uint32_t timestamp,
                              void* userdata);
+    uint64_t recoverRtpClockAnchorArrivalNs(const char* track) const;
     void handleVideoJitterRecovery(bool reset_decoder) noexcept;
     static void onDataChannelMessage(char* msg, size_t len, void* userdata, uint16_t sid);
 };

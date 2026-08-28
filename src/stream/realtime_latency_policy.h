@@ -91,26 +91,58 @@ enum class AudioLatencyMode : uint8_t {
 struct AudioBufferConfig {
     size_t audren_frames_per_buffer = 5;
     size_t buffer_count = 5;
+    size_t max_writer_wait_frames = 5;
 };
 
 constexpr AudioBufferConfig audioBufferConfig(AudioLatencyMode mode) {
-    // One Audren frame is 5 ms at 48 kHz. The realtime geometry is aligned to
-    // Xbox's common 20 ms Opus packet duration and caps hardware buffering at
-    // 80 ms. The resilient geometry retains the established 125 ms capacity.
+    // One Audren frame is 5 ms at 48 kHz. Keep every mode aligned to Xbox's
+    // common 20 ms Opus packet duration so latency changes only grow or shrink
+    // the live descriptor ring; changing wave-buffer geometry mid-stream would
+    // reinterpret offsets into the Audren memory pool. Normal playback uses a
+    // 60 ms ring, while degraded paths can expand to 80 or 100 ms without
+    // rebuilding the audio device. Every mode tolerates one 20 ms Opus period
+    // of writer scheduling jitter before shedding stale burst audio. The old
+    // 40 ms/two-buffer realtime ring underruns on routine 30--50 ms stalls.
     switch (mode) {
         case AudioLatencyMode::Realtime:
-            return AudioBufferConfig{4, 4};
+            return AudioBufferConfig{4, 3, 4};
         case AudioLatencyMode::Balanced:
-            return AudioBufferConfig{5, 4};
+            return AudioBufferConfig{4, 4, 4};
         case AudioLatencyMode::Resilient:
-            return AudioBufferConfig{5, 5};
+            return AudioBufferConfig{4, 5, 4};
     }
-    return AudioBufferConfig{5, 5};
+    return AudioBufferConfig{4, 5, 4};
 }
 
 constexpr size_t audioBufferCapacityMs(AudioLatencyMode mode) {
     const auto config = audioBufferConfig(mode);
     return config.audren_frames_per_buffer * 5 * config.buffer_count;
+}
+
+constexpr size_t audioIngressQueuePacketLimit(AudioLatencyMode mode) {
+    // Opus is normally 20 ms per packet. These are emergency limits for a
+    // stalled/startup receive burst, not steady-state prebuffer targets. Once
+    // exceeded, the media worker abandons stale PCM and resumes at the live
+    // edge so a one-second libpeer startup queue cannot become permanent
+    // audible latency.
+    switch (mode) {
+        case AudioLatencyMode::Realtime: return 6;
+        case AudioLatencyMode::Balanced: return 7;
+        case AudioLatencyMode::Resilient: return 7;
+    }
+    return 7;
+}
+
+constexpr size_t audioStartupPrebufferPackets(AudioLatencyMode mode) {
+    // Audio starts only after video is renderable. Keep a small cushion at
+    // that boundary so low latency does not turn a routine packet bunch into
+    // an immediate underrun. Recovery remains deeper by design.
+    switch (mode) {
+        case AudioLatencyMode::Realtime: return 3;
+        case AudioLatencyMode::Balanced: return 3;
+        case AudioLatencyMode::Resilient: return 4;
+    }
+    return 4;
 }
 
 inline const char* audioLatencyModeName(AudioLatencyMode mode) {
