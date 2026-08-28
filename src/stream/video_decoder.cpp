@@ -1218,7 +1218,9 @@ bool PsVideoDecoder::decode(const uint8_t* data, size_t len,
     }
 
     std::vector<uint8_t> startup_access_unit;
-    if (parameter_sets_pending_ && !parameter_sets_.empty()) {
+    const bool prepended_parameter_sets =
+        parameter_sets_pending_ && !parameter_sets_.empty();
+    if (prepended_parameter_sets) {
         startup_access_unit.reserve(parameter_sets_.size() + len);
         startup_access_unit.insert(startup_access_unit.end(),
                                    parameter_sets_.begin(),
@@ -1226,14 +1228,18 @@ bool PsVideoDecoder::decode(const uint8_t* data, size_t len,
         startup_access_unit.insert(startup_access_unit.end(), data, data + len);
         data = startup_access_unit.data();
         len = startup_access_unit.size();
-        parameter_sets_pending_ = false;
         lunar::diagnosticLog("video",
                              "prepended cached %s parameter sets bytes=%zu total=%zu",
                              codec_name,
                              parameter_sets_.size(), len);
     }
 
-    return decodeAccessUnit(data, len, timestamp, au, log_index, log);
+    const bool accepted = decodeAccessUnit(
+        data, len, timestamp, au, log_index, log);
+    if (accepted && prepended_parameter_sets) {
+        parameter_sets_pending_ = false;
+    }
+    return accepted;
 }
 
 bool PsVideoDecoder::resetForKeyframe() {

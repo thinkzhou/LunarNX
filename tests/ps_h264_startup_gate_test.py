@@ -52,12 +52,20 @@ require("bool packet_accepted = false" in decoder and
         "submitted_timestamps_.push_back(timestamp)" in decoder,
         "NVDEC decode must distinguish accepted packets from drained output and "
         "track timestamps only for accepted access units")
+require(decoder_h.count("std::deque<uint64_t> submitted_timestamps_;") == 1,
+        "PS and Xbox must use the shared decoder timestamp queue; a shadow PS "
+        "queue leaves the active FFmpeg/NVDEC queue stale across initialization")
 # Parameter-set ownership now belongs to PsVideoDecoder rather than the
 # shared FFmpeg/NVDEC plumbing.  The shared decoder only receives a complete
 # access unit after the PS-specific gate and prepend logic has run.
-require("if (parameter_sets_pending_ && !parameter_sets_.empty())" in ps_decode and
-        "parameter_sets_pending_ = false" in ps_decode,
-        "PS decoder must prepend and consume cached parameter sets in its own path")
+require("const bool prepended_parameter_sets" in ps_decode and
+        "const bool accepted = decodeAccessUnit(" in ps_decode and
+        "if (accepted && prepended_parameter_sets)" in ps_decode and
+        ps_decode.index("const bool accepted = decodeAccessUnit(") <
+        ps_decode.index("parameter_sets_pending_ = false",
+                        ps_decode.index("const bool accepted = decodeAccessUnit(")),
+        "PS decoder must retain cached parameter sets until the complete "
+        "access unit has actually been accepted")
 
 require("last_recovery_request_" in controller and
         "requestRecoveryIDR" in controller and

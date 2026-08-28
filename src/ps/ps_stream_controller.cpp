@@ -89,7 +89,6 @@ bool PsStreamController::startStream() {
     ps_button_release_pending_ = false;
     last_input_buttons_ = 0;
     input_transition_logs_ = 0;
-    lunar::startDropDiagnosticWriter();
 
     const bool mock_replay = psMockReplayEnabled();
     diagnosticLog("ps-controller", "video codec=%s target_ps5=%d",
@@ -216,6 +215,12 @@ bool PsStreamController::startStream() {
         ? route.host_addr : "";
 
     media_->setVideoReadyCallback([this]() {
+        // DROP_DIAG used to compile this writer out. Starting it before PSN
+        // hole punching became a real extra thread when release diagnostics
+        // were enabled, competing with Chiaki's tightly budgeted WebSocket,
+        // UPnP and session threads on Switch. Start it only after the first
+        // frame proves that the complete PS transport/media stack is alive.
+        lunar::startDropDiagnosticWriter();
         setState(app::StreamState::Streaming, "Video ready");
     });
     bridge_ = std::make_unique<PsMediaBridge>(*media_, mock_replay ? 30 : fps_);
