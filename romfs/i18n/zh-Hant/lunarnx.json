@@ -312,6 +312,7 @@
   "stop_title": "停止串流",
   "stop_confirm": "再次按 - + 停止串流",
   "stop_cancel_hint": "（等待 3 秒可取消確認）",
+  "stopping": "正在中斷串流…",
   "menu_title": "串流快速選單",
   "menu_hint": "按 Minus + Plus 切換選單，按 B 關閉。",
   "menu_open": "選單",

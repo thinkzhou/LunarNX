@@ -23,12 +23,13 @@ private:
     std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
     class StreamOverlay* overlay_ = nullptr;
     class PerfOverlay* perf_overlay_ = nullptr;
-    brls::View* content_root_ = nullptr;
+    brls::Box* content_root_ = nullptr;
     brls::Box* quick_menu_ = nullptr;
     brls::Button* performance_button_ = nullptr;
     brls::Button* resume_button_ = nullptr;
     brls::Button* disconnect_button_ = nullptr;
     brls::Box* confirm_box_ = nullptr;
+    brls::Box* stopping_overlay_ = nullptr;
     std::thread update_thread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_started_{false};
@@ -50,6 +51,7 @@ private:
     void updateInputOwnership();
     void updatePerformanceVisibility();
     void handleQuickDisconnect();
+    void showStoppingOverlay();
     void stopAndReturn();
     void handleWindowFocusChanged(bool focused);
 };

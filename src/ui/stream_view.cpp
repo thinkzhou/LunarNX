@@ -31,6 +31,7 @@ bool isExitComboPressed() {
 constexpr float kQuickMenuEdgeWidth = 96.0f;
 constexpr float kQuickMenuSwipeDistance = 120.0f;
 constexpr auto kQuickDisconnectConfirmWindow = std::chrono::seconds(3);
+constexpr auto kSlowStreamStopThreshold = std::chrono::seconds(3);
 
 class SoftwareVideoView : public brls::View {
 public:
@@ -571,24 +572,98 @@ brls::View* StreamView::createContentView() {
     return root;
 }
 
+void StreamView::showStoppingOverlay() {
+    if (stopping_overlay_) {
+        stopping_overlay_->setVisibility(brls::Visibility::VISIBLE);
+        return;
+    }
+    if (!content_root_) return;
+
+    const auto& p = uiPalette();
+    stopping_overlay_ = new brls::Box(brls::Axis::COLUMN);
+    stopping_overlay_->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
+    stopping_overlay_->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
+    stopping_overlay_->setBackgroundColor(nvgRGBA(0, 0, 0, 176));
+    stopping_overlay_->setAlignItems(brls::AlignItems::CENTER);
+    stopping_overlay_->setJustifyContent(brls::JustifyContent::CENTER);
+    stopping_overlay_->setVisibility(brls::Visibility::GONE);
+    stopping_overlay_->detach();
+    stopping_overlay_->setDetachedPosition(0, 0);
+
+    auto* stopping_card = new brls::Box(brls::Axis::COLUMN);
+    stopping_card->setWidth(480);
+    stopping_card->setHeight(220);
+    stopping_card->setPadding(28, 30, 28, 30);
+    stopping_card->setBackgroundColor(p.card);
+    stopping_card->setBorderThickness(1);
+    stopping_card->setBorderColor(p.accent);
+    stopping_card->setCornerRadius(8);
+    stopping_card->setAlignItems(brls::AlignItems::CENTER);
+    stopping_card->setJustifyContent(brls::JustifyContent::CENTER);
+
+    auto* stopping_spinner =
+        new brls::ProgressSpinner(brls::ProgressSpinnerSize::LARGE);
+    stopping_spinner->setWidth(72);
+    stopping_spinner->setHeight(72);
+    stopping_spinner->setMarginBottom(20);
+    stopping_card->addView(stopping_spinner);
+
+    auto* stopping_label = new brls::Label();
+    stopping_label->setWidth(420);
+    stopping_label->setHeight(48);
+    stopping_label->setText(brls::getStr("lunarnx/stream/stopping"));
+    stopping_label->setFontSize(20);
+    stopping_label->setTextColor(p.text);
+    stopping_label->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    stopping_label->setVerticalAlign(brls::VerticalAlign::CENTER);
+    stopping_card->addView(stopping_label);
+
+    stopping_overlay_->addView(stopping_card);
+    content_root_->addView(stopping_overlay_,
+                           content_root_->getChildren().size());
+    stopping_overlay_->setVisibility(brls::Visibility::VISIBLE);
+}
+
 void StreamView::stopAndReturn() {
     if (stop_started_.exchange(true)) return;
+    if (confirm_box_) confirm_box_->setVisibility(brls::Visibility::GONE);
+    showStoppingOverlay();
+    brls::Application::blockInputs();
     running_ = false;
     runtime_->inputRouter().setOwner(input::StreamInputOwner::Game);
     auto runtime = runtime_;
+    auto alive = alive_;
     const auto state = runtime_->getState();
     const bool report_disconnect =
         state != app::StreamState::Disconnected && state != app::StreamState::Error;
     const bool started = lunar::platform::startNetworkWorker(
-        "stop-stream", [runtime, report_disconnect]() {
+        "stop-stream", [runtime, alive, report_disconnect]() {
+            const auto stop_started_at = std::chrono::steady_clock::now();
+            lunar::persistentEventLog("stream-view", "stop stream worker begin");
             runtime->stopStream(report_disconnect);
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - stop_started_at);
+            lunar::persistentEventLog(
+                "stream-view",
+                "stop stream worker complete total_ms=%lld slow=%s",
+                static_cast<long long>(elapsed.count()),
+                elapsed >= kSlowStreamStopThreshold ? "true" : "false");
+            brls::sync([alive]() {
+                brls::Application::unblockInputs();
+                if (!alive->load()) return;
+                brls::Application::popActivity(
+                    brls::TransitionAnimation::NONE);
+            });
         });
     if (!started) {
+        if (stopping_overlay_) {
+            stopping_overlay_->setVisibility(brls::Visibility::GONE);
+        }
+        brls::Application::unblockInputs();
         stop_started_ = false;
         running_ = true;
         return;
     }
-    brls::Application::popActivity(brls::TransitionAnimation::NONE);
 }
 
 void StreamView::setQuickMenuVisible(bool visible) {
