@@ -84,6 +84,15 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
 
         const uint32_t generation = generation_.fetch_add(1) + 1;
         video_ready_notified_ = false;
+        audio_latency_mode_.store(options.audio_latency_mode,
+                                  std::memory_order_release);
+        audio_start_gate_open_.store(
+            options.video_path != VideoPipelinePath::Xbox,
+            std::memory_order_release);
+        audio_start_primed_.store(
+            options.video_path != VideoPipelinePath::Xbox,
+            std::memory_order_release);
+        audio_startup_packets_skipped_.store(0, std::memory_order_release);
         perf_.store(perf, std::memory_order_release);
         video_scheduling_.store(options.video_scheduling,
                                 std::memory_order_release);
@@ -234,7 +243,9 @@ void MediaPipeline::setVideoDecodeCatchUpMode(VideoDecodeCatchUpMode mode) {
 
 bool MediaPipeline::setAudioLatencyMode(AudioLatencyMode mode) {
     std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
-    return audio_player_ && audio_player_->setLatencyMode(mode);
+    if (!audio_player_ || !audio_player_->setLatencyMode(mode)) return false;
+    audio_latency_mode_.store(mode, std::memory_order_release);
+    return true;
 }
 
 void MediaPipeline::shutdown() {
@@ -258,6 +269,9 @@ void MediaPipeline::shutdownUnlocked() {
     video_waiting_for_keyframe_ = false;
     video_recovery_epoch_ = 0;
     video_ready_notified_ = false;
+    audio_start_gate_open_.store(true, std::memory_order_release);
+    audio_start_primed_.store(true, std::memory_order_release);
+    audio_startup_packets_skipped_.store(0, std::memory_order_release);
     last_decoded_video_ns_ = 0;
     decoded_video_frames_ = 0;
     render_fault_count_ = 0;
@@ -419,6 +433,10 @@ void MediaPipeline::prepareForNewMediaSource(const char* reason) {
         std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
         if (!running_.load()) return;
 
+        audio_start_gate_open_.store(false, std::memory_order_release);
+        audio_start_primed_.store(false, std::memory_order_release);
+        audio_startup_packets_skipped_.store(0, std::memory_order_release);
+        video_ready_notified_.store(false, std::memory_order_release);
         audio_source_epoch_.fetch_add(1, std::memory_order_acq_rel);
         audio_source_reset_pending_.store(true, std::memory_order_release);
         {
@@ -801,6 +819,15 @@ bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,
                                        uint16_t sequence,
                                        uint64_t timestamp) {
     if (!running_ || !data || len == 0) return false;
+    // Xbox can send roughly a second of audio while video remains gated on
+    // media startup and its first clean IDR. Playing that FIFO later makes
+    // sound permanently trail the live picture. Start at the next Opus packet
+    // after the renderer has successfully presented its first frame instead.
+    if (!audio_start_gate_open_.load(std::memory_order_acquire)) {
+        audio_startup_packets_skipped_.fetch_add(1,
+                                                 std::memory_order_relaxed);
+        return true;
+    }
     auto* perf = perfStats();
     if (len > kMaxAudioQueueBytes) {
         lunar::diagnosticLog("media", "audio packet too large len=%zu", len);
@@ -824,6 +851,32 @@ bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
         if (audio_worker_stop_ || !running_) return false;
+        const size_t live_packet_limit = audioIngressQueuePacketLimit(
+            audio_latency_mode_.load(std::memory_order_acquire));
+        if (audio_queue_.size() >= live_packet_limit) {
+            const size_t dropped_packets = audio_queue_.size();
+            audio_queue_.clear();
+            queued_audio_bytes_ = 0;
+            audio_catch_up_pending_ = true;
+            // The queue keeps the newest packet below. Resume it immediately
+            // after resetting the Opus/reorder timeline; waiting for another
+            // full startup prebuffer would extend an existing network gap.
+            audio_start_primed_.store(true, std::memory_order_release);
+            if (perf) {
+                for (size_t i = 0; i < dropped_packets; ++i) {
+                    perf->recordAudioDrop();
+                }
+            }
+            if (shouldLogMediaQueue()) {
+                lunar::diagnosticLog(
+                    "media",
+                    "audio live-edge catch-up dropped=%zu limit=%zu mode=%s",
+                    dropped_packets,
+                    live_packet_limit,
+                    audioLatencyModeName(
+                        audio_latency_mode_.load(std::memory_order_relaxed)));
+            }
+        }
         while (!audio_queue_.empty() &&
                (audio_queue_.size() >= kMaxAudioQueuePackets ||
                 queued_audio_bytes_ + packet.data.size() > kMaxAudioQueueBytes)) {
@@ -839,6 +892,17 @@ bool MediaPipeline::enqueueAudioPacket(const uint8_t* data,
         }
         audio_queue_.push_back(std::move(packet));
         queued_audio_bytes_ += audio_queue_.back().data.size();
+        if (!audio_start_primed_.load(std::memory_order_relaxed)) {
+            const size_t prebuffer_packets = audioStartupPrebufferPackets(
+                audio_latency_mode_.load(std::memory_order_acquire));
+            if (audio_queue_.size() >= prebuffer_packets) {
+                audio_start_primed_.store(true, std::memory_order_release);
+                lunar::diagnosticLog(
+                    "media",
+                    "audio live-edge primed packets=%zu target=%zu",
+                    audio_queue_.size(), prebuffer_packets);
+            }
+        }
     }
     audio_queue_cv_.notify_one();
     return true;
@@ -936,6 +1000,7 @@ bool MediaPipeline::startWorkers(uint32_t generation) {
         queued_decoded_audio_bytes_ = 0;
         last_decoded_audio_end_ns_.store(0, std::memory_order_release);
         audio_source_reset_pending_.store(false, std::memory_order_release);
+        audio_catch_up_pending_ = false;
         audio_decode_epoch_.store(audio_source_epoch_.load(
                                        std::memory_order_acquire),
                                    std::memory_order_release);
@@ -1010,6 +1075,7 @@ void MediaPipeline::stopWorkers() {
         audio_worker_stop_ = false;
         last_decoded_audio_end_ns_.store(0, std::memory_order_release);
         audio_source_reset_pending_.store(false, std::memory_order_release);
+        audio_catch_up_pending_ = false;
         audio_decode_epoch_.store(audio_source_epoch_.load(
                                        std::memory_order_acquire),
                                    std::memory_order_release);
@@ -1192,27 +1258,35 @@ void MediaPipeline::audioWorkerLoop() {
         bool have_encoded = false;
         bool have_decoded = false;
         bool reset_audio = false;
+        bool catch_up_audio = false;
         uint32_t current_source_epoch = audio_worker_source_epoch;
         {
             std::unique_lock<std::mutex> lock(audio_queue_mutex_);
             audio_queue_cv_.wait(lock, [this]() {
-                return audio_worker_stop_ || !audio_queue_.empty() ||
+                return audio_worker_stop_ ||
+                       (audio_start_primed_.load(std::memory_order_acquire) &&
+                        !audio_queue_.empty()) ||
                        !decoded_audio_queue_.empty() ||
+                       audio_catch_up_pending_ ||
                        audio_source_reset_pending_.load(
                            std::memory_order_acquire);
             });
             if (audio_worker_stop_) break;
             current_source_epoch =
                 audio_source_epoch_.load(std::memory_order_acquire);
+            catch_up_audio = audio_catch_up_pending_;
+            audio_catch_up_pending_ = false;
             reset_audio = audio_source_reset_pending_.exchange(
                 false, std::memory_order_acq_rel) ||
                 current_source_epoch != audio_worker_source_epoch;
-            if (!reset_audio && !decoded_audio_queue_.empty()) {
+            if (!reset_audio && !catch_up_audio &&
+                !decoded_audio_queue_.empty()) {
                 decoded = std::move(decoded_audio_queue_.front());
                 decoded_audio_queue_.pop_front();
                 queued_decoded_audio_bytes_ -= decoded.frame.pcm_data.size();
                 have_decoded = true;
-            } else if (!reset_audio && !audio_queue_.empty()) {
+            } else if (!reset_audio && !catch_up_audio &&
+                       !audio_queue_.empty()) {
                 packet = std::move(audio_queue_.front());
                 audio_queue_.pop_front();
                 queued_audio_bytes_ -= packet.data.size();
@@ -1224,9 +1298,20 @@ void MediaPipeline::audioWorkerLoop() {
             reorder.reset();
             if (audio_decoder_) audio_decoder_->reset();
             if (audio_player_) audio_player_->flush();
+            if (av_sync_) av_sync_->invalidateAudioClock();
             audio_worker_source_epoch = current_source_epoch;
             audio_decode_epoch_.store(audio_worker_source_epoch,
                                       std::memory_order_release);
+            last_decoded_audio_end_ns_.store(0, std::memory_order_release);
+            continue;
+        }
+
+        if (catch_up_audio) {
+            // Abandon the encoded/reorder timeline, but preserve PCM that is
+            // already queued in Audren. Flushing the hardware ring here turns
+            // a recoverable worker/network burst into an audible hard gap.
+            reorder.reset();
+            if (audio_decoder_) audio_decoder_->reset();
             last_decoded_audio_end_ns_.store(0, std::memory_order_release);
             continue;
         }
@@ -1488,6 +1573,12 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
                 rendered ? 1 : 0);
         }
         if (rendered && perf) perf->recordFrame();
+        // Software presentation publishes synchronously from render(). The
+        // hardware path opens this gate from presentVideoFrame() only after a
+        // frame has actually reached the display command stream.
+        if (rendered && video_renderer_->successfulPresentCount() > 0) {
+            openAudioStartupGateIfNeeded();
+        }
         if (rendered && !video_ready_notified_.exchange(true)) {
             std::lock_guard<std::mutex> lock(video_ready_callback_mutex_);
             if (video_ready_callback_) video_ready_callback_();
@@ -1549,6 +1640,9 @@ void MediaPipeline::presentVideoFrame() {
         video_renderer_->present();
         const uint64_t successful_present_after =
             video_renderer_->successfulPresentCount();
+        if (successful_present_after > successful_present_before) {
+            openAudioStartupGateIfNeeded();
+        }
 #if LUNARNX_LATENCY_DIAGNOSTIC_LOG
         if (latency_perf) {
             const uint32_t unique_present_after =
@@ -1586,6 +1680,17 @@ void MediaPipeline::presentVideoFrame() {
                 "recovery phase=late-present-success action=clear-pending");
         }
     }
+}
+
+void MediaPipeline::openAudioStartupGateIfNeeded() {
+    if (audio_start_gate_open_.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    lunar::diagnosticLog(
+        "media",
+        "audio startup gate opened after first present skipped_packets=%u",
+        audio_startup_packets_skipped_.exchange(
+            0, std::memory_order_acq_rel));
 }
 
 MediaHealthStats MediaPipeline::getHealthStats() const {

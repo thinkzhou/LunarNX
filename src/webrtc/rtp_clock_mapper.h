@@ -4,9 +4,19 @@
 
 namespace lunar::webrtc {
 
+inline constexpr uint64_t recoverQueuedRtpArrivalNs(
+    uint64_t callback_ns,
+    uint32_t queued_age_ms) {
+    const uint64_t queued_age_ns =
+        static_cast<uint64_t>(queued_age_ms) * 1'000'000ULL;
+    return callback_ns > queued_age_ns ? callback_ns - queued_age_ns : 0;
+}
+
 class RtpClockMapper {
 public:
     explicit RtpClockMapper(uint32_t clock_rate) : clock_rate_(clock_rate) {}
+
+    bool anchored() const { return anchored_; }
 
     void reset() {
         anchored_ = false;

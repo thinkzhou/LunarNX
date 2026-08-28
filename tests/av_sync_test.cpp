@@ -22,6 +22,14 @@ int main() {
     assert(sync.getVideoDelayNs(1'000'000'000ULL) == -200'000'000LL);
     assert(lunar::stream::videoSyncAction(sync.getVideoDelayNs(1'000'000'000ULL)) ==
            lunar::stream::VideoSyncAction::Render);
+
+    // Early-video timing remains observable without blocking either the
+    // decoder or the renderer's bounded latest-frame handoff.
+    assert(lunar::stream::videoSyncAction(80'000'000LL) ==
+           lunar::stream::VideoSyncAction::Wait);
+    assert(lunar::stream::videoSyncWaitNs(80'000'000LL) == 80'000'000LL);
+    sync.invalidateAudioClock();
+    assert(!sync.getVideoTiming(1'000'000'000ULL).using_audio_master);
     sync.reset();
     return 0;
 }
