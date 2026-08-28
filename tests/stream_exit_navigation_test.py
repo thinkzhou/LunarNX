@@ -16,7 +16,7 @@ def require(condition: bool, message: str) -> None:
 start = SOURCE.index("void StreamView::stopAndReturn()")
 end = SOURCE.index("void StreamView::setQuickMenuVisible", start)
 body = SOURCE[start:end]
-show_overlay = body.find("stopping_overlay_->setVisibility")
+show_overlay = body.find("showStoppingOverlay()")
 block = body.find("brls::Application::blockInputs")
 worker = body.find('startNetworkWorker(\n        "stop-stream"')
 stop = body.find("runtime->stopStream", worker)
@@ -43,9 +43,30 @@ require(
 )
 require(
     "brls::Box* stopping_overlay_" in HEADER and
+    "void showStoppingOverlay();" in HEADER and
     "new brls::ProgressSpinner" in SOURCE and
     'brls::getStr("lunarnx/stream/stopping")' in SOURCE,
     "StreamView must show a localized progress overlay while stopping",
+)
+create_start = SOURCE.index("brls::View* StreamView::createContentView()")
+create_end = SOURCE.index("void StreamView::showStoppingOverlay()", create_start)
+create_body = SOURCE[create_start:create_end]
+show_end = SOURCE.index("void StreamView::stopAndReturn()", create_end)
+show_body = SOURCE[create_end:show_end]
+require(
+    "new brls::ProgressSpinner" not in create_body and
+    "new brls::ProgressSpinner" in show_body and
+    "content_root_->addView(stopping_overlay_," in show_body and
+    "content_root_->getChildren().size()" in show_body,
+    "The stopping spinner must be created lazily after the user exits",
+)
+overlay_gone = show_body.find("brls::Visibility::GONE")
+overlay_added = show_body.find("content_root_->addView(stopping_overlay_,")
+overlay_visible = show_body.find("brls::Visibility::VISIBLE", overlay_added)
+require(
+    min(overlay_gone, overlay_added, overlay_visible) >= 0 and
+    overlay_gone < overlay_added < overlay_visible,
+    "The stopping overlay must be attached only on exit before it is shown",
 )
 failure = body[body.index("if (!started)"):]
 require(

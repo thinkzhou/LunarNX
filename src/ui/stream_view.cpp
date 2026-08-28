@@ -566,6 +566,20 @@ brls::View* StreamView::createContentView() {
     confirm_box_->addView(confirm_hint);
     root->addView(confirm_box_);
 
+    running_ = true;
+    update_thread_ = std::thread(&StreamView::runLoop, this);
+
+    return root;
+}
+
+void StreamView::showStoppingOverlay() {
+    if (stopping_overlay_) {
+        stopping_overlay_->setVisibility(brls::Visibility::VISIBLE);
+        return;
+    }
+    if (!content_root_) return;
+
+    const auto& p = uiPalette();
     stopping_overlay_ = new brls::Box(brls::Axis::COLUMN);
     stopping_overlay_->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
     stopping_overlay_->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
@@ -605,20 +619,15 @@ brls::View* StreamView::createContentView() {
     stopping_card->addView(stopping_label);
 
     stopping_overlay_->addView(stopping_card);
-    root->addView(stopping_overlay_);
-
-    running_ = true;
-    update_thread_ = std::thread(&StreamView::runLoop, this);
-
-    return root;
+    content_root_->addView(stopping_overlay_,
+                           content_root_->getChildren().size());
+    stopping_overlay_->setVisibility(brls::Visibility::VISIBLE);
 }
 
 void StreamView::stopAndReturn() {
     if (stop_started_.exchange(true)) return;
     if (confirm_box_) confirm_box_->setVisibility(brls::Visibility::GONE);
-    if (stopping_overlay_) {
-        stopping_overlay_->setVisibility(brls::Visibility::VISIBLE);
-    }
+    showStoppingOverlay();
     brls::Application::blockInputs();
     running_ = false;
     runtime_->inputRouter().setOwner(input::StreamInputOwner::Game);
