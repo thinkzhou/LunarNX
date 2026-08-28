@@ -21,6 +21,7 @@ class PsDiscovery;
 class PsConsoleRepository {
 public:
     using HostListCallback = std::function<void(const std::vector<PsConsole>&)>;
+    using CancelCallback = std::function<bool()>;
 
     PsConsoleRepository(ChiakiLog* log);
     ~PsConsoleRepository();
@@ -34,9 +35,11 @@ public:
 
     // Fetch PSN device list (requires valid OAuth token)
     bool fetchPsnDevices(const std::string& access_token,
-                         HostListCallback cb, std::string* error);
+                         HostListCallback cb, std::string* error,
+                         CancelCallback cancel = {});
     bool loadPsnCache(const std::string& account_id);
-    bool savePsnCache(const std::string& account_id) const;
+    bool savePsnCache(const std::string& account_id,
+                      CancelCallback cancel = {}) const;
     void clearPsnCache();
     int getLastPsnStatusCode() const { return last_psn_status_code_; }
 
@@ -56,6 +59,7 @@ private:
     std::vector<PsConsole> lan_consoles_;
     std::vector<PsConsole> psn_consoles_;
     std::vector<RegisteredCredential> credentials_;
+    mutable std::mutex file_mutex_;
     mutable std::mutex mutex_;
     std::atomic<bool> discovering_{false};
     std::atomic<int> last_psn_status_code_{0};

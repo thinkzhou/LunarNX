@@ -925,7 +925,8 @@ std::shared_ptr<api::XboxApiClient> StreamController::makeApiClient(SessionType 
 
 bool StreamController::startStreamWithProfile(
     const StreamProfile& input_profile,
-    const stream::MediaPipelineOptions& options) {
+    const stream::MediaPipelineOptions& options,
+    CancelCallback cancel) {
     StreamProfile profile = input_profile;
     stream::MediaPipelineOptions xbox_options = options;
     xbox_options.video_scheduling =
@@ -948,11 +949,16 @@ bool StreamController::startStreamWithProfile(
     requestStreamStop();
 
     std::lock_guard<std::mutex> operation_lock(stream_operation_mutex_);
+    if (cancel && cancel()) return false;
     if (signing_out_.load()) {
         return false;
     }
     const uint32_t generation = stream_generation_.fetch_add(1) + 1;
     cancel_requested_ = false;
+    if (cancel && cancel()) {
+        requestStreamStop();
+        return false;
+    }
     input_router_.setOwner(input::StreamInputOwner::Game);
     guide_button_requested_ = false;
 
@@ -1138,6 +1144,10 @@ void StreamController::stopStream() {
     stopStream(true);
 }
 
+void StreamController::requestStop() {
+    requestStreamStop();
+}
+
 void StreamController::stopStream(bool set_disconnected) {
     const auto stop_started_at = std::chrono::steady_clock::now();
     lunar::persistentEventLog("stream-controller",
@@ -1164,9 +1174,12 @@ void StreamController::stopStream(bool set_disconnected) {
         total >= std::chrono::seconds(3) ? "true" : "false");
 }
 
-bool StreamController::resumeAfterForeground() {
+bool StreamController::resumeAfterForeground(
+    app::IStreamRuntime::CancelCallback cancel) {
+    if (cancel && cancel()) return false;
     {
         std::lock_guard<std::mutex> operation_lock(stream_operation_mutex_);
+        if (cancel && cancel()) return false;
         if (state_.load() == StreamState::Streaming && transport_ &&
             transport_->isConnected()) {
             if (media_) {
@@ -1190,9 +1203,10 @@ bool StreamController::resumeAfterForeground() {
         profile = active_profile_;
         options = active_media_options_;
     }
+    if (cancel && cancel()) return false;
     lunar::diagnosticLog("stream-controller",
                          "foreground resume rebuilding Xbox session");
-    return startStreamWithProfile(profile, options);
+    return startStreamWithProfile(profile, options, std::move(cancel));
 }
 
 void StreamController::update() {

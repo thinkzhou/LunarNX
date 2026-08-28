@@ -2,7 +2,7 @@
 #ifdef __SWITCH__
 
 #include <borealis.hpp>
-#include "../ps/psn_auth_manager.h"
+#include "../ps/ps_manager.h"
 #include "../ps/psn_callback_server.h"
 #include <atomic>
 #include <memory>
@@ -14,13 +14,13 @@ class QrCodeView;
 
 class PsnLoginActivity : public brls::Activity {
 public:
-    explicit PsnLoginActivity(ps::PsnAuthManager& auth);
+    explicit PsnLoginActivity(std::shared_ptr<ps::PsManager> manager);
     ~PsnLoginActivity() override;
 
     brls::View* createContentView() override;
 
 private:
-    ps::PsnAuthManager& auth_;
+    std::shared_ptr<ps::PsManager> manager_;
     std::shared_ptr<std::atomic<bool>> alive_ =
         std::make_shared<std::atomic<bool>>(true);
     ps::PsnCallbackServer callback_server_;

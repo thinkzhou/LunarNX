@@ -14,8 +14,11 @@ namespace {
 constexpr size_t kMaxStartupVideoBytes = 8 * 1024 * 1024;
 }
 
-PsMediaBridge::PsMediaBridge(stream::MediaPipeline& media, int fps)
-    : media_(media), fps_(std::clamp(fps, 1, 120)) {}
+PsMediaBridge::PsMediaBridge(
+    stream::MediaPipeline& media, int fps,
+    std::shared_ptr<PsConnectionTrace> trace)
+    : media_(media), fps_(std::clamp(fps, 1, 120)),
+      trace_(std::move(trace)) {}
 
 PsMediaBridge::~PsMediaBridge() {
     if (opus_decoder_initialized_) chiaki_opus_decoder_fini(&opus_decoder_);
@@ -23,6 +26,13 @@ PsMediaBridge::~PsMediaBridge() {
 
 bool PsMediaBridge::onVideoSample(uint8_t* data, size_t size, int32_t frames_lost, bool recovered) {
     std::lock_guard<std::mutex> lock(video_mutex_);
+    if (!first_video_sample_logged_) {
+        first_video_sample_logged_ = true;
+        if (trace_) trace_->record(
+            "first-video-sample", data && size > 0 ? "received" : "invalid",
+            "bytes=%zu frames_lost=%d recovered=%d media_ready=%d",
+            size, frames_lost, recovered ? 1 : 0, media_ready_ ? 1 : 0);
+    }
 
     // Calculate PTS
     if (video_frame_count_ == 0) {
@@ -75,6 +85,10 @@ bool PsMediaBridge::onVideoSample(uint8_t* data, size_t size, int32_t frames_los
 void PsMediaBridge::setMediaReady() {
     std::lock_guard<std::mutex> lock(video_mutex_);
     if (media_ready_) return;
+    if (trace_) trace_->record(
+        "startup-video-buffer", "flush",
+        "samples=%zu bytes=%zu", pending_video_samples_.size(),
+        pending_video_bytes_);
     media_ready_ = true;
 
     for (auto& sample : pending_video_samples_) {
@@ -110,6 +124,12 @@ ChiakiEventCallback PsMediaBridge::eventCallback() {
 }
 
 void PsMediaBridge::onDecodedAudioFrame(int16_t* buf, size_t sample_count) {
+    if (!first_decoded_audio_logged_.exchange(true) && trace_) {
+        trace_->record(
+            "first-decoded-audio", buf && sample_count > 0 ? "received" : "invalid",
+            "samples=%zu format_valid=%d frame_size=%d",
+            sample_count, audio_format_valid_ ? 1 : 0, audio_frame_size_);
+    }
     if (!audio_format_valid_ || !buf || sample_count == 0 ||
         sample_count > static_cast<size_t>(audio_frame_size_)) return;
 
@@ -148,6 +168,14 @@ void PsMediaBridge::audioHeaderCb(ChiakiAudioHeader* header, void* user) {
     if (!self || !header) return;
     self->audio_format_valid_ = header->rate == 48000 && header->channels == 2 &&
         header->bits == 16 && header->frame_size > 0 && header->frame_size <= 5760;
+    if (!self->first_audio_header_logged_.exchange(true) && self->trace_) {
+        self->trace_->record(
+            "audio-header", self->audio_format_valid_ ? "valid" : "invalid",
+            "rate=%u channels=%u bits=%u frame_size=%u sink_ready=%d",
+            header->rate, static_cast<unsigned int>(header->channels),
+            static_cast<unsigned int>(header->bits), header->frame_size,
+            self->opus_sink_.header_cb ? 1 : 0);
+    }
     if (!self->audio_format_valid_ || !self->opus_sink_.header_cb) return;
     self->audio_sample_rate_ = header->rate;
     self->audio_channels_ = header->channels;
@@ -159,7 +187,18 @@ void PsMediaBridge::audioHeaderCb(ChiakiAudioHeader* header, void* user) {
 
 void PsMediaBridge::audioFrameCb(uint8_t* buf, size_t buf_size, void* user) {
     auto* self = static_cast<PsMediaBridge*>(user);
-    if (!self || !self->audio_format_valid_ || !self->opus_sink_.frame_cb) return;
+    if (!self) return;
+    if (!self->first_audio_packet_logged_.exchange(true) && self->trace_) {
+        self->trace_->record(
+            "first-audio-packet",
+            buf && buf_size > 0 && self->audio_format_valid_ &&
+                    self->opus_sink_.frame_cb
+                ? "received" : "invalid",
+            "bytes=%zu format_valid=%d sink_ready=%d",
+            buf_size, self->audio_format_valid_ ? 1 : 0,
+            self->opus_sink_.frame_cb ? 1 : 0);
+    }
+    if (!self->audio_format_valid_ || !self->opus_sink_.frame_cb) return;
     self->media_.recordIncomingAudioPacket();
     self->opus_sink_.frame_cb(buf, buf_size, self->opus_sink_.user);
 }

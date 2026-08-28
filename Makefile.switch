@@ -168,7 +168,7 @@ CXX_SRCS = src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_proces
     src/auth/token_store.cpp src/auth/xbox_signing.cpp src/auth/auth_manager.cpp src/auth/xbox_auth_errors.cpp src/auth/xbox_login_server.cpp \
     src/api/http_client.cpp src/api/xbox_api_client.cpp \
     src/platform/network_worker.cpp src/platform/chiaki_curl_compat.cpp \
-    src/ps/chiaki_crypto_init.cpp src/ps/chiaki_log_adapter.cpp src/ps/ps_credentials.cpp \
+    src/ps/chiaki_crypto_init.cpp src/ps/chiaki_log_adapter.cpp src/ps/ps_connection_trace.cpp src/ps/ps_credentials.cpp \
     src/ps/ps_discovery.cpp src/ps/ps_registration.cpp \
     src/ps/ps_registration_diagnostics.cpp src/ps/ps_manager.cpp \
     src/ps/ps_input_mapper.cpp src/ps/ps_touchpad_reader.cpp src/ps/ps_motion_reader.cpp src/ps/ps_media_bridge.cpp \

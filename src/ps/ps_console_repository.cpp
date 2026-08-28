@@ -36,6 +36,7 @@ PsConsoleRepository::~PsConsoleRepository() {
 
 bool PsConsoleRepository::loadPsnCache(const std::string& account_id) {
     constexpr long kMaxCacheBytes = 1024 * 1024;
+    std::lock_guard<std::mutex> file_lock(file_mutex_);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         psn_consoles_.clear();
@@ -97,11 +98,15 @@ bool PsConsoleRepository::loadPsnCache(const std::string& account_id) {
     return true;
 }
 
-bool PsConsoleRepository::savePsnCache(const std::string& account_id) const {
+bool PsConsoleRepository::savePsnCache(const std::string& account_id,
+                                       CancelCallback cancel) const {
     if (account_id.empty()) return false;
+    std::lock_guard<std::mutex> file_lock(file_mutex_);
+    if (cancel && cancel()) return false;
     std::vector<PsConsole> consoles;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (cancel && cancel()) return false;
         consoles = psn_consoles_;
     }
     if (consoles.empty()) {
@@ -153,6 +158,7 @@ bool PsConsoleRepository::savePsnCache(const std::string& account_id) const {
 }
 
 void PsConsoleRepository::clearPsnCache() {
+    std::lock_guard<std::mutex> file_lock(file_mutex_);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         psn_consoles_.clear();
@@ -216,7 +222,9 @@ void PsConsoleRepository::stopDiscovery() {
 }
 
 bool PsConsoleRepository::fetchPsnDevices(const std::string& access_token,
-                                           HostListCallback cb, std::string* error) {
+                                           HostListCallback cb,
+                                           std::string* error,
+                                           CancelCallback cancel) {
     constexpr const char* url =
         "https://web.np.playstation.com/api/cloudAssistedNavigation/v2/users/me/clients"
         "?platform=PS5&includeFields=device&limit=10&offset=0";
@@ -225,7 +233,8 @@ bool PsConsoleRepository::fetchPsnDevices(const std::string& access_token,
         {"Authorization", "Bearer " + access_token},
         {"Accept", "application/json"},
         {"User-Agent", "remoteplay Windows"},
-    });
+    }, cancel);
+    if (cancel && cancel()) return false;
     last_psn_status_code_.store(response.status_code);
     if (response.network_error || response.status_code != 200) {
         if (error) {
@@ -279,17 +288,20 @@ bool PsConsoleRepository::fetchPsnDevices(const std::string& access_token,
         fetched.push_back(std::move(console));
     }
     cJSON_Delete(root);
+    if (cancel && cancel()) return false;
     // PS4 Remote Play addresses the account's Main PS4. Sony does not expose
     // it through the PS5 DUID list; Chiaki learns its DUID from the PSN
     // session notification after wake-up.
     fetched.push_back(makeMainPs4RemoteConsole());
+    const size_t fetched_count = fetched.size();
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (cancel && cancel()) return false;
         psn_consoles_ = std::move(fetched);
     }
     diagnosticLog("ps-console-repository", "PSN device list complete count=%zu",
-                  psn_consoles_.size());
+                  fetched_count);
     mergeAndNotify(std::move(cb));
     return true;
 }

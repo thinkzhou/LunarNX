@@ -45,6 +45,7 @@ for patch in \
     lunarnx-chiaki-video-reorder-capacity.patch \
     lunarnx-chiaki-recv-allocation.patch \
     lunarnx-chiaki-holepunch-reliability.patch \
+    lunarnx-chiaki-http-status.patch \
     lunarnx-chiaki-stream-rtt.patch \
     lunarnx-chiaki-recvbuf.patch \
     lunarnx-chiaki-packetstats-wrap.patch \

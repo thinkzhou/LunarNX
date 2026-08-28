@@ -15,6 +15,7 @@ view_header = (ROOT / "src/ui/stream_view.h").read_text()
 runtime = (ROOT / "src/app/stream_runtime.h").read_text()
 xbox = (ROOT / "src/app/stream_controller.cpp").read_text()
 ps = (ROOT / "src/ps/ps_stream_controller.cpp").read_text()
+ps_ui = (ROOT / "src/ui/ps_activity.cpp").read_text()
 
 require("disableScreenDimming(true)" in view,
         "stream view must prevent automatic screen dimming")
@@ -32,6 +33,12 @@ require("StreamController::resumeAfterForeground" in xbox,
         "Xbox runtime must implement foreground recovery")
 require("PsStreamController::resumeAfterForeground" in ps,
         "PlayStation runtime must implement foreground recovery")
+connect_destructor = ps_ui.split("~PsConnectActivity()", 1)[1].split(
+    "brls::View* createContentView", 1)[0]
+require("setPsnRefreshCallback({})" not in connect_destructor and
+        "return startStream()" in ps.split(
+            "PsStreamController::resumeAfterForeground", 1)[1],
+        "PS foreground reconstruction must retain server-rejection token refresh")
 require("!backgrounded_.load()" in view,
         "disconnect handling must be deferred while the app is backgrounded")
 recovery_claim = view.index("foreground_recovery_running_.exchange(true)")

@@ -14,6 +14,7 @@
 #include "../ps/psn_auth_manager.h"
 #include <algorithm>
 #include <cstdio>
+#include <exception>
 #include <thread>
 
 namespace lunar::ui {
@@ -42,38 +43,86 @@ void appendMockReplayConsole(std::vector<ps::PsConsole>& hosts) {
 struct PsConnectContext {
     std::atomic<bool> alive{true};
     std::atomic<bool> cancel_requested{false};
+    std::atomic<bool> connect_worker_started{false};
     std::atomic<bool> connect_worker_done{false};
     std::atomic<bool> cancel_cleanup_started{false};
 };
 
-void schedulePsConnectCleanup(
+void runPsConnectCleanup(
+    const std::shared_ptr<PsConnectContext>& context,
+    const std::shared_ptr<ps::PsStreamController>& controller) noexcept {
+    diagnosticLog("ui-ps-connect", "cancel cleanup begin");
+    try {
+        controller->setLaunchCallback({});
+        controller->setLoginPinCallback({});
+        controller->stopStream(false);
+        diagnosticLog("ui-ps-connect", "cancel cleanup stream stopped");
+    } catch (const std::exception& e) {
+        diagnosticLog("ui-ps-connect", "cancel cleanup exception: %s", e.what());
+    } catch (...) {
+        diagnosticLog("ui-ps-connect", "cancel cleanup unknown exception");
+    }
+    brls::sync([context]() {
+        if (!context->alive.load()) return;
+        diagnosticLog("ui-ps-connect", "cancel cleanup pop activity");
+        brls::Application::popActivity(brls::TransitionAnimation::NONE);
+    });
+}
+
+bool schedulePsConnectCleanup(
     const std::shared_ptr<PsConnectContext>& context,
     const std::shared_ptr<ps::PsStreamController>& controller) {
     if (!context->cancel_requested.load() ||
-        !context->connect_worker_done.load() ||
-        context->cancel_cleanup_started.exchange(true)) {
-        return;
+        !context->connect_worker_done.load()) {
+        return true;
     }
+    if (context->cancel_cleanup_started.exchange(true)) return true;
 
     diagnosticLog("ui-ps-connect", "cancel cleanup scheduled");
     bool started = lunar::platform::startNetworkWorker(
         "cancel-ps-connect", [context, controller]() {
-            diagnosticLog("ui-ps-connect", "cancel cleanup begin");
-            controller->setLaunchCallback({});
-            controller->setLoginPinCallback({});
-            controller->stopStream(false);
-            diagnosticLog("ui-ps-connect", "cancel cleanup stream stopped");
-            brls::sync([context]() {
-                if (!context->alive.load()) return;
-                diagnosticLog("ui-ps-connect", "cancel cleanup pop activity");
-                brls::Application::popActivity(brls::TransitionAnimation::NONE);
-            });
+            runPsConnectCleanup(context, controller);
         });
     if (!started) {
         context->cancel_cleanup_started = false;
         diagnosticLog("ui-ps-connect", "cancel cleanup worker failed");
+        return false;
     }
+    return true;
 }
+
+void finalizePsConnectWorker(
+    const std::shared_ptr<PsConnectContext>& context,
+    const std::shared_ptr<ps::PsStreamController>& controller) noexcept {
+    context->connect_worker_done = true;
+    diagnosticLog("ui-ps-connect", "connect worker finalized cancelled=%d",
+                  context->cancel_requested.load() ? 1 : 0);
+    if (!context->cancel_requested.load() ||
+        context->cancel_cleanup_started.exchange(true)) {
+        return;
+    }
+
+    // The connection worker already owns a large stack and startStream() has
+    // returned or unwound. Clean up on this same worker instead of requiring a
+    // second thread slot at the exact point resource pressure may be highest.
+    runPsConnectCleanup(context, controller);
+}
+
+class PsConnectWorkerFinalizer {
+public:
+    PsConnectWorkerFinalizer(
+        std::shared_ptr<PsConnectContext> context,
+        std::shared_ptr<ps::PsStreamController> controller)
+        : context_(std::move(context)), controller_(std::move(controller)) {}
+
+    ~PsConnectWorkerFinalizer() {
+        finalizePsConnectWorker(context_, controller_);
+    }
+
+private:
+    std::shared_ptr<PsConnectContext> context_;
+    std::shared_ptr<ps::PsStreamController> controller_;
+};
 
 class PsConnectActivity : public brls::Activity {
 public:
@@ -179,44 +228,118 @@ public:
             auto* status = status_;
             bool worker = lunar::platform::startNetworkWorker("ps-connect",
                 [context, controller, manager, remote, status]() {
+                    PsConnectWorkerFinalizer finalizer(context, controller);
                     bool ok = true;
                     std::string error;
                     ps::PsnAuthErrorKind auth_error_kind = ps::PsnAuthErrorKind::None;
-                    if (remote) {
-                        bool token_refreshed = false;
-                        ok = manager->psnAuth().ensureValidToken({}, &token_refreshed);
-                        if (!ok) {
-                            error = manager->psnAuth().getAuthError();
-                            auth_error_kind = manager->psnAuth().getAuthErrorKind();
-                            if (auth_error_kind == ps::PsnAuthErrorKind::SessionExpired) {
-                                manager->psnAuth().signOut();
-                                std::remove(lunar::get_psn_token_path());
-                                manager->clearPsnDeviceCache();
+                    try {
+                        if (remote) {
+                            bool token_refreshed = false;
+                            ok = manager->psnAuth().ensureValidToken(
+                                {}, &token_refreshed,
+                                [context]() {
+                                    return context->cancel_requested.load();
+                                });
+                            if (!ok) {
+                                error = manager->psnAuth().getAuthError();
+                                auth_error_kind = manager->psnAuth().getAuthErrorKind();
+                                lunar::persistentEventLog("ps-connect-preflight",
+                                    "stage=token-validation outcome=failed route=remote auth_kind=%d detail=%s",
+                                    static_cast<int>(auth_error_kind),
+                                    error.empty() ? "unspecified" : error.c_str());
+                                if (auth_error_kind ==
+                                    ps::PsnAuthErrorKind::SessionExpired) {
+                                    manager->psnAuth().signOut();
+                                    std::remove(lunar::get_psn_token_path());
+                                    manager->clearPsnDeviceCache();
+                                }
+                            } else if (token_refreshed &&
+                                       !manager->psnAuth().saveToken(
+                                           lunar::get_psn_token_path())) {
+                                ok = false;
+                                error =
+                                    "PSN session refreshed but could not be saved";
+                                lunar::persistentEventLog("ps-connect-preflight",
+                                    "stage=credential-save outcome=failed route=remote auth_kind=%d",
+                                    static_cast<int>(auth_error_kind));
+                            } else if (!controller->setPsnCredentials(
+                                           manager->getPsnAccessToken(),
+                                           manager->getPsnAccountId())) {
+                                ok = false;
+                                error = "PSN credentials could not be applied";
+                                lunar::persistentEventLog("ps-connect-preflight",
+                                    "stage=credential-apply outcome=failed route=remote auth_kind=%d",
+                                    static_cast<int>(auth_error_kind));
+                            } else {
+                                controller->setPsnRefreshCallback(
+                                    [manager](
+                                        std::string& access_token,
+                                        std::string& account_id,
+                                        std::string& refresh_error,
+                                        bool& session_expired,
+                                        const std::function<bool()>& cancel) {
+                                        if (!manager->psnAuth().refreshToken(
+                                                {}, cancel)) {
+                                            refresh_error =
+                                                manager->psnAuth().getAuthError();
+                                            session_expired =
+                                                manager->psnAuth().getAuthErrorKind() ==
+                                                ps::PsnAuthErrorKind::SessionExpired;
+                                            if (session_expired) {
+                                                manager->psnAuth().signOut();
+                                                std::remove(
+                                                    lunar::get_psn_token_path());
+                                                manager->clearPsnDeviceCache();
+                                            }
+                                            return false;
+                                        }
+                                        if (!manager->psnAuth().saveToken(
+                                                lunar::get_psn_token_path())) {
+                                            refresh_error =
+                                                "PSN session refreshed but could not be saved";
+                                            return false;
+                                        }
+                                        access_token =
+                                            manager->getPsnAccessToken();
+                                        account_id = manager->getPsnAccountId();
+                                        return !access_token.empty() &&
+                                            !account_id.empty();
+                                    });
                             }
-                        } else if (token_refreshed &&
-                                   !manager->psnAuth().saveToken(
-                                       lunar::get_psn_token_path())) {
-                            ok = false;
-                            error = "PSN session refreshed but could not be saved";
-                        } else if (!controller->setPsnCredentials(
-                                       manager->getPsnAccessToken(),
-                                       manager->getPsnAccountId())) {
-                            ok = false;
-                            error = "PSN credentials could not be applied";
                         }
-                    }
-                    if (ok && !context->cancel_requested.load()) {
-                        ok = controller->startStream();
-                        if (!ok) error = controller->lastError();
-                    } else if (context->cancel_requested.load()) {
+
+                        if (ok && !context->cancel_requested.load()) {
+                            ok = controller->startStream();
+                            if (!ok) {
+                                error = controller->lastError();
+                                if (remote &&
+                                    controller->lastPsnRefreshSessionExpired()) {
+                                    auth_error_kind =
+                                        ps::PsnAuthErrorKind::SessionExpired;
+                                }
+                            }
+                        } else if (context->cancel_requested.load()) {
+                            ok = false;
+                        }
+                    } catch (const std::exception& e) {
                         ok = false;
+                        error = std::string("Unexpected connection failure: ") + e.what();
+                        lunar::persistentEventLog("ps-connect-preflight",
+                            "stage=worker outcome=exception route=%s detail=%s",
+                            remote ? "remote" : "lan", e.what());
+                        diagnosticLog("ui-ps-connect", "connect exception: %s", e.what());
+                    } catch (...) {
+                        ok = false;
+                        error = "Unexpected connection failure";
+                        lunar::persistentEventLog("ps-connect-preflight",
+                            "stage=worker outcome=unknown-exception route=%s",
+                            remote ? "remote" : "lan");
+                        diagnosticLog("ui-ps-connect", "connect unknown exception");
                     }
-                    context->connect_worker_done = true;
                     diagnosticLog("ui-ps-connect",
                                   "connect worker done ok=%d cancelled=%d",
                                   ok ? 1 : 0,
                                   context->cancel_requested.load() ? 1 : 0);
-                    schedulePsConnectCleanup(context, controller);
                     if (!ok) {
                         brls::sync([context, manager, remote, status, auth_error_kind,
                                     error = std::move(error)]() {
@@ -227,13 +350,23 @@ public:
                             if (remote &&
                                 auth_error_kind == ps::PsnAuthErrorKind::SessionExpired) {
                                 brls::Application::pushActivity(
-                                    new PsnLoginActivity(manager->psnAuth()),
+                                    new PsnLoginActivity(manager),
                                     brls::TransitionAnimation::NONE);
                             }
                         });
                     }
                 }, 8 * 1024 * 1024);
-            if (!worker && status_) status_->setText(brls::getStr("lunarnx/ps/connect_worker_failed"));
+            context->connect_worker_started = worker;
+            if (!worker) {
+                context->connect_worker_done = true;
+                lunar::persistentEventLog("ps-connect-preflight",
+                    "stage=worker-start outcome=failed route=%s",
+                    remote ? "remote" : "lan");
+                diagnosticLog("ui-ps-connect", "connect worker failed to start");
+                if (status_) {
+                    status_->setText(brls::getStr("lunarnx/ps/connect_worker_failed"));
+                }
+            }
         });
     }
 
@@ -259,13 +392,31 @@ private:
     }
 
     void cancel() {
+        if (context_->cancel_requested.load()) {
+            diagnosticLog("ui-ps-connect", "cancel retry worker_done=%d cleanup=%d",
+                          context_->connect_worker_done.load() ? 1 : 0,
+                          context_->cancel_cleanup_started.load() ? 1 : 0);
+            if (!schedulePsConnectCleanup(context_, controller_) && status_) {
+                status_->setText(brls::getStr("lunarnx/ps/connect_cancelling"));
+            }
+            return;
+        }
         if (finished_.exchange(true)) return;
         context_->cancel_requested = true;
         diagnosticLog("ui-ps-connect", "cancel requested worker_done=%d",
                       context_->connect_worker_done.load() ? 1 : 0);
         if (status_) status_->setText(brls::getStr("lunarnx/ps/connect_cancelling"));
         controller_->requestCancel();
-        schedulePsConnectCleanup(context_, controller_);
+        if (!context_->connect_worker_started.load()) {
+            context_->cancel_cleanup_started = true;
+            controller_->setLaunchCallback({});
+            controller_->setLoginPinCallback({});
+            brls::Application::popActivity(brls::TransitionAnimation::NONE);
+            return;
+        }
+        if (!schedulePsConnectCleanup(context_, controller_)) {
+            diagnosticLog("ui-ps-connect", "cancel cleanup can be retried with B");
+        }
     }
 
     void openStream() {
@@ -308,6 +459,7 @@ PsActivity::PsActivity() {
 PsActivity::~PsActivity() {
     alive_->store(false);
     wake_generation_->fetch_add(1);
+    wake_wait_cv_->notify_all();
     stopDiscovery();
 }
 
@@ -586,13 +738,20 @@ void PsActivity::onResume() {
         ps_manager_->psnAuth().getOnlineId().empty() && !identity_fetching_->exchange(true)) {
         auto manager = ps_manager_;
         auto alive = alive_;
-        lunar::platform::startNetworkWorker("psn-identity",
-            [this, manager, alive]() {
-                manager->psnAuth().refreshIdentity();
+        auto identity_fetching = identity_fetching_;
+        const bool started = lunar::platform::startNetworkWorker("psn-identity",
+            [this, manager, alive, identity_fetching]() {
+                const bool refreshed = manager->psnAuth().refreshIdentity(
+                    [alive]() { return !alive->load(); });
+                if (refreshed) {
+                    manager->psnAuth().saveToken(lunar::get_psn_token_path());
+                }
+                identity_fetching->store(false);
                 brls::sync([this, manager, alive]() {
                     if (alive->load()) updateAccountUi();
                 });
             });
+        if (!started) identity_fetching->store(false);
     }
 
     if (!resumed_once_) {
@@ -664,10 +823,11 @@ void PsActivity::fetchPsnConsoles() {
                     if (error_kind == ps::PsnAuthErrorKind::SessionExpired) {
                         manager->psnAuth().signOut();
                         std::remove(lunar::get_psn_token_path());
+                        manager->clearPsnDeviceCache();
                         if (psn_state_) psn_state_->setText(
                             brls::getStr("lunarnx/ps/psn_session_expired", error));
                         brls::Application::pushActivity(
-                            new PsnLoginActivity(manager->psnAuth()),
+                            new PsnLoginActivity(manager),
                             brls::TransitionAnimation::NONE);
                     } else {
                         if (psn_state_) psn_state_->setText(
@@ -679,7 +839,6 @@ void PsActivity::fetchPsnConsoles() {
         });
     if (!started) {
         fetching->store(false);
-                        manager->clearPsnDeviceCache();
         if (psn_state_) psn_state_->setText(brls::getStr("lunarnx/ps/psn_could_not_start"));
     }
 }
@@ -912,6 +1071,10 @@ bool PsActivity::completePendingWake(const std::vector<ps::PsConsole>& hosts) {
     const ps::PsConsole host = *ready;
     pending_wake_mac_.clear();
     wake_generation_->fetch_add(1);
+    wake_wait_cv_->notify_all();
+    lunar::persistentEventLog("ps-wakeup",
+        "stage=ready-wait outcome=ready platform=%s verified_route=1",
+        host.target >= 1000000 ? "ps5" : "ps4");
     diagnosticLog("ui-ps", "wake target ready mac=%s ip=%s",
                   host.server_mac.c_str(), host.local->ip.c_str());
     if (action_status_) {
@@ -957,23 +1120,28 @@ void PsActivity::wakeupConsole(const ps::PsConsole& host) {
     const auto normalized_mac = ps::normalizeMac(host.server_mac);
     if (!normalized_mac) return;
     const uint64_t generation = wake_generation_->fetch_add(1) + 1;
+    wake_wait_cv_->notify_all();
     pending_wake_mac_ = *normalized_mac;
     if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/waking", host.nickname));
     auto alive = alive_;
     auto manager = ps_manager_;
     auto wake_generation = wake_generation_;
+    auto wake_wait_cv = wake_wait_cv_;
+    auto wake_wait_mutex = wake_wait_mutex_;
     const bool started = lunar::platform::startNetworkWorker("ps-wakeup",
-        [this, manager, host, alive, wake_generation, generation]() {
+        [this, manager, host, alive, wake_generation, wake_wait_cv,
+         wake_wait_mutex, generation]() {
             manager->wakeupHost(host.local->ip, host.server_mac,
                 host.target >= 1000000,
-                [this, alive, host, wake_generation, generation](
+                [this, alive, host, wake_generation, wake_wait_cv, generation](
                     bool ok, const std::string& error) {
                     brls::sync([this, alive, host, wake_generation, generation,
-                                ok, error]() {
+                                wake_wait_cv, ok, error]() {
                         if (!alive->load() || wake_generation->load() != generation) return;
                         if (!ok) {
                             pending_wake_mac_.clear();
                             wake_generation->fetch_add(1);
+                            wake_wait_cv->notify_all();
                             if (action_status_) action_status_->setText(brls::getStr("lunarnx/ps/wake_failed", error));
                             return;
                         }
@@ -982,12 +1150,23 @@ void PsActivity::wakeupConsole(const ps::PsConsole& host) {
                     });
                 });
             if (wake_generation->load() != generation) return;
-            std::this_thread::sleep_for(std::chrono::seconds(25));
+            {
+                std::unique_lock<std::mutex> lock(*wake_wait_mutex);
+                if (wake_wait_cv->wait_for(
+                        lock, std::chrono::seconds(25),
+                        [wake_generation, generation]() {
+                            return wake_generation->load() != generation;
+                        })) {
+                    return;
+                }
+            }
             brls::sync([this, alive, wake_generation, generation]() {
                 if (!alive->load() || wake_generation->load() != generation) return;
                 pending_wake_mac_.clear();
                 wake_generation->fetch_add(1);
                 diagnosticLog("ui-ps", "wake target timed out");
+                lunar::persistentEventLog("ps-wakeup",
+                    "stage=ready-wait outcome=timeout timeout_ms=25000");
                 if (action_status_) action_status_->setText(
                     brls::getStr("lunarnx/ps/wake_timeout"));
             });
@@ -995,6 +1174,8 @@ void PsActivity::wakeupConsole(const ps::PsConsole& host) {
     if (!started) {
         pending_wake_mac_.clear();
         wake_generation_->fetch_add(1);
+        lunar::persistentEventLog("ps-wakeup",
+            "stage=worker-start outcome=failed");
         if (action_status_) action_status_->setText(
             brls::getStr("lunarnx/ps/wake_failed", "Could not start wake worker"));
     }
@@ -1012,6 +1193,12 @@ void PsActivity::connectToConsole(const ps::PsConsole& host) {
     auto plan = ps::PsConnectionPlanner::makePlan(
         host, ps_manager_->hasStoredPsnSession(), preference);
     if (plan.type == ps::PsConnectionPlanType::None) {
+        lunar::persistentEventLog("ps-connect-preflight",
+            "stage=planner outcome=failed source=%s has_local=%d has_remote=%d stored_psn=%d detail=%s",
+            source_ == PsConsoleSource::Local ? "local" : "remote",
+            host.local.has_value() ? 1 : 0, host.remote.has_value() ? 1 : 0,
+            ps_manager_->hasStoredPsnSession() ? 1 : 0,
+            plan.error.empty() ? "unspecified" : plan.error.c_str());
         diagnosticLog("ui-ps", "connect blocked by planner error=%s",
                       plan.error.c_str());
         if (action_status_) action_status_->setText(plan.error);
@@ -1088,10 +1275,11 @@ void PsActivity::confirmSignOut() {
     dialog->addButton(brls::getStr("lunarnx/common/sign_out"), [this]() {
         ps_manager_->psnAuth().signOut();
         std::remove(lunar::get_psn_token_path());
+        ps_manager_->clearPsnDeviceCache();
         had_psn_session_ = false;
         updateAccountUi();
         brls::Application::pushActivity(
-            new PsnLoginActivity(ps_manager_->psnAuth()),
+            new PsnLoginActivity(ps_manager_),
             brls::TransitionAnimation::NONE);
     });
     dialog->open();
@@ -1103,7 +1291,6 @@ void PsActivity::signInToPsn() {
         updateAccountUi();
         return;
     }
-        ps_manager_->clearPsnDeviceCache();
     auth.loadToken(lunar::get_psn_token_path());
     if (auth.hasValidToken()) {
         updateAccountUi();
@@ -1132,10 +1319,11 @@ void PsActivity::signInToPsn() {
                         if (error_kind == ps::PsnAuthErrorKind::SessionExpired) {
                             manager->psnAuth().signOut();
                             std::remove(lunar::get_psn_token_path());
+                            manager->clearPsnDeviceCache();
                             if (psn_state_) psn_state_->setText(
                                 brls::getStr("lunarnx/ps/psn_session_expired", error));
                             brls::Application::pushActivity(
-                                new PsnLoginActivity(manager->psnAuth()),
+                                new PsnLoginActivity(manager),
                                 brls::TransitionAnimation::NONE);
                         } else {
                             if (psn_state_) psn_state_->setText(
@@ -1147,10 +1335,9 @@ void PsActivity::signInToPsn() {
             });
         if (!started && psn_state_) psn_state_->setText(brls::getStr("lunarnx/ps/psn_could_not_restore"));
         return;
-                            manager->clearPsnDeviceCache();
     }
     brls::Application::pushActivity(
-        new PsnLoginActivity(auth), brls::TransitionAnimation::NONE);
+        new PsnLoginActivity(ps_manager_), brls::TransitionAnimation::NONE);
 }
 
 } // namespace lunar::ui

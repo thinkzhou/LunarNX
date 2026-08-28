@@ -9,6 +9,10 @@ def main() -> None:
 
     assert "setCustomNavigationRoute" in activity
     assert "digit_buttons" in activity
+    assert "std::vector<brls::View*> row_buttons;" in activity
+    assert "digit_buttons[digit - '0'] = btn;" in activity
+    assert "row_buttons.push_back(btn);" in activity
+    assert "std::vector<brls::View*> digit_buttons;" not in activity
     assert "FocusDirection::UP" in activity
     assert "FocusDirection::RIGHT" in activity
 

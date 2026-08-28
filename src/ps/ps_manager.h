@@ -8,6 +8,7 @@
 #include "ps_connection_plan.h"
 #include "ps_registration.h"
 #include "psn_auth_manager.h"
+#include "../common/operation_generation.h"
 #include <chiaki/log.h>
 #include <atomic>
 #include <functional>
@@ -78,6 +79,7 @@ private:
     PsCredentials credentials_;
     PsnAuthManager psn_auth_;
     std::unique_ptr<PsConsoleRepository> repository_;
+    common::OperationGeneration psn_device_generation_;
     std::unique_ptr<PsRegistration> registration_;
     std::atomic<uint64_t> registration_generation_{0};
     std::shared_ptr<std::atomic<bool>> alive_ =

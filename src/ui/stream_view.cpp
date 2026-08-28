@@ -243,6 +243,9 @@ StreamView::StreamView(std::shared_ptr<app::IStreamRuntime> runtime)
 
 StreamView::~StreamView() {
     alive_->store(false);
+    terminal_stop_->store(true);
+    lifecycle_generation_->invalidate();
+    runtime_->requestStop();
     running_ = false;
     brls::Application::getWindowFocusChangedEvent()->unsubscribe(
         focus_subscription_);
@@ -267,16 +270,25 @@ void StreamView::handleWindowFocusChanged(bool focused) {
     }
 
     if (!backgrounded_.load()) return;
+    if (terminal_stop_->load() || stop_started_.load()) return;
     if (foreground_recovery_running_.exchange(true)) return;
     backgrounded_ = false;
 
     auto runtime = runtime_;
     auto alive = alive_;
+    auto terminal_stop = terminal_stop_;
+    auto lifecycle_generation = lifecycle_generation_;
+    const auto recovery_ticket = lifecycle_generation->capture();
+    auto cancelled = [terminal_stop, lifecycle_generation, recovery_ticket]() {
+        return terminal_stop->load() ||
+            !lifecycle_generation->isCurrent(recovery_ticket);
+    };
     const bool started = lunar::platform::startNetworkWorker(
-        "resume-stream", [this, runtime, alive]() {
-            const bool recovered = runtime->resumeAfterForeground();
-            brls::sync([this, runtime, alive, recovered]() {
-                if (!alive->load()) return;
+        "resume-stream", [this, runtime, alive, cancelled]() {
+            const bool recovered = !cancelled() &&
+                runtime->resumeAfterForeground(cancelled);
+            brls::sync([this, runtime, alive, cancelled, recovered]() {
+                if (!alive->load() || cancelled()) return;
                 foreground_recovery_running_ = false;
                 if (recovered) {
                     updateInputOwnership();
@@ -626,6 +638,9 @@ void StreamView::showStoppingOverlay() {
 
 void StreamView::stopAndReturn() {
     if (stop_started_.exchange(true)) return;
+    terminal_stop_->store(true);
+    lifecycle_generation_->invalidate();
+    runtime_->requestStop();
     if (confirm_box_) confirm_box_->setVisibility(brls::Visibility::GONE);
     showStoppingOverlay();
     brls::Application::blockInputs();
@@ -656,13 +671,21 @@ void StreamView::stopAndReturn() {
             });
         });
     if (!started) {
+        // requestStop() is terminal: once it has been issued the runtime
+        // cannot safely be presented as live again. Thread creation failure is
+        // exceptional, so finish cleanup synchronously instead of reviving a
+        // half-cancelled stream.
+        lunar::diagnosticLog(
+            "stream-view", "stop worker unavailable; cleaning up inline");
+        runtime->stopStream(report_disconnect);
         if (stopping_overlay_) {
             stopping_overlay_->setVisibility(brls::Visibility::GONE);
         }
         brls::Application::unblockInputs();
-        stop_started_ = false;
-        running_ = true;
-        return;
+        if (alive_->load()) {
+            brls::Application::popActivity(
+                brls::TransitionAnimation::NONE);
+        }
     }
 }
 

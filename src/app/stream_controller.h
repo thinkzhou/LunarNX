@@ -71,6 +71,7 @@ public:
                           const stream::MediaPipelineOptions& options,
                           int bitrate_kbps);
     void stopStream();
+    void requestStop() override;
     void stopStream(bool set_disconnected) override;
     StreamState getState() const override { return state_.load(); }
     std::string getLastStreamError() const;
@@ -81,7 +82,7 @@ public:
     void setStateCallback(StateCallback cb);
     input::StreamInputRouter& inputRouter() override { return input_router_; }
     void requestPlatformHomeButton() override;
-    bool resumeAfterForeground() override;
+    bool resumeAfterForeground(CancelCallback cancel = {}) override;
     void requestGuideButton();
     bool consumeGuideButtonRequest();
     void setBaseUrl(const std::string& url) { base_url_ = url; }
@@ -119,7 +120,8 @@ private:
     void requestStreamStop();
     void cleanupStreamResources(bool set_disconnected);
     bool startStreamWithProfile(const StreamProfile& profile,
-                                const stream::MediaPipelineOptions& options);
+                                const stream::MediaPipelineOptions& options,
+                                CancelCallback cancel = {});
     std::shared_ptr<api::XboxApiClient> makeApiClient(SessionType type);
 
     std::unique_ptr<api::HttpClient> http_;

@@ -5,7 +5,9 @@
 #include "../ps/ps_manager.h"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace lunar::ui {
@@ -35,6 +37,10 @@ private:
         std::make_shared<std::atomic<bool>>(false);
     std::shared_ptr<std::atomic<uint64_t>> wake_generation_ =
         std::make_shared<std::atomic<uint64_t>>(0);
+    std::shared_ptr<std::condition_variable> wake_wait_cv_ =
+        std::make_shared<std::condition_variable>();
+    std::shared_ptr<std::mutex> wake_wait_mutex_ =
+        std::make_shared<std::mutex>();
 
     brls::Box* console_list_ = nullptr;
     brls::Box* local_actions_ = nullptr;

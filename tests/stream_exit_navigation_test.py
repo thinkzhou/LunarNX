@@ -74,6 +74,11 @@ require(
     "brls::Visibility::GONE" in failure,
     "StreamView must hide the progress overlay if the stop worker cannot start",
 )
+require(
+    "stop_started_ = false" not in body and "running_ = true" not in body and
+    "runtime->stopStream(report_disconnect);" in body,
+    "a failed stop worker must finish terminal cleanup instead of reviving a cancelled stream",
+)
 
 for locale in ("en-US", "zh-Hans", "zh-Hant"):
     translations = json.loads(

@@ -17,12 +17,27 @@ struct PsRemoteAttemptProfile {
     PsNatTraversalMode mode = PsNatTraversalMode::Fast;
     int port_guessing_sockets = kPsFastNatSockets;
     int port_guesses = 0;
-    bool discover_upnp = false;
 };
+
+inline bool shouldRefreshPsnToken(std::string_view phase,
+                                  long http_status,
+                                  bool refresh_already_attempted,
+                                  bool has_attempt_remaining) {
+    // A rejected session-creation request is the only HTTP failure we can
+    // safely interpret as a possibly stale access token. Later PS4 startup
+    // failures may be a deterministic "no Main PS4" response instead.
+    return (http_status == 401 || http_status == 403) &&
+        phase == "session create" &&
+        !refresh_already_attempted && has_attempt_remaining;
+}
+
+inline bool isRetryableRemoteHttpStatus(long http_status) {
+    return http_status == 408 || http_status == 429 || http_status >= 500;
+}
 
 // Escalation is deliberately stateful and monotonic. Ordinary PSN/HTTP
 // retries remain on the low-overhead path; only a retryable failure after the
-// CTRL candidates were tested enables router discovery and wider guessing.
+// CTRL candidates were tested enables wider bounded port guessing.
 class PsRemoteRetryPolicy {
 public:
     PsRemoteRetryPolicy(
@@ -33,13 +48,12 @@ public:
 
     PsRemoteAttemptProfile attemptProfile() const {
         if (!nat_compatibility_) {
-            return {PsNatTraversalMode::Fast, fast_sockets_, 0, false};
+            return {PsNatTraversalMode::Fast, fast_sockets_, 0};
         }
         return {
             PsNatTraversalMode::Compatibility,
             compatibility_sockets_,
             kPsCompatibilityPortGuesses,
-            true,
         };
     }
 
