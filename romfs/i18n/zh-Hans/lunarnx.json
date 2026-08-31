@@ -31,6 +31,19 @@
   "streaming": "串流中",
   "disconnected": "已断开连接"
  },
+ "launch_mode": {
+  "eyebrow": "启动方式不正确",
+  "title": "请使用完整内存模式启动 LunarNX",
+  "description": "从相册直接打开时，系统提供的网络资源不足，可能导致主机搜索、配对或串流失败。",
+  "step1_title": "退出 LunarNX",
+  "step1_detail": "返回 Nintendo Switch 的 HOME 菜单。",
+  "step2_title": "按住 R 启动游戏",
+  "step2_detail": "选择任意一款已安装的游戏，按住 R 并启动，直到 hbmenu 出现。",
+  "step3_title": "从 hbmenu 打开 LunarNX",
+  "step3_detail": "进入完整模式的 hbmenu 后，再选择 LunarNX。",
+  "note": "看到 hbmenu 后即可松开 R。请勿直接从相册启动 LunarNX。",
+  "exit": "退出 LunarNX"
+ },
  "dev": {
   "title": "开发工具",
   "subtitle": "安装调试版本或上传当前诊断日志",

@@ -5,6 +5,7 @@
 #include "diagnostics.h"
 #include "app/runtime_context.h"
 #include "ps/chiaki_crypto_init.h"
+#include "ui/applet_mode_activity.h"
 #include "ui/platform_activity.h"
 #include "ui/i18n.h"
 #include "ui/ui_style.h"
@@ -47,6 +48,11 @@ void preferSwitchCore(int ordinal) {
     }
 }
 
+bool hasFullApplicationResources(AppletType type) {
+    return type == AppletType_Application ||
+        type == AppletType_SystemApplication;
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -84,7 +90,14 @@ int main(int argc, char* argv[]) {
 #if LUNARNX_PS_MOCK_AUTORUN
     brls::Application::pushActivity(new lunar::tools::PsMockLifecycleActivity());
 #else
-    brls::Application::pushActivity(new lunar::ui::PlatformActivity());
+    const AppletType applet_type = appletGetAppletType();
+    if (hasFullApplicationResources(applet_type)) {
+        brls::Application::pushActivity(new lunar::ui::PlatformActivity());
+    } else {
+        lunar::diagnosticLog("main",
+            "blocking limited launch mode applet_type=%d", applet_type);
+        brls::Application::pushActivity(new lunar::ui::AppletModeActivity());
+    }
 #endif
     lunar::diagnosticLog("main", "push root activity done");
 
