@@ -3,6 +3,7 @@ DEVKITA64  = $(DEVKITPRO)/devkitA64
 PORTLIBS   = $(DEVKITPRO)/portlibs/switch
 LIBNX      = $(DEVKITPRO)/libnx
 BOREALIS   = lib/borealis
+LUNARNX_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 .DEFAULT_GOAL := all
 
@@ -43,7 +44,7 @@ CURL_PROVIDER ?= moonlight
 CURL_VERIFY ?= 0
 CURL_VERBOSE ?= 0
 CURL_TIMEOUT_MS ?= 120000
-APP_VERSION ?= 0.2.0
+APP_VERSION ?= $(or $(strip $(shell sed -n '1p' "$(LUNARNX_ROOT)/version.txt" 2>/dev/null)),0.0.0)
 APP_TITLE ?= LunarNX
 DEV_BRIDGE_UPLOAD_TOKEN ?=
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)

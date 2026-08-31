@@ -20,12 +20,22 @@ require(workflow, "tests/switch_nro_bss_test.py", "workflow")
 require(workflow, "actions/checkout@v5", "workflow")
 require(workflow, 'safe.directory "$GITHUB_WORKSPACE"', "workflow")
 require(workflow, "actions/upload-artifact@v7", "workflow")
+require(workflow, "actions/download-artifact@v8", "workflow")
+require(workflow, "scripts/resolve_app_version.sh", "workflow")
+require(workflow, 'gh release upload "$RELEASE_TAG"', "workflow")
+require(workflow, "LunarNX-$APP_VERSION.zip", "workflow")
+require(workflow, "SHA256SUMS", "workflow")
 assert "actions/create-release" not in workflow
 assert "softprops/action-gh-release" not in workflow
 
 switch_wrapper = (ROOT / "scripts/docker_build_full.sh").read_text()
 require(switch_wrapper, "build_switch_in_container.sh", "Switch Docker wrapper")
-require(switch_wrapper, 'APP_VERSION="${APP_VERSION:-0.2.0}"', "Switch Docker wrapper")
+require(switch_wrapper, 'default_app_version=', "Switch Docker wrapper")
+require(
+    switch_wrapper,
+    'APP_VERSION="${APP_VERSION:-$default_app_version}"',
+    "Switch Docker wrapper",
+)
 require(switch_wrapper, "DEV_BRIDGE_UPLOAD_TOKEN", "Switch Docker wrapper")
 
 chiaki_wrapper = (ROOT / "tools/chiaki_switch/build_in_docker.sh").read_text()
