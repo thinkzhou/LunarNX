@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-CHIAKI="$ROOT/github_repos/chiaki-ng-fork"
+CHIAKI="${LUNARNX_CHIAKI_CHECKOUT:-$ROOT/github_repos/chiaki-ng-fork}"
 OUT="${TMPDIR:-/tmp}/lunarnx-chiaki-registration-probe"
 EXPECTED_COMMIT=1597a48514e5d9e67168ca40e6fa40c0171cd379
 

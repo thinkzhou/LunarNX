@@ -2,7 +2,8 @@
 
 #ifdef __SWITCH__
 
-#include "ps_console.h"
+#include "ps_connection_plan.h"
+#include "ps_connection_trace.h"
 #include "psn_auth_manager.h"
 #include "ps_remote_connector.h"
 #include "../app/stream_runtime.h"
@@ -32,8 +33,11 @@ class PsStreamController : public app::IStreamRuntime {
 public:
     using LaunchCallback = std::function<void(app::StreamState, const std::string&)>;
     using LoginPinCallback = std::function<void(bool incorrect)>;
+    using PsnRefreshCallback = std::function<bool(
+        std::string& access_token, std::string& account_id, std::string& error,
+        bool& session_expired, const std::function<bool()>& cancel)>;
 
-    PsStreamController(const PsConsole& console,
+    PsStreamController(const PsConnectionPlan& plan,
                        const std::string& psn_access_token,
                        const std::string& psn_account_id,
                        int width, int height, int fps, int bitrate_kbps,
@@ -41,6 +45,7 @@ public:
     ~PsStreamController() override;
 
     // IStreamRuntime
+    void requestStop() override;
     void stopStream(bool set_disconnected) override;
     app::StreamState getState() const override { return state_.load(); }
     const stream::PerfStats& getPerfStats() const override { return perf_; }
@@ -53,7 +58,7 @@ public:
     }
     input::StreamInputRouter& inputRouter() override { return input_router_; }
     void requestPlatformHomeButton() override { ps_button_requested_ = true; }
-    bool resumeAfterForeground() override;
+    bool resumeAfterForeground(CancelCallback cancel = {}) override;
     app::TouchpadFeedback getTouchpadFeedback() const override;
     void update() override;
     void presentVideoFrame() override;
@@ -64,9 +69,16 @@ public:
     void setRumbleEnabled(bool enabled);
     void setRumbleStrengthPercent(int percent);
     bool setPsnCredentials(std::string access_token, std::string account_id);
-    std::string lastError() const { return last_error_; }
+    std::string lastError() const;
+    bool lastPsnRefreshFailed() const {
+        return remote_result_.token_refresh_failed;
+    }
+    bool lastPsnRefreshSessionExpired() const {
+        return remote_result_.token_refresh_session_expired;
+    }
     void setLaunchCallback(LaunchCallback cb);
     void setLoginPinCallback(LoginPinCallback cb);
+    void setPsnRefreshCallback(PsnRefreshCallback cb);
     void submitLoginPin(const std::string& pin);
 
 private:
@@ -77,8 +89,9 @@ private:
     void stopVideoMonitor();
     bool requestRecoveryIDR();
     void releasePendingRemoteResult();
+    void setLastError(std::string error);
 
-    PsConsole console_;
+    PsConnectionPlan plan_;
     std::string psn_access_token_;
     std::string psn_account_id_;
     int width_, height_, fps_, bitrate_kbps_;
@@ -99,14 +112,17 @@ private:
     ChiakiLog remote_log_{};
     std::unique_ptr<PsRemoteConnector> remote_connector_;
     PsRemoteResult remote_result_;
+    std::shared_ptr<PsConnectionTrace> connection_trace_;
 
     // State
     std::atomic<app::StreamState> state_{app::StreamState::Idle};
     stream::PerfStats perf_;
     std::string last_error_;
+    mutable std::mutex last_error_mutex_;
     std::string launch_info_;
     LaunchCallback launch_callback_;
     LoginPinCallback login_pin_callback_;
+    PsnRefreshCallback psn_refresh_callback_;
     mutable std::mutex callback_mutex_;
     mutable std::mutex remote_connector_mutex_;
     // Start/stop mutate the session graph exclusively. Input sampling and

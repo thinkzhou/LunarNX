@@ -14,6 +14,7 @@ def ordered(source, markers):
 
 def main():
     connector = Path("src/ps/ps_remote_connector.cpp").read_text()
+    retry_policy = Path("src/ps/ps_remote_retry_policy.h").read_text()
     connector_header = Path("src/ps/ps_remote_connector.h").read_text()
     auth_manager = Path("src/ps/psn_auth_manager.cpp").read_text()
     controller = Path("src/ps/ps_stream_controller.cpp").read_text()
@@ -29,8 +30,9 @@ def main():
         "chiaki_holepunch_session_start",
         "CHIAKI_HOLEPUNCH_PORT_TYPE_CTRL",
     ]), "remote connector must follow chiaki-ng control-hole ordering")
-    require("chiaki_holepunch_upnp_discover" not in connector,
-            "Switch connector must not pull in unavailable miniupnpc symbols")
+    require("chiaki_holepunch_upnp_discover" not in connector and
+            "discover_upnp" not in retry_policy,
+            "session-owned UPnP probing must not make loading-page cancellation unbounded")
     require("CHIAKI_HOLEPUNCH_PORT_TYPE_DATA" not in connector,
             "remote connector must leave the data hole to ChiakiSession")
     require("chiaki_get_holepunch_sock" not in connector,
@@ -51,22 +53,46 @@ def main():
             "remote connector must select an explicit runtime network profile")
     require("chiaki_holepunch_session_set_port_guessing_socks" in connector,
             "remote connector must apply the configured NAT probe socket count")
-    require("kNativePortGuessingSockets = 64" in connector and
+    require("kPsFastNatSockets = 64" in retry_policy and
             "chiaki_holepunch_session_force_port_guessing(session, true)" in connector,
             "native Switch must retain bounded port-rewriting NAT traversal")
+    require("kPsCompatibilityNatSockets = 120" in retry_policy and
+            "kPsCompatibilityPortGuesses = 96" in retry_policy and
+            'phase == "control punch"' in retry_policy,
+            "CTRL candidate failure must enable a bounded wider NAT fallback")
+    require("chiaki_holepunch_session_get_stun_allocation" in connector and
+            "retry_policy.recordStunAllocation(random_allocation)" in connector and
+            'on_status("Preparing media channel for restrictive NAT...")' in connector,
+            "random CTRL STUN allocation must upgrade the later DATA holepunch")
     require("Ryubing UDP relay is unavailable with Akira Chiaki" in connector,
             "Ryubing profile must fail visibly when using unpatched Akira Chiaki")
     require("kRemoteMaxAttempts = 3" in connector and
             "isRetryableRemoteError" in connector,
             "native remote connector must retry transient full-flow failures")
+    retry_classifier = connector.split(
+        "bool isRetryableRemoteError", 1)[1].split("} // namespace", 1)[0]
+    require("CHIAKI_ERR_HTTP_NONOK" not in retry_classifier and
+            "CHIAKI_ERR_INVALID_RESPONSE" not in retry_classifier and
+            "CHIAKI_ERR_UNKNOWN" not in retry_classifier,
+            "deterministic HTTP, protocol and unknown failures must not be retried blindly")
+    require("TokenRefreshCallback" in connector_header and
+            "auth_refresh_attempted" in connector and
+            "CHIAKI_ERR_HTTP_NONOK" in connector and
+            "chiaki_holepunch_session_get_last_http_status" in connector and
+            "refresh_token" in connector and
+            "shouldRefreshPsnToken" in connector,
+            "an explicit 401/403 PSN rejection must get exactly one refresh path")
     require("retry_cv_.wait_for" in connector and
             "retry_cv_.notify_all" in connector,
             "remote retry backoff must be immediately cancellable")
     require("result.failed_phase" in connector and
             "result.error" in connector and
+            "result.token_refresh_failed" in connector and
+            "lastPsnRefreshFailed" in controller_header and
+            "lastPsnRefreshSessionExpired" in controller_header and
             "remote_result_.failed_phase" in controller and
             "remote_result_.attempts" in controller,
-            "remote failures must retain their phase and Chiaki error")
+            "remote failures must retain their phase, Chiaki error and refresh provenance")
     require("ChiakiLog remote_log_{}" in controller_header and
             "&remote_log_" in controller and
             "auto log = makeChiakiDiagnosticLog" not in controller,
@@ -80,7 +106,7 @@ def main():
     require("CHIAKI_EVENT_HOLEPUNCH" in session,
             "session must surface Chiaki-owned data-hole progress")
     require("connect_info_.morning" in session and
-            "console_.credentials->rp_key" in controller,
+            "plan_.credentials->rp_key" in controller,
             "LAN sessions must pass both Akira registration keys to Chiaki")
     require("CHIAKI_EVENT_LOGIN_PIN_REQUEST" in session and
             "PIN required - re-register the console" not in session,

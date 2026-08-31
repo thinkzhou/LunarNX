@@ -10,7 +10,8 @@
 
 namespace lunar::ui {
 
-PsnLoginActivity::PsnLoginActivity(ps::PsnAuthManager& auth) : auth_(auth) {}
+PsnLoginActivity::PsnLoginActivity(std::shared_ptr<ps::PsManager> manager)
+    : manager_(std::move(manager)) {}
 
 PsnLoginActivity::~PsnLoginActivity() {
     alive_->store(false);
@@ -127,10 +128,11 @@ brls::View* PsnLoginActivity::createContentView() {
 }
 
 void PsnLoginActivity::startPhoneLogin() {
-    const std::string login_url = auth_.startAuth();
+    auto& auth = manager_->psnAuth();
+    const std::string login_url = auth.startAuth();
     if (login_url.empty()) {
         if (status_) {
-            status_->setText("Could not prepare Sony sign-in: " + auth_.getAuthError());
+            status_->setText("Could not prepare Sony sign-in: " + auth.getAuthError());
             status_->setTextColor(uiPalette().error);
         }
         return;
@@ -179,12 +181,15 @@ void PsnLoginActivity::startPhoneLogin() {
 void PsnLoginActivity::exchangeInBackground(std::string input) {
     lunar::diagnosticLog("ui-psn-login", "token exchange requested input_len=%zu", input.size());
     auto alive = alive_;
-    auto& auth = auth_;
+    auto manager = manager_;
     auto* status_ptr = status_;
     bool started = lunar::platform::startNetworkWorker("psn-token-exchange",
-        [alive, &auth, status_ptr, input = std::move(input)]() {
-            bool authenticated = auth.submitRedirectUrl(input, {});
-            bool saved = authenticated && auth.saveToken(lunar::get_psn_token_path());
+        [alive, manager, status_ptr, input = std::move(input)]() {
+            auto& auth = manager->psnAuth();
+            bool authenticated = auth.submitRedirectUrl(
+                input, {}, [alive]() { return !alive->load(); });
+            bool saved = authenticated && alive->load() &&
+                auth.saveToken(lunar::get_psn_token_path());
             std::string error = authenticated && !saved
                 ? "Signed in, but could not save the PSN session"
                 : auth.getAuthError();

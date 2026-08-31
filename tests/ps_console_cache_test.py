@@ -19,6 +19,16 @@ def main():
             "PS remote console cache must have its own storage path")
     require("loadPsnCache" in repository_h and "savePsnCache" in repository_h,
             "PS repository must own persistent PSN console cache serialization")
+    require("makeMainPs4RemoteConsole" in repository and
+            'console.stable_id = "psn:main-ps4"' in repository and
+            "PsRemoteEndpointKind::MainPS4" in repository,
+            "PS4 remote play must model Sony's account-scoped Main PS4 endpoint")
+    load_start = repository.index("bool PsConsoleRepository::loadPsnCache")
+    file_open = repository.index("std::fopen", load_start)
+    main_ps4_insert = repository.index(
+        "psn_consoles_.push_back(makeMainPs4RemoteConsole())", load_start)
+    require(main_ps4_insert < file_open,
+            "Main PS4 must remain available when the PS5 device cache is absent")
     require('cJSON_GetObjectItemCaseSensitive(root, "account_id")' in repository and
             "account_id != account->valuestring" in repository,
             "PS cache must be scoped to the signed-in PSN account")

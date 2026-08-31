@@ -12,9 +12,11 @@ def main():
     controller = Path("src/ps/ps_stream_controller.h").read_text()
     session = Path("src/ps/ps_stream_session.cpp").read_text()
 
-    require("PsConsoleSource::Local" in ui and "selected.remote.reset()" in ui,
+    require("PsConsoleSource::Local" in ui and
+            "PsConnectionPreference::LocalOnly" in ui,
             "local tab must force a local route")
-    require("PsConsoleSource::Remote" in ui and "selected.local.reset()" in ui,
+    require("PsConsoleSource::Remote" in ui and
+            "PsConnectionPreference::RemoteOnly" in ui,
             "remote tab must force a PSN route")
     require("LaunchCallback" in controller and "setLaunchCallback" in controller,
             "PS controller must expose launch progress")
@@ -46,26 +48,41 @@ def main():
     require("requestCancel()" in cancel_body and
             "stopStream(false)" not in cancel_body,
             "loading UI cancellation must not destroy an active connector")
-    require("context->connect_worker_done = true" in ui and
-            "schedulePsConnectCleanup(context, controller)" in ui,
-            "loading UI must defer cleanup until the connect worker exits")
+    require("PsConnectWorkerFinalizer" in ui and
+            "context->connect_worker_done = true" in ui and
+            "runPsConnectCleanup" in ui,
+            "loading UI must finalize cancellation even when connection code throws")
+    worker_failure = ui.split("if (!worker", 1)[1].split("});", 1)[0]
+    require("connect_worker_done" in worker_failure,
+            "a failed connect-worker launch must still enable loading-page cancellation")
+    require("connect_worker_started" in ui and
+            "if (context_->cancel_requested.load())" in ui,
+            "a failed cleanup-worker launch must leave B cancellation retryable")
     connect_worker = ui.split('startNetworkWorker("ps-connect"', 1)[1].split(
         '}, 8 * 1024 * 1024)', 1)[0]
     require("[context, controller, manager, remote, status]" in connect_worker and
             "[this" not in connect_worker,
             "detached PS connect worker must not retain the loading activity")
-    require("ensureValidToken({}, &token_refreshed)" in connect_worker and
+    require("ensureValidToken(" in connect_worker and
+            "context->cancel_requested.load()" in connect_worker and
             "token_refreshed &&" in connect_worker and
             "manager->psnAuth().saveToken(" in connect_worker and
             "controller->setPsnCredentials(" in connect_worker and
             "controller->startStream()" in connect_worker,
             "remote loading must validate and persist PSN credentials before streaming")
+    require("setPsnRefreshCallback" in connect_worker and
+            "psnAuth().refreshToken(" in connect_worker,
+            "remote loading must provide a one-shot refresh for server-rejected tokens")
     require("PsnAuthErrorKind::SessionExpired" in connect_worker and
             "manager->psnAuth().signOut()" in connect_worker and
-            "new PsnLoginActivity(manager->psnAuth())" in connect_worker,
+            "new PsnLoginActivity(manager)" in connect_worker,
             "rejected refresh credentials must be cleared and return to PSN login")
     require("setLaunchCallback({})" in ui and "setLoginPinCallback({})" in ui,
             "PS loading callbacks must be cleared before stop or destruction")
+    connect_destructor = ui.split("~PsConnectActivity()", 1)[1].split(
+        "brls::View* createContentView", 1)[0]
+    require("setPsnRefreshCallback({})" not in connect_destructor,
+            "PSN refresh ownership must survive the loading activity for foreground rebuilds")
     require("void requestCancel()" in controller and
             "PsStreamController::requestCancel()" in controller_source,
             "PS controller must expose non-destructive connection cancellation")

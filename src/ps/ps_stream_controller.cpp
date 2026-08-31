@@ -2,7 +2,6 @@
 
 #include "ps_stream_controller.h"
 #include "ps_media_bridge.h"
-#include "ps_console_resolver.h"
 #include "psn_auth_utils.h"
 #include "chiaki_log_adapter.h"
 #include "../diagnostics.h"
@@ -21,6 +20,18 @@ namespace lunar::ps {
 namespace {
 constexpr int kPsButtonPulseFrames = 16;
 constexpr std::chrono::milliseconds kPsInputInterval{8};
+
+const char* streamStateName(app::StreamState state) {
+    switch (state) {
+        case app::StreamState::Idle: return "idle";
+        case app::StreamState::Authenticating: return "authenticating";
+        case app::StreamState::Connecting: return "connecting";
+        case app::StreamState::Streaming: return "streaming";
+        case app::StreamState::Disconnected: return "disconnected";
+        case app::StreamState::Error: return "error";
+    }
+    return "unknown";
+}
 }
 
 void PsStreamController::releasePendingRemoteResult() {
@@ -30,19 +41,19 @@ void PsStreamController::releasePendingRemoteResult() {
     remote_result_ = {};
 }
 
-PsStreamController::PsStreamController(const PsConsole& console,
+PsStreamController::PsStreamController(const PsConnectionPlan& plan,
                                         const std::string& psn_access_token,
                                         const std::string& psn_account_id,
                                         int width, int height, int fps, int bitrate_kbps,
                                         stream::VideoCodec video_codec)
-    : console_(console)
+    : plan_(plan)
     , psn_access_token_(psn_access_token)
     , psn_account_id_(psn_account_id)
     , width_(width)
     , height_(height)
     , fps_(fps)
     , bitrate_kbps_(bitrate_kbps)
-    , video_codec_(console.target >= 1000000
+    , video_codec_(plan.isPs5()
           ? video_codec : stream::VideoCodec::H264)
     , video_backend_(stream::VideoBackend::HardwareZeroCopy) {}
 
@@ -78,10 +89,33 @@ app::TouchpadFeedback PsStreamController::getTouchpadFeedback() const {
     return touchpad_feedback_;
 }
 
+std::string PsStreamController::lastError() const {
+    std::lock_guard<std::mutex> lock(last_error_mutex_);
+    return last_error_;
+}
+
+void PsStreamController::setLastError(std::string error) {
+    std::lock_guard<std::mutex> lock(last_error_mutex_);
+    last_error_ = std::move(error);
+}
+
 bool PsStreamController::startStream() {
     std::unique_lock<std::shared_mutex> operation_lock(stream_operation_mutex_);
     if (state_.load() != app::StreamState::Idle) return false;
     if (cancel_requested_.load()) return false;
+    const bool mock_replay = psMockReplayEnabled();
+    const char* route = mock_replay ? "mock"
+        : plan_.isRemote() ? "remote" : plan_.isLocal() ? "lan" : "none";
+    connection_trace_ = std::make_shared<PsConnectionTrace>(
+        route, plan_.isPs5() ? "ps5" : "ps4");
+    connection_trace_->record(
+        "preflight", "ok",
+        "plan=%d host_present=%d credentials=%d console_uid=%d token_present=%d account_present=%d profile=%dx%d@%d bitrate_kbps=%d codec=%s",
+        static_cast<int>(plan_.type), plan_.host_addr.empty() ? 0 : 1,
+        plan_.credentials.has_value() ? 1 : 0, plan_.has_console_uid ? 1 : 0,
+        psn_access_token_.empty() ? 0 : 1, psn_account_id_.empty() ? 0 : 1,
+        width_, height_, fps_, bitrate_kbps_,
+        stream::videoCodecName(video_codec_));
     setState(app::StreamState::Connecting, "Setting up stream...");
     stream_transport_connected_ = false;
     ps_button_requested_ = false;
@@ -90,58 +124,53 @@ bool PsStreamController::startStream() {
     last_input_buttons_ = 0;
     input_transition_logs_ = 0;
 
-    const bool mock_replay = psMockReplayEnabled();
-    diagnosticLog("ps-controller", "video codec=%s target_ps5=%d",
+    diagnosticLog("ps-controller", "video codec=%s plan=%d target_ps5=%d",
                   stream::videoCodecName(video_codec_),
-                  console_.target >= 1000000 ? 1 : 0);
-    bool has_token = !psn_access_token_.empty();
-    ResolvedRoute route;
+                  static_cast<int>(plan_.type), plan_.isPs5() ? 1 : 0);
     if (mock_replay) {
-        route.type = ResolvedRouteType::Local;
-        route.host_addr = "mock-replay";
         diagnosticLog("ps-controller", "development mock replay selected");
-    } else {
-        route = PsConsoleResolver::resolve(console_, has_token);
     }
 
-    if (route.type == ResolvedRouteType::None) {
-        last_error_ = route.error.empty() ? "No route available" : route.error;
-        setState(app::StreamState::Error, last_error_);
+    if (!mock_replay && plan_.type == PsConnectionPlanType::None) {
+        const std::string error = plan_.error.empty()
+            ? "No route available" : plan_.error;
+        setState(app::StreamState::Error, error);
         return false;
     }
 
     // Remote path: punch holes
-    if (!mock_replay && route.type == ResolvedRouteType::Remote) {
+    if (!mock_replay && plan_.isRemote()) {
         setState(app::StreamState::Connecting, "Connecting via PSN...");
 
-        diagnosticLog("ps-controller", "remote target=%d ps5=%d duid=%s",
-                      console_.target, console_.target >= 1000000 ? 1 : 0,
-                      route.console_duid.c_str());
+        diagnosticLog("ps-controller", "remote target=%d ps5=%d has_uid=%d",
+                      plan_.target, plan_.isPs5() ? 1 : 0,
+                      plan_.has_console_uid ? 1 : 0);
 
         std::string account_id_bytes;
         if (!base64Decode(psn_account_id_, account_id_bytes) ||
             account_id_bytes.size() != CHIAKI_PSN_ACCOUNT_ID_SIZE) {
-            last_error_ = "PSN account ID is missing or invalid";
-            setState(app::StreamState::Error, last_error_);
+            connection_trace_->record(
+                "psn-account", "invalid", "decoded_bytes=%zu expected=%d",
+                account_id_bytes.size(), CHIAKI_PSN_ACCOUNT_ID_SIZE);
+            setState(app::StreamState::Error,
+                     "PSN account ID is missing or invalid");
             return false;
         }
+        connection_trace_->record(
+            "psn-account", "ok", "decoded_bytes=%zu",
+            account_id_bytes.size());
         remote_result_.psn_account_id = std::move(account_id_bytes);
 
         remote_log_ = makeChiakiDiagnosticLog("chiaki-remote");
         {
             std::lock_guard<std::mutex> lock(remote_connector_mutex_);
             remote_connector_ =
-                std::make_unique<PsRemoteConnector>(psn_access_token_, &remote_log_);
+                std::make_unique<PsRemoteConnector>(
+                    psn_access_token_, &remote_log_, connection_trace_);
         }
         if (cancel_requested_.load()) {
+            connection_trace_->finish("cancelled", "after-remote-connector-create");
             releasePendingRemoteResult();
-            return false;
-        }
-
-        uint8_t console_uid[32]{};
-        if (!decodeDuid(route.console_duid, console_uid)) {
-            last_error_ = "PSN console ID is invalid";
-            setState(app::StreamState::Error, last_error_);
             return false;
         }
 
@@ -150,31 +179,75 @@ bool PsStreamController::startStream() {
             std::lock_guard<std::mutex> lock(remote_connector_mutex_);
             connector = remote_connector_.get();
         }
-        if (!connector->connect(console_.target, console_uid,
+        if (!connector->connect(plan_,
                 [this](const std::string& phase) {
                     setState(app::StreamState::Connecting, phase);
+                },
+                [this](std::string& refreshed_token, std::string& error,
+                       bool& session_expired) {
+                    PsnRefreshCallback refresh_callback;
+                    {
+                        std::lock_guard<std::mutex> lock(callback_mutex_);
+                        refresh_callback = psn_refresh_callback_;
+                    }
+                    if (!refresh_callback) {
+                        error = "No PSN refresh callback is available";
+                        return false;
+                    }
+
+                    std::string account_id;
+                    if (!refresh_callback(
+                            refreshed_token, account_id, error, session_expired,
+                            [this]() { return cancel_requested_.load(); })) {
+                        return false;
+                    }
+                    std::string account_id_bytes;
+                    if (refreshed_token.empty() ||
+                        !base64Decode(account_id, account_id_bytes) ||
+                        account_id_bytes.size() != CHIAKI_PSN_ACCOUNT_ID_SIZE) {
+                        error = "Refreshed PSN credentials are invalid";
+                        return false;
+                    }
+                    psn_access_token_ = refreshed_token;
+                    psn_account_id_ = std::move(account_id);
+                    remote_result_.psn_account_id = std::move(account_id_bytes);
+                    return true;
                 },
                 remote_result_)) {
             if (cancel_requested_.load() ||
                 remote_result_.error == CHIAKI_ERR_CANCELED) {
+                connection_trace_->finish("cancelled", "during-remote-connect");
                 return false;
             }
-            last_error_ = "Remote connection failed";
+            std::string error = "Remote connection failed";
             if (remote_result_.attempts > 1) {
-                last_error_ += " after " + std::to_string(remote_result_.attempts) +
-                               " attempts";
+                error += " after " + std::to_string(remote_result_.attempts) +
+                         " attempts";
             }
             if (!remote_result_.failed_phase.empty()) {
-                last_error_ += " at " + remote_result_.failed_phase;
+                error += " at " + remote_result_.failed_phase;
             }
             if (remote_result_.error != CHIAKI_ERR_SUCCESS) {
-                last_error_ += ": ";
-                last_error_ += chiaki_error_string(remote_result_.error);
+                error += ": ";
+                error += chiaki_error_string(remote_result_.error);
             }
-            setState(app::StreamState::Error, last_error_);
+            if (remote_result_.http_status > 0) {
+                error += " (HTTP " +
+                         std::to_string(remote_result_.http_status) + ")";
+            }
+            if (!remote_result_.error_detail.empty()) {
+                error += ": ";
+                error += remote_result_.error_detail;
+            }
+            setState(app::StreamState::Error, error);
             return false;
         }
+        connection_trace_->record(
+            "remote-control", "ok", "attempts=%d token_refresh=%d",
+            remote_result_.attempts,
+            remote_result_.token_refresh_attempted ? 1 : 0);
         if (cancel_requested_.load()) {
+            connection_trace_->finish("cancelled", "after-remote-control-ready");
             releasePendingRemoteResult();
             return false;
         }
@@ -189,7 +262,7 @@ bool PsStreamController::startStream() {
         input::ButtonMappingProfile::PlayStation);
     rumble_ = std::make_unique<input::RumbleController>();
     input_mapper_ = std::make_unique<PsInputMapper>();
-    touchpad_reader_ = std::make_unique<PsTouchpadReader>(console_.target >= 1000000);
+    touchpad_reader_ = std::make_unique<PsTouchpadReader>(plan_.isPs5());
     motion_reader_ = std::make_unique<PsMotionReader>();
     if (gamepad_) gamepad_->initialize();
     if (motion_reader_) motion_reader_->initialize();
@@ -198,21 +271,25 @@ bool PsStreamController::startStream() {
         rumble_->setStrengthPercent(rumble_strength_percent_.load());
         rumble_->initialize();
     }
+    connection_trace_->record(
+        "components", "ready",
+        "backend=%d media=%d gamepad=%d motion=%d rumble=%d",
+        stream_backend_ ? 1 : 0, media_ ? 1 : 0, gamepad_ ? 1 : 0,
+        motion_reader_ ? 1 : 0, rumble_ ? 1 : 0);
 
     uint8_t regist_key[0x10]{};
     uint8_t morning[0x10]{};
-    if (!mock_replay && route.type == ResolvedRouteType::Local) {
-        if (!console_.credentials.has_value()) {
-            last_error_ = "Console is not paired for local play";
-            setState(app::StreamState::Error, last_error_);
+    if (!mock_replay && plan_.isLocal()) {
+        if (!plan_.credentials.has_value()) {
+            setState(app::StreamState::Error,
+                     "Console is not paired for local play");
             return false;
         }
-        std::memcpy(regist_key, console_.credentials->rp_regist_key,
+        std::memcpy(regist_key, plan_.credentials->rp_regist_key,
                     sizeof(regist_key));
-        std::memcpy(morning, console_.credentials->rp_key, sizeof(morning));
+        std::memcpy(morning, plan_.credentials->rp_key, sizeof(morning));
     }
-    std::string host_addr = route.type == ResolvedRouteType::Local
-        ? route.host_addr : "";
+    std::string host_addr = mock_replay ? "mock-replay" : plan_.host_addr;
 
     media_->setVideoReadyCallback([this]() {
         // DROP_DIAG used to compile this writer out. Starting it before PSN
@@ -221,9 +298,16 @@ bool PsStreamController::startStream() {
         // UPnP and session threads on Switch. Start it only after the first
         // frame proves that the complete PS transport/media stack is alive.
         lunar::startDropDiagnosticWriter();
+        if (connection_trace_) {
+            connection_trace_->record(
+                "first-video-render", "ok", "pipeline_running=%d",
+                media_ && media_->isRunning() ? 1 : 0);
+            connection_trace_->finish("ready", "first-video-rendered");
+        }
         setState(app::StreamState::Streaming, "Video ready");
     });
-    bridge_ = std::make_unique<PsMediaBridge>(*media_, mock_replay ? 30 : fps_);
+    bridge_ = std::make_unique<PsMediaBridge>(
+        *media_, mock_replay ? 30 : fps_, connection_trace_);
     bridge_->setRumbleForwarder([this](uint8_t left, uint8_t right) {
         if (!rumble_ || !input_router_.gameHasInput() ||
             state_.load() != app::StreamState::Streaming) return;
@@ -237,8 +321,9 @@ bool PsStreamController::startStream() {
             *bridge_, fps_, video_codec_);
     } else {
         session_ = std::make_unique<PsStreamSession>(
-            host_addr, regist_key, morning, console_.target,
-            width_, height_, fps_, bitrate_kbps_, video_codec_, *bridge_);
+            host_addr, regist_key, morning, plan_.target,
+            width_, height_, fps_, bitrate_kbps_, video_codec_, *bridge_,
+            connection_trace_);
     }
 
     PsSessionCallbacks callbacks;
@@ -265,7 +350,6 @@ bool PsStreamController::startStream() {
         if (callback) callback(incorrect);
     };
     callbacks.on_error = [this](const std::string& err) {
-        last_error_ = err;
         setState(app::StreamState::Error, err);
     };
     callbacks.on_disconnected = [this](const std::string& reason) {
@@ -275,31 +359,42 @@ bool PsStreamController::startStream() {
 
     setState(app::StreamState::Connecting, "Connecting to PlayStation...");
 
-    if (cancel_requested_.load()) return false;
+    if (cancel_requested_.load()) {
+        connection_trace_->finish("cancelled", "before-session-start");
+        return false;
+    }
 
     // Start the chiaki session immediately so the session thread begins
     // regist/request/ctrl over the punched CTRL channel without delay.
+    connection_trace_->record(
+        "session-call", "begin", "mode=%s",
+        mock_replay ? "mock" : plan_.isRemote() ? "remote" : "lan");
     bool ok;
     if (mock_replay) {
         ok = mock_session_->start(std::move(callbacks));
-    } else if (route.type == ResolvedRouteType::Remote) {
+    } else if (plan_.isRemote()) {
         ok = session_->startRemote(std::move(remote_result_), std::move(callbacks));
     } else {
         ok = session_->start(std::move(callbacks));
     }
 
     if (!ok) {
-        last_error_ = mock_replay ? mock_session_->lastError()
-                                  : session_->lastError();
+        const std::string error = mock_replay ? mock_session_->lastError()
+                                              : session_->lastError();
         if (mock_session_) mock_session_->stop();
         else if (session_) session_->stop();
-        if (cancel_requested_.load()) return false;
-        setState(app::StreamState::Error, last_error_);
+        if (cancel_requested_.load()) {
+            connection_trace_->finish("cancelled", "during-session-start");
+            return false;
+        }
+        setState(app::StreamState::Error, error);
         return false;
     }
+    connection_trace_->record("session-call", "ok", "started=1");
     if (cancel_requested_.load()) {
         if (mock_session_) mock_session_->stop();
         else session_->stop();
+        connection_trace_->finish("cancelled", "after-session-start");
         return false;
     }
 
@@ -321,17 +416,26 @@ bool PsStreamController::startStream() {
     media_opts.video_queue_limits.max_bytes = 8 * 1024 * 1024;
     media_opts.video_queue_limits.max_age = std::chrono::milliseconds(100);
 #endif
+    connection_trace_->record(
+        "media-init", "begin", "scheduling=%s queue_packets=%zu queue_age_ms=%lld",
+        media_opts.video_scheduling == stream::VideoSchedulingMode::DirectLowLatency
+            ? "direct" : "bounded",
+        media_opts.video_queue_limits.max_packets,
+        static_cast<long long>(media_opts.video_queue_limits.max_age.count()));
     if (!media_->initialize(width_, height_, &perf_, media_opts)) {
-        last_error_ = "Failed to initialize media pipeline";
+        connection_trace_->record("media-init", "failed", "initialize=0");
         if (mock_session_) mock_session_->stop();
         else if (session_) session_->stop();
-        setState(app::StreamState::Error, last_error_);
+        setState(app::StreamState::Error,
+                 "Failed to initialize media pipeline");
         return false;
     }
+    connection_trace_->record("media-init", "ok", "initialize=1");
 
     // Flush complete video access units that arrived while Chiaki was
     // starting before asking the console for another IDR.
     bridge_->setMediaReady();
+    connection_trace_->record("media-bridge", "ready", "startup-buffer-flushed=1");
 
     // The PS5 may begin sending immediately after CHIAKI_EVENT_CONNECTED,
     // while NVDEC/Audren are still being initialized. Always request a fresh
@@ -411,6 +515,15 @@ void PsStreamController::startVideoMonitor() {
                               "first rendered frame timeout access_units=%u decode_errors=%u",
                               perf_.video_packets.load(),
                               perf_.video_decode_errors.load());
+                if (connection_trace_ && !connection_trace_->finished()) {
+                    connection_trace_->record(
+                        "first-video-timeout", "timeout",
+                        "access_units=%u decode_errors=%u media_running=%d",
+                        perf_.video_packets.load(),
+                        perf_.video_decode_errors.load(),
+                        media_ && media_->isRunning() ? 1 : 0);
+                    connection_trace_->finish("timeout", "first-video-timeout");
+                }
                 setState(app::StreamState::Connecting, info);
             }
 
@@ -471,8 +584,15 @@ void PsStreamController::stopVideoMonitor() {
 
 void PsStreamController::requestCancel() {
     cancel_requested_ = true;
+    if (connection_trace_ && !connection_trace_->finished()) {
+        connection_trace_->record("cancel", "requested", "source=controller");
+    }
     std::lock_guard<std::mutex> lock(remote_connector_mutex_);
     if (remote_connector_) remote_connector_->cancel();
+}
+
+void PsStreamController::requestStop() {
+    requestCancel();
 }
 
 void PsStreamController::stopStream(bool set_disconnected) {
@@ -516,6 +636,9 @@ void PsStreamController::stopStream(bool set_disconnected) {
     }
     if (rumble_) rumble_->stop();
     if (gamepad_) gamepad_->releaseCaptureButton();
+    if (connection_trace_ && !connection_trace_->finished()) {
+        connection_trace_->finish("cancelled", "stream-stop-before-video");
+    }
     lunar::stopDropDiagnosticWriter();
     ps_button_requested_ = false;
     ps_button_pulse_frames_remaining_ = 0;
@@ -531,9 +654,12 @@ void PsStreamController::stopStream(bool set_disconnected) {
     diagnosticLog("ps-controller", "stop stream complete");
 }
 
-bool PsStreamController::resumeAfterForeground() {
+bool PsStreamController::resumeAfterForeground(
+    app::IStreamRuntime::CancelCallback cancel) {
+    if (cancel && cancel()) return false;
     {
         std::shared_lock<std::shared_mutex> operation_lock(stream_operation_mutex_);
+        if (cancel && cancel()) return false;
         if (state_.load() == app::StreamState::Streaming &&
             stream_transport_connected_.load()) {
             const bool requested = requestRecoveryIDR();
@@ -546,8 +672,18 @@ bool PsStreamController::resumeAfterForeground() {
 
     diagnosticLog("ps-controller", "foreground resume rebuilding PS session");
     stopStream(false);
+    if (cancel && cancel()) return false;
     shutdown_ = false;
+    if (cancel && cancel()) {
+        shutdown_ = true;
+        return false;
+    }
     cancel_requested_ = false;
+    if (cancel && cancel()) {
+        cancel_requested_ = true;
+        shutdown_ = true;
+        return false;
+    }
     setState(app::StreamState::Idle, "Resuming stream...");
     return startStream();
 }
@@ -654,11 +790,27 @@ void PsStreamController::presentVideoFrame() {
 
 void PsStreamController::setState(app::StreamState s, const std::string& info) {
     state_.store(s);
+    if (connection_trace_ && !connection_trace_->finished() &&
+        (s == app::StreamState::Error ||
+         s == app::StreamState::Disconnected)) {
+        connection_trace_->record(
+            "controller-state", streamStateName(s), "message=%s",
+            info.empty() ? "none" : info.c_str());
+        if (s == app::StreamState::Error) {
+            connection_trace_->finish("failed",
+                                      info.empty() ? "unspecified-error"
+                                                   : info.c_str());
+        } else if (s == app::StreamState::Disconnected) {
+            connection_trace_->finish("failed",
+                                      info.empty() ? "disconnected-before-video"
+                                                   : info.c_str());
+        }
+    }
     if ((s == app::StreamState::Error ||
          s == app::StreamState::Disconnected) && rumble_) {
         rumble_->stop();
     }
-    if (s == app::StreamState::Error && !info.empty()) last_error_ = info;
+    if (s == app::StreamState::Error && !info.empty()) setLastError(info);
     LaunchCallback callback;
     {
         std::lock_guard<std::mutex> lock(callback_mutex_);
@@ -687,6 +839,11 @@ void PsStreamController::setLaunchCallback(LaunchCallback cb) {
 void PsStreamController::setLoginPinCallback(LoginPinCallback cb) {
     std::lock_guard<std::mutex> lock(callback_mutex_);
     login_pin_callback_ = std::move(cb);
+}
+
+void PsStreamController::setPsnRefreshCallback(PsnRefreshCallback cb) {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    psn_refresh_callback_ = std::move(cb);
 }
 
 void PsStreamController::submitLoginPin(const std::string& pin) {

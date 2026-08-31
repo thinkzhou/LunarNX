@@ -98,6 +98,8 @@ bool PsnAuthManager::fail(const std::string& message, StateCallback cb,
 }
 
 std::string PsnAuthManager::startAuth() {
+    // A new login supersedes token/identity work from an older login page.
+    request_generation_.invalidate();
     std::lock_guard<std::mutex> lock(mutex_);
     if (!login_url_.empty()) {
         error_.clear();
@@ -211,24 +213,43 @@ bool PsnAuthManager::openWebApplet(std::string& authorization_code) {
     return true;
 }
 
-bool PsnAuthManager::submitRedirectUrl(const std::string& input, StateCallback cb) {
+bool PsnAuthManager::submitRedirectUrl(const std::string& input, StateCallback cb,
+                                       CancelCallback cancel) {
+    if (cancel && cancel()) return false;
     std::string code = extractPsnAuthorizationCode(input);
-    if (code.empty()) return fail("Enter the full Sony redirect URL or authorization code", cb);
-    return exchangeCodeForToken(code, std::move(cb));
+    if (code.empty()) {
+        if (cancel && cancel()) return false;
+        return fail("Enter the full Sony redirect URL or authorization code", cb);
+    }
+    return exchangeCodeForToken(code, std::move(cb), std::move(cancel));
 }
 
 bool PsnAuthManager::requestToken(const std::map<std::string, std::string>& params,
-                                  bool preserve_refresh_token) {
+                                  bool preserve_refresh_token,
+                                  CancelCallback cancel,
+                                  RequestTicket ticket) {
     api::HttpClient http;
     std::map<std::string, std::string> headers{
         {"Authorization", basicAuthorization()},
         {"Content-Type", "application/x-www-form-urlencoded"},
     };
 
-    auto response = http.post(kTokenUrl, formEncode(params), headers);
+    CancelCallback request_cancel = [this, cancel, ticket]() {
+        return requestCancelled(cancel, ticket);
+    };
+    auto response = http.post(kTokenUrl, formEncode(params), headers,
+                              request_cancel);
+    if (!request_generation_.isCurrent(ticket)) return false;
+    if (request_cancel()) {
+        return failRequest("PSN token request cancelled",
+                           PsnAuthErrorKind::Cancelled, ticket);
+    }
     if (response.status_code < 200 || response.status_code >= 300) {
         PsnAuthErrorKind kind = PsnAuthErrorKind::Fatal;
-        if (response.network_error || response.status_code == 408 ||
+        const bool cancelled = request_cancel();
+        if (cancelled) {
+            kind = PsnAuthErrorKind::Cancelled;
+        } else if (response.network_error || response.status_code == 408 ||
             response.status_code == 429 || response.status_code >= 500) {
             kind = PsnAuthErrorKind::Transient;
         } else if (response.status_code == 400 || response.status_code == 401) {
@@ -237,27 +258,42 @@ bool PsnAuthManager::requestToken(const std::map<std::string, std::string>& para
             if (error_root) cJSON_Delete(error_root);
             if (oauth_error == "invalid_grant") kind = PsnAuthErrorKind::SessionExpired;
         }
-        std::string detail = response.network_error ? response.error_message
+        std::string detail = cancelled ? "cancelled"
+            : response.network_error ? response.error_message
             : "HTTP " + std::to_string(response.status_code);
-        return fail("PSN token request failed: " + detail, {}, kind);
+        return failRequest("PSN token request failed: " + detail, kind, ticket);
     }
 
     cJSON* root = cJSON_Parse(response.body.c_str());
-    if (!root) return fail("PSN token request returned invalid JSON");
+    if (!root) {
+        return failRequest("PSN token request returned invalid JSON",
+                           PsnAuthErrorKind::Fatal, ticket);
+    }
 
     std::string access_token = jsonString(root, "access_token");
     std::string refresh_token = jsonString(root, "refresh_token");
     int expires_in = jsonInt(root, "expires_in");
     cJSON_Delete(root);
 
-    if (access_token.empty()) return fail("PSN token response has no access_token");
+    if (access_token.empty()) {
+        return failRequest("PSN token response has no access_token",
+                           PsnAuthErrorKind::Fatal, ticket);
+    }
     if (expires_in <= 0) expires_in = 3600;
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (requestCancelled(cancel, ticket)) return false;
         access_token_ = std::move(access_token);
         if (!refresh_token.empty() || !preserve_refresh_token) {
             refresh_token_ = std::move(refresh_token);
+        }
+        if (!preserve_refresh_token) {
+            // An authorization-code grant may belong to a different account.
+            // Never pair its new token with identity retained from the old
+            // session if the subsequent account lookup is cancelled.
+            account_id_.clear();
+            online_id_.clear();
         }
         expires_in_ = expires_in;
         expires_at_ms_ = nowMilliseconds() + static_cast<uint64_t>(expires_in) * 1000ULL;
@@ -267,8 +303,11 @@ bool PsnAuthManager::requestToken(const std::map<std::string, std::string>& para
     return true;
 }
 
-bool PsnAuthManager::exchangeCodeForToken(const std::string& code, StateCallback cb) {
+bool PsnAuthManager::exchangeCodeForToken(const std::string& code, StateCallback cb,
+                                          CancelCallback cancel) {
     std::lock_guard<std::mutex> request_lock(request_mutex_);
+    const RequestTicket ticket = request_generation_.capture();
+    if (requestCancelled(cancel, ticket)) return false;
     state_.store(PsnAuthState::ExchangingCode);
     std::map<std::string, std::string> params{
         {"grant_type", "authorization_code"},
@@ -276,30 +315,37 @@ bool PsnAuthManager::exchangeCodeForToken(const std::string& code, StateCallback
         {"redirect_uri", kRedirectUri},
         {"scope", kScope},
     };
-    if (!requestToken(params, false)) {
+    if (!requestToken(params, false, cancel, ticket)) {
+        if (!request_generation_.isCurrent(ticket)) return false;
         if (cb) cb(PsnAuthState::Error, getAuthError());
         return false;
     }
-    if (!fetchAccountId()) {
+    if (!fetchAccountId(cancel, ticket)) {
+        if (!request_generation_.isCurrent(ticket)) return false;
         if (cb) cb(PsnAuthState::Error, getAuthError());
         return false;
     }
 
-    state_.store(PsnAuthState::Authenticated);
+    if (requestCancelled(cancel, ticket) || !markAuthenticated(ticket)) {
+        return false;
+    }
     diagnosticLog("psn-auth", "Authenticated with PSN account ID");
-    if (cb) cb(PsnAuthState::Authenticated, {});
+    if (cb && request_generation_.isCurrent(ticket)) {
+        cb(PsnAuthState::Authenticated, {});
+    }
     return true;
 }
 
-bool PsnAuthManager::refreshAccessToken() {
+bool PsnAuthManager::refreshAccessToken(CancelCallback cancel,
+                                        RequestTicket ticket) {
     std::string refresh_token;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         refresh_token = refresh_token_;
     }
     if (refresh_token.empty()) {
-        return fail("PSN session has no refresh token", {},
-                    PsnAuthErrorKind::SessionExpired);
+        return failRequest("PSN session has no refresh token",
+                           PsnAuthErrorKind::SessionExpired, ticket);
     }
 
     state_.store(PsnAuthState::ExchangingCode);
@@ -309,92 +355,175 @@ bool PsnAuthManager::refreshAccessToken() {
         {"redirect_uri", kRedirectUri},
         {"scope", kScope},
     };
-    if (!requestToken(params, true)) return false;
+    if (!requestToken(params, true, cancel, ticket)) return false;
 
-    if ((getAccountId().empty() || getOnlineId().empty()) && !fetchAccountId()) {
+    // account_id is required by Remote Play. online_id is display-only and a
+    // missing display name must not reject an otherwise valid stream token.
+    if (getAccountId().empty() && !fetchAccountId(cancel, ticket)) {
         return false;
     }
-    state_.store(PsnAuthState::Authenticated);
+    if (requestCancelled(cancel, ticket) || !markAuthenticated(ticket)) {
+        return false;
+    }
     diagnosticLog("psn-auth", "PSN access token refreshed");
     return true;
 }
 
-bool PsnAuthManager::refreshIdentity() {
-    return fetchAccountId();
+bool PsnAuthManager::refreshIdentity(CancelCallback cancel) {
+    std::lock_guard<std::mutex> request_lock(request_mutex_);
+    const RequestTicket ticket = request_generation_.capture();
+    return fetchAccountId(std::move(cancel), ticket);
 }
 
-bool PsnAuthManager::ensureValidToken(StateCallback cb, bool* refreshed) {
+bool PsnAuthManager::ensureValidToken(StateCallback cb, bool* refreshed,
+                                      CancelCallback cancel) {
     std::lock_guard<std::mutex> request_lock(request_mutex_);
+    const RequestTicket ticket = request_generation_.capture();
     if (refreshed) *refreshed = false;
     if (hasValidToken()) {
-        if (cb) cb(PsnAuthState::Authenticated, {});
+        if (getAccountId().empty() && !fetchAccountId(cancel, ticket)) {
+            if (cb) cb(PsnAuthState::Error, getAuthError());
+            return false;
+        }
+        if (requestCancelled(cancel, ticket) || !markAuthenticated(ticket)) {
+            return false;
+        }
+        if (cb && request_generation_.isCurrent(ticket)) {
+            cb(PsnAuthState::Authenticated, {});
+        }
         return true;
     }
-    if (!refreshAccessToken()) {
+    if (!refreshAccessToken(cancel, ticket)) {
+        if (!request_generation_.isCurrent(ticket)) return false;
         if (cb) cb(PsnAuthState::Error, getAuthError());
         return false;
     }
     if (refreshed) *refreshed = true;
-    if (cb) cb(PsnAuthState::Authenticated, {});
+    if (cb && request_generation_.isCurrent(ticket)) {
+        cb(PsnAuthState::Authenticated, {});
+    }
     return true;
 }
 
-bool PsnAuthManager::refreshToken(StateCallback cb) {
+bool PsnAuthManager::refreshToken(StateCallback cb, CancelCallback cancel) {
     std::lock_guard<std::mutex> request_lock(request_mutex_);
-    if (!refreshAccessToken()) {
+    const RequestTicket ticket = request_generation_.capture();
+    if (!refreshAccessToken(cancel, ticket)) {
+        if (!request_generation_.isCurrent(ticket)) return false;
         if (cb) cb(PsnAuthState::Error, getAuthError());
         return false;
     }
-    if (cb) cb(PsnAuthState::Authenticated, {});
+    if (cb && request_generation_.isCurrent(ticket)) {
+        cb(PsnAuthState::Authenticated, {});
+    }
     return true;
 }
 
-bool PsnAuthManager::fetchAccountId() {
+bool PsnAuthManager::fetchAccountId(CancelCallback cancel,
+                                    RequestTicket ticket) {
     std::string token = getAccessToken();
     if (token.empty()) {
-        return fail("PSN account lookup requires an access token", {},
-                    PsnAuthErrorKind::SessionExpired);
+        return failRequest("PSN account lookup requires an access token",
+                           PsnAuthErrorKind::SessionExpired, ticket);
     }
 
     api::HttpClient http;
     std::map<std::string, std::string> headers{{"Authorization", basicAuthorization()}};
+    CancelCallback request_cancel = [this, cancel, ticket]() {
+        return requestCancelled(cancel, ticket);
+    };
     auto response = http.getSensitive(
-        std::string(kTokenUrl) + "/" + urlEncode(token), kTokenUrl, headers);
+        std::string(kTokenUrl) + "/" + urlEncode(token), kTokenUrl, headers,
+        request_cancel);
+    if (!request_generation_.isCurrent(ticket)) return false;
+    if (request_cancel()) {
+        return failRequest("PSN account lookup cancelled",
+                           PsnAuthErrorKind::Cancelled, ticket);
+    }
     if (response.status_code < 200 || response.status_code >= 300) {
-        PsnAuthErrorKind kind = response.network_error || response.status_code == 408 ||
-            response.status_code == 429 || response.status_code >= 500
-            ? PsnAuthErrorKind::Transient : PsnAuthErrorKind::Fatal;
-        std::string detail = response.network_error ? response.error_message
+        const bool cancelled = request_cancel();
+        PsnAuthErrorKind kind = PsnAuthErrorKind::Fatal;
+        if (cancelled) {
+            kind = PsnAuthErrorKind::Cancelled;
+        } else if (response.network_error || response.status_code == 408 ||
+                   response.status_code == 429 ||
+                   response.status_code >= 500) {
+            kind = PsnAuthErrorKind::Transient;
+        }
+        std::string detail = cancelled ? "cancelled"
+            : response.network_error ? response.error_message
             : "HTTP " + std::to_string(response.status_code);
-        return fail("PSN account lookup failed: " + detail, {}, kind);
+        return failRequest("PSN account lookup failed: " + detail, kind,
+                           ticket);
     }
 
     cJSON* root = cJSON_Parse(response.body.c_str());
-    if (!root) return fail("PSN account lookup returned invalid JSON");
+    if (!root) {
+        return failRequest("PSN account lookup returned invalid JSON",
+                           PsnAuthErrorKind::Fatal, ticket);
+    }
     std::string user_id = jsonString(root, "user_id");
     std::string online_id = jsonString(root, "online_id");
     cJSON_Delete(root);
-    if (user_id.empty()) return fail("PSN account lookup returned no user ID");
+    if (user_id.empty()) {
+        return failRequest("PSN account lookup returned no user ID",
+                           PsnAuthErrorKind::Fatal, ticket);
+    }
 
     try {
         size_t consumed = 0;
         unsigned long long uid = std::stoull(user_id, &consumed, 10);
         if (consumed != user_id.size()) {
-            return fail("PSN account lookup returned an invalid user ID");
+            return failRequest("PSN account lookup returned an invalid user ID",
+                               PsnAuthErrorKind::Fatal, ticket);
         }
         uint8_t bytes[8]{};
         for (size_t i = 0; i < sizeof(bytes); ++i) {
             bytes[i] = static_cast<uint8_t>((uid >> (i * 8)) & 0xff);
         }
         std::lock_guard<std::mutex> lock(mutex_);
+        if (requestCancelled(cancel, ticket)) return false;
         account_id_ = base64Encode(bytes, sizeof(bytes));
         online_id_ = online_id;
         error_.clear();
         error_kind_ = PsnAuthErrorKind::None;
         return true;
     } catch (...) {
-        return fail("PSN account lookup returned an invalid user ID");
+        return failRequest("PSN account lookup returned an invalid user ID",
+                           PsnAuthErrorKind::Fatal, ticket);
     }
+}
+
+bool PsnAuthManager::requestCancelled(const CancelCallback& cancel,
+                                      RequestTicket ticket) const {
+    return !request_generation_.isCurrent(ticket) || (cancel && cancel());
+}
+
+bool PsnAuthManager::failRequest(const std::string& message,
+                                 PsnAuthErrorKind kind,
+                                 RequestTicket ticket,
+                                 StateCallback cb) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!request_generation_.isCurrent(ticket)) return false;
+        error_ = message;
+        error_kind_ = kind;
+        state_.store(PsnAuthState::Error);
+    }
+    diagnosticLog("psn-auth", "%s", message.c_str());
+    if (cb && request_generation_.isCurrent(ticket)) {
+        cb(PsnAuthState::Error, message);
+    }
+    return false;
+}
+
+bool PsnAuthManager::markAuthenticated(RequestTicket ticket) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!request_generation_.isCurrent(ticket)) return false;
+    error_.clear();
+    error_kind_ = PsnAuthErrorKind::None;
+    state_.store(PsnAuthState::Authenticated);
+    return true;
 }
 
 bool PsnAuthManager::hasValidToken() const {
@@ -410,6 +539,10 @@ bool PsnAuthManager::hasStoredSession() const {
 }
 
 bool PsnAuthManager::loadToken(const std::string& path) {
+    request_generation_.invalidate();
+    const RequestTicket ticket = request_generation_.capture();
+    std::lock_guard<std::mutex> request_lock(request_mutex_);
+    if (!request_generation_.isCurrent(ticket)) return false;
     FILE* file = std::fopen(path.c_str(), "r");
     if (!file) return false;
     std::fseek(file, 0, SEEK_END);
@@ -442,6 +575,7 @@ bool PsnAuthManager::loadToken(const std::string& path) {
     if (access_token.empty() && refresh_token.empty()) return false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!request_generation_.isCurrent(ticket)) return false;
         access_token_ = std::move(access_token);
         refresh_token_ = std::move(refresh_token);
         account_id_ = std::move(account_id);
@@ -449,13 +583,19 @@ bool PsnAuthManager::loadToken(const std::string& path) {
         if (duid.size() == kDuidLength) duid_ = std::move(duid);
         expires_in_ = expires_in;
         expires_at_ms_ = expires_at;
+        error_.clear();
+        error_kind_ = PsnAuthErrorKind::None;
+        const bool valid = !access_token_.empty() &&
+            (expires_at_ms_ == 0 ||
+             expires_at_ms_ > nowMilliseconds() + kRemoteSessionTokenMarginMs);
+        state_.store(valid ? PsnAuthState::Authenticated : PsnAuthState::Idle);
     }
-    state_.store(hasValidToken() ? PsnAuthState::Authenticated : PsnAuthState::Idle);
     return true;
 }
 
 bool PsnAuthManager::saveToken(const std::string& path) const {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (access_token_.empty() && refresh_token_.empty()) return false;
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "access_token", access_token_.c_str());
     cJSON_AddStringToObject(root, "refresh_token", refresh_token_.c_str());
@@ -503,6 +643,7 @@ bool PsnAuthManager::saveToken(const std::string& path) const {
 }
 
 void PsnAuthManager::signOut() {
+    request_generation_.invalidate();
     std::lock_guard<std::mutex> lock(mutex_);
     access_token_.clear();
     refresh_token_.clear();

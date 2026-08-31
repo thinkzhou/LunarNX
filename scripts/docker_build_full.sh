@@ -7,6 +7,7 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 docker_image="${DOCKER_IMG:-devkitpro/devkita64:20251117}"
 docker_platform="${DOCKER_PLATFORM:-linux/amd64}"
+default_app_version="$(tr -d '[:space:]' < "$project_root/version.txt")"
 
 if [[ ! -d "$project_root/lib/borealis/.git" ||
       ! -d "$project_root/lib/libpeer/.git" ]]; then
@@ -28,7 +29,7 @@ docker run --rm --platform "$docker_platform" \
     -e CURL_VERIFY="${CURL_VERIFY:-0}" \
     -e CURL_VERBOSE="${CURL_VERBOSE:-0}" \
     -e CURL_TIMEOUT_MS="${CURL_TIMEOUT_MS:-30000}" \
-    -e APP_VERSION="${APP_VERSION:-0.2.0}" \
+    -e APP_VERSION="${APP_VERSION:-$default_app_version}" \
     -e GIT_COMMIT="${GIT_COMMIT:-$(git -C "$project_root" rev-parse --short HEAD 2>/dev/null || echo unknown)}" \
     -e DEV_BRIDGE_UPLOAD_TOKEN="${DEV_BRIDGE_UPLOAD_TOKEN:-}" \
     -e BUILD_JOBS="${BUILD_JOBS:-}" \

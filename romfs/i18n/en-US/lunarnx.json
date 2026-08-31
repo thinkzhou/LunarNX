@@ -31,6 +31,19 @@
   "streaming": "Streaming",
   "disconnected": "Disconnected"
  },
+ "launch_mode": {
+  "eyebrow": "Incorrect launch mode",
+  "title": "Start LunarNX in full-memory mode",
+  "description": "Launching directly from Album provides too few network resources and can prevent console discovery, pairing, or streaming.",
+  "step1_title": "Exit LunarNX",
+  "step1_detail": "Return to the Nintendo Switch HOME Menu.",
+  "step2_title": "Hold R while starting a game",
+  "step2_detail": "Choose any installed game, hold R, and start it. Keep holding R until hbmenu appears.",
+  "step3_title": "Open LunarNX from hbmenu",
+  "step3_detail": "Select LunarNX after hbmenu opens in full-memory mode.",
+  "note": "Release R after hbmenu appears. Do not start LunarNX directly from Album.",
+  "exit": "Exit LunarNX"
+ },
  "dev": {
   "title": "Development tools",
   "subtitle": "Install test builds or send the current diagnostic log",
@@ -312,6 +325,7 @@
   "stop_title": "STOP STREAMING",
   "stop_confirm": "Press - + again to stop streaming",
   "stop_cancel_hint": "(wait 3s to cancel)",
+  "stopping": "Disconnecting stream…",
   "menu_title": "STREAM MENU",
   "menu_hint": "Press Minus + Plus to toggle. Press B to close.",
   "menu_open": "Menu",

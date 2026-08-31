@@ -31,6 +31,19 @@
   "streaming": "串流中",
   "disconnected": "已中斷連線"
  },
+ "launch_mode": {
+  "eyebrow": "啟動方式不正確",
+  "title": "請使用完整記憶體模式啟動 LunarNX",
+  "description": "直接從相簿開啟時，系統提供的網路資源不足，可能導致主機搜尋、配對或串流失敗。",
+  "step1_title": "退出 LunarNX",
+  "step1_detail": "返回 Nintendo Switch 的 HOME 選單。",
+  "step2_title": "按住 R 啟動遊戲",
+  "step2_detail": "選擇任意一款已安裝的遊戲，按住 R 並啟動，直到 hbmenu 出現。",
+  "step3_title": "從 hbmenu 開啟 LunarNX",
+  "step3_detail": "進入完整模式的 hbmenu 後，再選擇 LunarNX。",
+  "note": "看到 hbmenu 後即可放開 R。請勿直接從相簿啟動 LunarNX。",
+  "exit": "退出 LunarNX"
+ },
  "dev": {
   "title": "開發工具",
   "subtitle": "安裝測試版本或上傳目前診斷日誌",
@@ -312,6 +325,7 @@
   "stop_title": "停止串流",
   "stop_confirm": "再次按 - + 停止串流",
   "stop_cancel_hint": "（等待 3 秒可取消確認）",
+  "stopping": "正在中斷串流…",
   "menu_title": "串流快速選單",
   "menu_hint": "按 Minus + Plus 切換選單，按 B 關閉。",
   "menu_open": "選單",

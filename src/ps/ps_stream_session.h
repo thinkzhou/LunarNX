@@ -4,12 +4,14 @@
 
 #include "ps_media_bridge.h"
 #include "ps_remote_connector.h"
+#include "ps_connection_trace.h"
 #include <netinet/in.h>
 #include <chiaki/session.h>
 #include <chiaki/remote/holepunch.h>
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <string>
 
 namespace lunar::ps {
@@ -46,7 +48,8 @@ public:
                     int target,
                     int width, int height, int fps, int bitrate_kbps,
                     stream::VideoCodec video_codec,
-                    PsMediaBridge& bridge);
+                    PsMediaBridge& bridge,
+                    std::shared_ptr<PsConnectionTrace> trace);
     ~PsStreamSession();
 
     PsStreamSession(const PsStreamSession&) = delete;
@@ -89,6 +92,7 @@ private:
     int width_, height_, fps_, bitrate_kbps_;
     stream::VideoCodec video_codec_;
     PsMediaBridge& bridge_;
+    std::shared_ptr<PsConnectionTrace> trace_;
 
     // Remote mode
     bool remote_mode_ = false;

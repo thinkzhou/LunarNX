@@ -150,7 +150,7 @@ brls::View* PsRegistrationActivity::createContentView() {
     static const char* kRows[] = {"123", "456", "789", " 0 "};
     std::vector<std::vector<brls::View*>> navigation_rows;
     for (const auto* row : kRows) {
-        std::vector<brls::View*> digit_buttons;
+        std::vector<brls::View*> row_buttons;
         auto* row_box = new brls::Box(brls::Axis::ROW);
         row_box->setHeight(64);
         row_box->setJustifyContent(brls::JustifyContent::CENTER);
@@ -177,10 +177,10 @@ brls::View* PsRegistrationActivity::createContentView() {
             });
             digit_buttons[digit - '0'] = btn;
             row_box->addView(btn);
-            digit_buttons.push_back(btn);
+            row_buttons.push_back(btn);
         }
         keypad_->addView(row_box);
-        navigation_rows.push_back(std::move(digit_buttons));
+        navigation_rows.push_back(std::move(row_buttons));
     }
 
     // Action row

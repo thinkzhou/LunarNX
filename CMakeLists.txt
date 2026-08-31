@@ -72,7 +72,7 @@ set(LUNARNX_SOURCES
     src/ps/psn_auth_manager.cpp
     src/ps/psn_auth_utils.cpp
     src/ps/ps_console_repository.cpp
-    src/ps/ps_console_resolver.cpp
+    src/ps/ps_connection_plan.cpp
     src/ps/ps_remote_connector.cpp
 
     # JSON

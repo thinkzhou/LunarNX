@@ -5,6 +5,7 @@
 #include <chiaki/session.h>
 #include <chiaki/audio.h>
 #include <chiaki/opusdecoder.h>
+#include "ps_connection_trace.h"
 #include "../stream/media_pipeline.h"
 #include "../stream/audio_decoder.h"
 #include <atomic>
@@ -12,6 +13,7 @@
 #include <deque>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <vector>
 
 namespace lunar::ps {
@@ -20,7 +22,8 @@ class PsMediaBridge {
 public:
     using EventCallback = std::function<void(ChiakiEvent*)>;
     using RumbleCallback = std::function<void(uint8_t left, uint8_t right)>;
-    explicit PsMediaBridge(stream::MediaPipeline& media, int fps);
+    explicit PsMediaBridge(stream::MediaPipeline& media, int fps,
+                           std::shared_ptr<PsConnectionTrace> trace = {});
     ~PsMediaBridge();
 
     PsMediaBridge(const PsMediaBridge&) = delete;
@@ -54,11 +57,13 @@ private:
 
     stream::MediaPipeline& media_;
     int fps_;
+    std::shared_ptr<PsConnectionTrace> trace_;
 
     std::mutex video_mutex_;
     bool media_ready_ = false;
     std::deque<PendingVideoSample> pending_video_samples_;
     size_t pending_video_bytes_ = 0;
+    bool first_video_sample_logged_ = false;
 
     // Video PTS tracking
     uint64_t video_frame_count_ = 0;
@@ -77,6 +82,9 @@ private:
     ChiakiAudioSink opus_sink_{};
     bool opus_decoder_initialized_ = false;
     bool audio_format_valid_ = false;
+    std::atomic<bool> first_audio_header_logged_{false};
+    std::atomic<bool> first_audio_packet_logged_{false};
+    std::atomic<bool> first_decoded_audio_logged_{false};
 
     // Internal audio frame callback (called from chiaki thread)
     void onDecodedAudioFrame(int16_t* buf, size_t samples_count);

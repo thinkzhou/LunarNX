@@ -26,12 +26,12 @@ void writeResult(const char* status, const std::string& detail) {
     std::fclose(output);
 }
 
-ps::PsConsole mockConsole() {
-    ps::PsConsole console;
-    console.stable_id = "mock-replay";
-    console.nickname = "LunarNX Mock PS5";
-    console.target = 1000100;
-    return console;
+ps::PsConnectionPlan mockPlan() {
+    ps::PsConnectionPlan plan;
+    plan.type = ps::PsConnectionPlanType::LocalPS5;
+    plan.target = ps::kPs5RemoteTarget;
+    plan.host_addr = "mock-replay";
+    return plan;
 }
 
 } // namespace
@@ -95,7 +95,7 @@ void PsMockLifecycleActivity::run() {
     // without a live PSN/Chiaki transport.
     {
         auto controller = std::make_shared<ps::PsStreamController>(
-            mockConsole(), "", "", 1280, 720, 30, 10000);
+            mockPlan(), "", "", 1280, 720, 30, 10000);
         {
             std::lock_guard<std::mutex> lock(holder_->mutex);
             holder_->controller = controller;
@@ -125,7 +125,7 @@ void PsMockLifecycleActivity::run() {
 
     for (int round = 1; round <= 2 && running_; ++round) {
         auto controller = std::make_shared<ps::PsStreamController>(
-            mockConsole(), "", "", 1280, 720, 30, 10000);
+            mockPlan(), "", "", 1280, 720, 30, 10000);
         {
             std::lock_guard<std::mutex> lock(holder_->mutex);
             holder_->controller = controller;

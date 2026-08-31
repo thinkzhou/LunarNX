@@ -2,6 +2,7 @@
 
 #ifdef __SWITCH__
 
+#include "../common/operation_generation.h"
 #include <chiaki/remote/holepunch.h>
 #include <atomic>
 #include <functional>
@@ -17,6 +18,7 @@ enum class PsnAuthErrorKind { None, Cancelled, Transient, SessionExpired, Fatal 
 class PsnAuthManager {
 public:
     using StateCallback = std::function<void(PsnAuthState, const std::string&)>;
+    using CancelCallback = std::function<bool()>;
 
     PsnAuthManager();
     ~PsnAuthManager();
@@ -30,17 +32,20 @@ public:
 
     // Mode B: User pastes/enters the redirect URL manually.
     // Extracts code from URL and exchanges for token.
-    bool submitRedirectUrl(const std::string& url, StateCallback cb);
+    bool submitRedirectUrl(const std::string& url, StateCallback cb,
+                           CancelCallback cancel = {});
 
     // Exchange authorization code for PSN token (shared by both modes).
-    bool exchangeCodeForToken(const std::string& code, StateCallback cb);
+    bool exchangeCodeForToken(const std::string& code, StateCallback cb,
+                              CancelCallback cancel = {});
 
     bool isAuthenticated() const { return state_.load() == PsnAuthState::Authenticated; }
     bool hasValidToken() const;
     bool hasStoredSession() const;
-    bool ensureValidToken(StateCallback cb = {}, bool* refreshed = nullptr);
-    bool refreshToken(StateCallback cb = {});
-    bool refreshIdentity();  // re-fetch accountId + onlineId with the current token
+    bool ensureValidToken(StateCallback cb = {}, bool* refreshed = nullptr,
+                          CancelCallback cancel = {});
+    bool refreshToken(StateCallback cb = {}, CancelCallback cancel = {});
+    bool refreshIdentity(CancelCallback cancel = {});
     bool loadToken(const std::string& path);
     bool saveToken(const std::string& path) const;
     void signOut();
@@ -55,15 +60,23 @@ public:
     std::string getLoginUrl() const;
 
 private:
-    bool fetchAccountId();
-    bool refreshAccessToken();
+    using RequestTicket = common::OperationGeneration::Ticket;
+    bool fetchAccountId(CancelCallback cancel, RequestTicket ticket);
+    bool refreshAccessToken(CancelCallback cancel, RequestTicket ticket);
     bool requestToken(const std::map<std::string, std::string>& params,
-                      bool preserve_refresh_token);
+                      bool preserve_refresh_token,
+                      CancelCallback cancel, RequestTicket ticket);
+    bool requestCancelled(const CancelCallback& cancel,
+                          RequestTicket ticket) const;
+    bool failRequest(const std::string& message, PsnAuthErrorKind kind,
+                     RequestTicket ticket, StateCallback cb = {});
+    bool markAuthenticated(RequestTicket ticket);
     bool fail(const std::string& message, StateCallback cb = {},
               PsnAuthErrorKind kind = PsnAuthErrorKind::Fatal);
 
     mutable std::mutex mutex_;
     std::mutex request_mutex_;
+    common::OperationGeneration request_generation_;
     std::string access_token_;
     std::string refresh_token_;
     std::string account_id_;

@@ -9,6 +9,7 @@ def require(condition, message):
 
 def main():
     auth = Path("src/ps/psn_auth_manager.cpp").read_text()
+    auth_header = Path("src/ps/psn_auth_manager.h").read_text()
     login_ui = Path("src/ui/psn_login_activity.cpp").read_text()
     login_header = Path("src/ui/psn_login_activity.h").read_text()
     callback_server = Path("src/ps/psn_callback_server.cpp").read_text()
@@ -61,8 +62,22 @@ def main():
     require("refreshConsoles();" not in first_resume,
             "opening the PS page must not automatically start discovery")
     require("getLastPsnStatusCode() == 401" in manager and
-            "psn_auth_.refreshToken()" in manager,
+            "psn_auth_.refreshToken({}, cancelled)" in manager,
             "a PSN 401 must force token refresh before one device-list retry")
+    require("setPsnRefreshCallback" in ps_ui and
+            "manager->psnAuth().refreshToken(" in ps_ui and
+            "manager->psnAuth().saveToken(" in ps_ui,
+            "a remote-session HTTP rejection must refresh and persist the token once")
+    require("using CancelCallback" in auth_header and
+            "CancelCallback cancel" in auth and
+            "request_cancel" in auth and
+            "http.post(kTokenUrl, formEncode(params), headers," in auth and
+            "http.getSensitive(" in auth and "request_cancel" in auth,
+            "PSN token refresh and identity requests must accept connection cancellation")
+    refresh_callback = ps_ui.split("setPsnRefreshCallback", 1)[1].split("});", 1)[0]
+    require("const std::function<bool()>& cancel" in refresh_callback and
+            "refreshToken(" in refresh_callback and "{}, cancel" in refresh_callback,
+            "remote-session token refresh must be interrupted by loading-page cancellation")
     require("token_refreshed && !psn_auth_.saveToken(get_psn_token_path())" in manager,
             "rotated PSN tokens must be persisted after a successful lookup")
     first_token_save = manager.index("psn_auth_.saveToken(get_psn_token_path())")
@@ -101,6 +116,16 @@ def main():
             "unreachable PSN hosts must not block forever during connect")
     require("remote_result_.psn_account_id" in controller,
             "decoded PSN account ID must reach the remote Chiaki session")
+
+    confirm_sign_out = ps_ui.split("void PsActivity::confirmSignOut", 1)[1].split(
+        "void PsActivity::signInToPsn", 1)[0]
+    require("clearPsnDeviceCache()" in confirm_sign_out and
+            "return;\n                            manager->clearPsnDeviceCache()" not in ps_ui,
+            "explicit and expired-session sign-out must clear PSN device identity")
+    device_worker_failure = ps_ui.split('startNetworkWorker("psn-device-list"', 1)[1]
+    device_worker_failure = device_worker_failure.split("if (!started)", 1)[1].split("}", 1)[0]
+    require("clearPsnDeviceCache" not in device_worker_failure,
+            "thread resource failure must not delete a valid PSN device cache")
 
     print("PSN auth flow tests passed")
 

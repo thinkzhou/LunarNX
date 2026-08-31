@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import re
 from pathlib import Path
 
@@ -17,9 +18,11 @@ def main():
         "tools/chiaki_switch/build_in_container.sh").read_text()
     stun_patch = Path("tools/chiaki_switch/lunarnx-chiaki-stun-order.patch").read_text()
     reliability_patch = Path("tools/chiaki_switch/lunarnx-chiaki-holepunch-reliability.patch").read_text()
+    http_status_patch = Path("tools/chiaki_switch/lunarnx-chiaki-http-status.patch").read_text()
     rtt_patch = Path("tools/chiaki_switch/lunarnx-chiaki-stream-rtt.patch").read_text()
     wrapper = Path("src/platform/chiaki_curl_compat.cpp").read_text()
-    chiaki_root = Path("github_repos/chiaki-ng-fork")
+    chiaki_root = Path(os.environ.get(
+        "LUNARNX_CHIAKI_CHECKOUT", "github_repos/chiaki-ng-fork"))
     chiaki_holepunch = (chiaki_root / "lib/src/remote/holepunch.c").read_text()
 
     require("CURL_PROVIDER ?= moonlight" in makefile,
@@ -37,6 +40,7 @@ def main():
     require("build_in_container.sh" in docker_build_script and
             "lunarnx-chiaki-stun-order.patch" in container_build_script and
             "lunarnx-chiaki-holepunch-reliability.patch" in container_build_script and
+            "lunarnx-chiaki-http-status.patch" in container_build_script and
             "lunarnx-chiaki-stream-rtt.patch" in container_build_script and
             "git -C \"$src\" apply" in container_build_script,
             "Switch Chiaki build must apply focused reliability patches")
@@ -50,8 +54,12 @@ def main():
             "port_type == CHIAKI_HOLEPUNCH_PORT_TYPE_DATA ? 3 : 1" in reliability_patch and
             "holepunch_session_create_offer(session)" in reliability_patch and
             "err = send_offer(session)" in reliability_patch and
+            "session->main_should_stop" in reliability_patch and
             "session->quit_reason = CHIAKI_QUIT_REASON_STREAM_CONNECTION_UNKNOWN" in reliability_patch,
             "focused hole-punch reliability patch must cover queue cleanup, ACK-only HTTP retry, checked offers, bounded DATA retry, and explicit failure state")
+    require("last_http_status" in http_status_patch and
+            "CURLINFO_RESPONSE_CODE" in http_status_patch,
+            "PSN retry classification must expose the actual Chiaki HTTP status")
     stun_order = [
         "stun.sonetel.com", "stun.siptrunk.com", "stun.romancecompass.com",
         "stun.axialys.net", "stun.flashdance.cx", "stun.sip.us",

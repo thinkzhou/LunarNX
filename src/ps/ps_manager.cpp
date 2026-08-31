@@ -10,6 +10,7 @@
 #include "../diagnostics.h"
 #include <borealis.hpp>
 #include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 
@@ -46,50 +47,77 @@ std::vector<PsConsole> PsManager::getDiscoveredHosts() const {
 }
 
 bool PsManager::fetchPsnDevices(HostListCallback cb) {
+    const auto ticket = psn_device_generation_.invalidate();
+    auto cancelled = [this, ticket]() {
+        return !psn_device_generation_.isCurrent(ticket);
+    };
     bool token_refreshed = false;
-    if (!psn_auth_.ensureValidToken({}, &token_refreshed)) {
+    if (!psn_auth_.ensureValidToken({}, &token_refreshed, cancelled)) {
+        if (cancelled()) return true;
         psn_device_error_ = psn_auth_.getAuthError();
         return false;
     }
+    const std::string account_id = psn_auth_.getAccountId();
+    if (account_id.empty()) {
+        psn_device_error_ = "PSN account ID is unavailable";
+        return false;
+    }
     if (token_refreshed && !psn_auth_.saveToken(get_psn_token_path())) {
+        if (cancelled()) return true;
         psn_device_error_ = "PSN session refreshed but could not be saved";
         return false;
     }
 
     std::string error;
+    HostListCallback guarded_cb = [this, ticket, cb = std::move(cb)](
+        const std::vector<PsConsole>& hosts) {
+        if (psn_device_generation_.isCurrent(ticket) && cb) cb(hosts);
+    };
     bool ok = repository_->fetchPsnDevices(
-        psn_auth_.getAccessToken(), cb, &error);
+        psn_auth_.getAccessToken(), guarded_cb, &error, cancelled);
+    if (cancelled()) return true;
     if (!ok && repository_->getLastPsnStatusCode() == 401) {
         diagnosticLog("ps-manager", "PSN device token rejected; refreshing and retrying");
-        if (psn_auth_.refreshToken()) {
+        if (psn_auth_.refreshToken({}, cancelled)) {
             if (!psn_auth_.saveToken(get_psn_token_path())) {
+                if (cancelled()) return true;
                 error = "PSN session refreshed but could not be saved";
             } else {
                 ok = repository_->fetchPsnDevices(
-                    psn_auth_.getAccessToken(), std::move(cb), &error);
+                    psn_auth_.getAccessToken(), std::move(guarded_cb), &error,
+                    cancelled);
             }
         } else {
+            if (cancelled()) return true;
             error = psn_auth_.getAuthError();
         }
     }
+    if (cancelled()) return true;
 
     if (!ok) {
         psn_device_error_ = std::move(error);
         return false;
     }
 
-    repository_->savePsnCache(psn_auth_.getAccountId());
+    if (!repository_->savePsnCache(account_id, cancelled)) {
+        if (cancelled()) return true;
+        // The live list is already usable. Treat persistence as best-effort so
+        // a transient SD-card error does not hide otherwise valid consoles.
+        diagnosticLog("ps-manager", "PSN console cache save failed");
+    }
     psn_device_error_.clear();
     return true;
 }
 
 bool PsManager::loadPsnDeviceCache() {
+    psn_device_generation_.invalidate();
     const auto account_id = psn_auth_.getAccountId();
     if (account_id.empty()) return false;
     return repository_->loadPsnCache(account_id);
 }
 
 void PsManager::clearPsnDeviceCache() {
+    psn_device_generation_.invalidate();
     repository_->clearPsnCache();
 }
 
@@ -224,8 +252,12 @@ void PsManager::cancelRegistration() {
 
 void PsManager::wakeupHost(const std::string& host_addr, const std::string& host_id,
                             bool is_ps5, WakeupCallback cb) {
+    const auto wake_started = std::chrono::steady_clock::now();
     auto cred = credentials_.findByMac(host_id);
     if (!cred) {
+        persistentEventLog("ps-wakeup",
+            "stage=credentials outcome=missing platform=%s host_present=%d",
+            is_ps5 ? "ps5" : "ps4", host_addr.empty() ? 0 : 1);
         cb(false, "Host not paired");
         return;
     }
@@ -234,6 +266,9 @@ void PsManager::wakeupHost(const std::string& host_addr, const std::string& host
         reinterpret_cast<const char*>(cred->rp_regist_key),
         sizeof(cred->rp_regist_key));
     if (key_length == 0 || key_length > 8) {
+        persistentEventLog("ps-wakeup",
+            "stage=credentials outcome=invalid platform=%s key_chars=%zu",
+            is_ps5 ? "ps5" : "ps4", key_length);
         cb(false, "Invalid registration key");
         return;
     }
@@ -243,6 +278,9 @@ void PsManager::wakeupHost(const std::string& host_addr, const std::string& host
     errno = 0;
     const unsigned long long parsed = std::strtoull(key_text, &key_end, 16);
     if (errno != 0 || key_end != key_text + key_length) {
+        persistentEventLog("ps-wakeup",
+            "stage=credentials outcome=parse-failed platform=%s key_chars=%zu",
+            is_ps5 ? "ps5" : "ps4", key_length);
         cb(false, "Invalid registration key");
         return;
     }
@@ -253,6 +291,10 @@ void PsManager::wakeupHost(const std::string& host_addr, const std::string& host
     ChiakiDiscovery discovery{};
     ChiakiErrorCode err = chiaki_discovery_init(&discovery, &chiaki_log_, AF_INET);
     if (err != CHIAKI_ERR_SUCCESS) {
+        persistentEventLog("ps-wakeup",
+            "stage=discovery-init outcome=failed platform=%s error=%d error_name=%s",
+            is_ps5 ? "ps5" : "ps4", static_cast<int>(err),
+            chiaki_error_string(err));
         cb(false, "Discovery init failed");
         return;
     }
@@ -261,12 +303,23 @@ void PsManager::wakeupHost(const std::string& host_addr, const std::string& host
                                    user_credential, is_ps5);
     chiaki_discovery_fini(&discovery);
 
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - wake_started).count();
+    persistentEventLog("ps-wakeup",
+        "stage=wakeup-send outcome=%s platform=%s elapsed_ms=%lld error=%d error_name=%s",
+        err == CHIAKI_ERR_SUCCESS ? "ok" : "failed",
+        is_ps5 ? "ps5" : "ps4", static_cast<long long>(elapsed_ms),
+        static_cast<int>(err), chiaki_error_string(err));
+
     if (err == CHIAKI_ERR_SUCCESS) cb(true, "");
     else cb(false, chiaki_error_string(err));
 }
 
-ResolvedRoute PsManager::resolveRoute(const PsConsole& console) const {
-    return PsConsoleResolver::resolve(console, psn_auth_.hasValidToken());
+PsConnectionPlan PsManager::planConnection(
+    const PsConsole& console,
+    PsConnectionPreference preference) const {
+    return PsConnectionPlanner::makePlan(
+        console, psn_auth_.hasStoredSession(), preference);
 }
 
 } // namespace lunar::ps

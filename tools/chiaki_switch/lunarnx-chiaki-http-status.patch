@@ -1,0 +1,147 @@
+diff --git a/lib/include/chiaki/remote/holepunch.h b/lib/include/chiaki/remote/holepunch.h
+--- a/lib/include/chiaki/remote/holepunch.h
++++ b/lib/include/chiaki/remote/holepunch.h
+@@ -161,5 +161,14 @@ CHIAKI_EXPORT bool chiaki_holepunch_session_get_stun_allocation(
+     ChiakiHolepunchSession session, int32_t *allocation_increment, bool *random_allocation);
+ 
++/**
++ * Return the HTTP response code from the most recent holepunch HTTP request.
++ * Zero means that no HTTP response was received.
++ *
++ * @param[in] session Handle to the holepunching session
++ */
++CHIAKI_EXPORT long chiaki_holepunch_session_get_last_http_status(
++    ChiakiHolepunchSession session);
++
+ /**
+  * Generate a unique device identifier for the client.
+  *
+diff --git a/lib/src/remote/holepunch.c b/lib/src/remote/holepunch.c
+--- a/lib/src/remote/holepunch.c
++++ b/lib/src/remote/holepunch.c
+@@ -21,5 +21,6 @@
+ #include <time.h>
+ #include <sys/types.h>
+ #include <assert.h>
+ #include <inttypes.h>
++#include <stdatomic.h>
+ 
+@@ -328,6 +329,7 @@ typedef struct session_t
+     bool force_port_guessing;
+     int port_guessing_count;
+     int port_guessing_socks;
++    atomic_long last_http_status;
+     StunServer stun_server_list[10];
+     StunServer stun_server_list_ipv6[10];
+     size_t num_stun_servers;
+@@ -710,6 +712,24 @@ CHIAKI_EXPORT bool chiaki_holepunch_session_get_stun_allocation(
+     return true;
+ }
+ 
++CHIAKI_EXPORT long chiaki_holepunch_session_get_last_http_status(
++    ChiakiHolepunchSession session)
++{
++    return session
++        ? atomic_load_explicit(&session->last_http_status, memory_order_relaxed)
++        : 0;
++}
++
++static void record_last_http_status(Session *session, CURL *curl)
++{
++    if(!session || !curl)
++        return;
++    long http_status = 0;
++    if(curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status) == CURLE_OK)
++        atomic_store_explicit(&session->last_http_status, http_status,
++            memory_order_relaxed);
++}
++
+ CHIAKI_EXPORT ChiakiErrorCode chiaki_holepunch_generate_client_device_uid(
+     char *out, size_t *out_size)
+ {
+@@ -769,6 +789,7 @@ CHIAKI_EXPORT Session* chiaki_holepunch_session_init(
+     session->force_port_guessing = false;
+     session->port_guessing_count = RANDOM_ALLOCATION_GUESSES_NUMBER;
+     session->port_guessing_socks = RANDOM_ALLOCATION_SOCKS_NUMBER;
++    atomic_init(&session->last_http_status, 0);
+     session->num_stun_servers = 0;
+     session->num_stun_servers_ipv6 = 0;
+     session->gw.data = NULL;
+@@ -1266,6 +1287,7 @@ static ChiakiErrorCode http_ps4_session_wakeup(Session *session)
+ 
+     ChiakiErrorCode err = CHIAKI_ERR_SUCCESS;
+     res = curl_easy_perform(curl);
++    record_last_http_status(session, curl);
+     curl_slist_free_all(headers);
+     CHIAKI_LOGV(session->log, "http_ps4_session_wakeup: Received JSON:\n%.*s", (int)response_data.size, response_data.data);
+     if (res != CURLE_OK)
+@@ -1417,6 +1439,7 @@ static ChiakiErrorCode http_ps4_session_wakeup(Session *session)
+     CHIAKI_LOGV(session->log, "http_ps4_session_wakeup: Sending JSON:\n%s", envelope_buf);
+ 
+     res = curl_easy_perform(curl);
++    record_last_http_status(session, curl);
+     curl_slist_free_all(headers);
+     CHIAKI_LOGV(session->log, "http_ps4_session_wakeup: Received JSON:\n%.*s", (int)response_data.size, response_data.data);
+     if (res != CURLE_OK)
+@@ -1890,6 +1913,8 @@ static ChiakiErrorCode get_websocket_fqdn(Session *session, char **fqdn)
+ */
+ static ChiakiErrorCode get_websocket_fqdn(Session *session, char **fqdn)
+ {
++    atomic_store_explicit(&session->last_http_status, 0,
++        memory_order_relaxed);
+     HttpResponseData response_data = {
+         .data = malloc(0),
+         .size = 0,
+@@ -1929,10 +1954,13 @@ static ChiakiErrorCode get_websocket_fqdn(Session *session, char **fqdn)
+     res = curl_easy_perform(curl);
++    record_last_http_status(session, curl);
+     curl_slist_free_all(headers);
+     ChiakiErrorCode err = CHIAKI_ERR_SUCCESS;
+     if (res != CURLE_OK)
+     {
+         if (res == CURLE_HTTP_RETURNED_ERROR)
+         {
+             long http_code = 0;
+             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
++            atomic_store_explicit(&session->last_http_status, http_code,
++                memory_order_relaxed);
+             CHIAKI_LOGE(session->log, "get_websocket_fqdn: Fetching websocket FQDN from %s failed with HTTP code %ld", ws_fqdn_api_url, http_code);
+@@ -2105,6 +2133,7 @@ static void *websocket_thread_func(void *arg)
+         CHIAKI_LOGW(session->log, "websocket_thread_func: CURL setopt CURLOPT_CONNECT_ONLY failed with CURL error %s", curl_easy_strerror(res));
+ 
+     res = curl_easy_perform(curl);
++    record_last_http_status(session, curl);
+     curl_slist_free_all(headers);
+     if (res != CURLE_OK)
+     {
+@@ -2953,6 +2982,7 @@ static ChiakiErrorCode http_create_session(Session *session)
+ 
+     ChiakiErrorCode err = CHIAKI_ERR_SUCCESS;
+     res = curl_easy_perform(curl);
++    record_last_http_status(session, curl);
+     curl_slist_free_all(headers);
+     if (res != CURLE_OK)
+     {
+@@ -3075,6 +3105,7 @@ static ChiakiErrorCode http_check_session(Session *session, bool viewurl)
+ 
+     ChiakiErrorCode err = CHIAKI_ERR_SUCCESS;
+     res = curl_easy_perform(curl);
++    record_last_http_status(session, curl);
+     curl_slist_free_all(headers);
+     if (res != CURLE_OK)
+     {
+@@ -3201,6 +3232,7 @@ static ChiakiErrorCode http_start_session(Session *session)
+     CHIAKI_LOGV(session->log, "http_start_session: Sending JSON:\n%s", envelope_buf);
+ 
+     res = curl_easy_perform(curl);
++    record_last_http_status(session, curl);
+     curl_slist_free_all(headers);
+     CHIAKI_LOGV(session->log, "http_start_session: Received JSON:\n%.*s", (int)response_data.size, response_data.data);
+     if (res != CURLE_OK)
+@@ -3327,5 +3359,6 @@ static ChiakiErrorCode http_send_session_message(Session *session, SessionMessage *message, bool short_msg)
+             "http_send_session_message: Retrying timed out message with the same request ID");
+     }
++    record_last_http_status(session, curl);
+     curl_slist_free_all(headers);
+     if (res != CURLE_OK)
+     {

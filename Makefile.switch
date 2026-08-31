@@ -3,6 +3,7 @@ DEVKITA64  = $(DEVKITPRO)/devkitA64
 PORTLIBS   = $(DEVKITPRO)/portlibs/switch
 LIBNX      = $(DEVKITPRO)/libnx
 BOREALIS   = lib/borealis
+LUNARNX_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 .DEFAULT_GOAL := all
 
@@ -43,7 +44,7 @@ CURL_PROVIDER ?= moonlight
 CURL_VERIFY ?= 0
 CURL_VERBOSE ?= 0
 CURL_TIMEOUT_MS ?= 120000
-APP_VERSION ?= 0.2.0
+APP_VERSION ?= $(or $(strip $(shell sed -n '1p' "$(LUNARNX_ROOT)/version.txt" 2>/dev/null)),0.0.0)
 APP_TITLE ?= LunarNX
 DEV_BRIDGE_UPLOAD_TOKEN ?=
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -162,20 +163,20 @@ CXX_SRCS = src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_proces
     src/app/xbox_session_client.cpp src/app/xbox_stream_session.cpp \
     src/ui/auth_activity.cpp src/ui/main_activity.cpp src/ui/cloud_library_model.cpp src/ui/cloud_game_card.cpp src/ui/stream_view.cpp src/ui/stream_loading_activity.cpp src/ui/stream_settings_activity.cpp src/ui/button_mapping_activity.cpp src/ui/i18n.cpp src/ui/ui_style.cpp src/ui/qr_code.cpp src/ui/qr_code_view.cpp src/ui/poster_loader.cpp src/ui/recycling_list.cpp \
     src/ui/perf_overlay.cpp src/ui/stream_overlay.cpp \
-    src/ui/platform_activity.cpp src/ui/dev_tools_activity.cpp src/ui/ps_activity.cpp src/ui/ps_settings_activity.cpp src/ui/ps_registration_activity.cpp src/ui/psn_login_activity.cpp src/ui/about_activity.cpp \
+    src/ui/platform_activity.cpp src/ui/applet_mode_activity.cpp src/ui/dev_tools_activity.cpp src/ui/ps_activity.cpp src/ui/ps_settings_activity.cpp src/ui/ps_registration_activity.cpp src/ui/psn_login_activity.cpp src/ui/about_activity.cpp \
     src/input/button_mapping.cpp src/input/gamepad_reader.cpp src/input/xinput_encoder.cpp \
     src/input/xbox_input_accumulator.cpp src/input/rumble_controller.cpp \
     src/auth/token_store.cpp src/auth/xbox_signing.cpp src/auth/auth_manager.cpp src/auth/xbox_auth_errors.cpp src/auth/xbox_login_server.cpp \
     src/api/http_client.cpp src/api/xbox_api_client.cpp \
     src/platform/network_worker.cpp src/platform/chiaki_curl_compat.cpp \
-    src/ps/chiaki_crypto_init.cpp src/ps/chiaki_log_adapter.cpp src/ps/ps_credentials.cpp \
+    src/ps/chiaki_crypto_init.cpp src/ps/chiaki_log_adapter.cpp src/ps/ps_connection_trace.cpp src/ps/ps_credentials.cpp \
     src/ps/ps_discovery.cpp src/ps/ps_registration.cpp \
     src/ps/ps_registration_diagnostics.cpp src/ps/ps_manager.cpp \
     src/ps/ps_input_mapper.cpp src/ps/ps_touchpad_reader.cpp src/ps/ps_motion_reader.cpp src/ps/ps_media_bridge.cpp \
     src/ps/ps_mock_replay_session.cpp \
     src/ps/ps_stream_session.cpp src/ps/ps_stream_controller.cpp \
     src/ps/psn_auth_manager.cpp src/ps/psn_auth_utils.cpp src/ps/ps_pairing_account_codec.cpp src/ps/ps_pairing_account_store.cpp src/ps/ps_pairing_account.cpp src/ps/ps_phone_pairing_server.cpp src/ps/psn_callback_server.cpp src/ps/ps_console_repository.cpp \
-    src/ps/ps_console_resolver.cpp src/ps/ps_remote_connector.cpp \
+    src/ps/ps_connection_plan.cpp src/ps/ps_remote_connector.cpp \
     src/tools/ps_mock_lifecycle_activity.cpp \
     src/webrtc/peer_manager.cpp src/webrtc/video_rtp_jitter_buffer.cpp \
     src/webrtc/xbox_input_feedback.cpp \

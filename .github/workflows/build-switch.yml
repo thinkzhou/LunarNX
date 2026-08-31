@@ -6,12 +6,18 @@ on:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Optional vMAJOR.MINOR.PATCH tag to publish after a successful build
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: switch-build-${{ github.ref }}
+  group: switch-build-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -51,6 +57,10 @@ jobs:
     container:
       image: devkitpro/devkita64:20251117
     timeout-minutes: 60
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+      artifact_name: ${{ steps.version.outputs.artifact_name }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
 
     steps:
       - name: Check out LunarNX
@@ -60,17 +70,35 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Select application version
+        id: version
         shell: bash
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
         run: |
-          version=0.0.0
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            version="${GITHUB_REF_NAME#v}"
-            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Release tags must use vMAJOR.MINOR.PATCH" >&2
-              exit 2
-            fi
+          set -euo pipefail
+
+          release_tag="$RELEASE_TAG_INPUT"
+          if [[ -z "$release_tag" && "$GITHUB_REF_TYPE" == tag ]]; then
+            release_tag="$GITHUB_REF_NAME"
           fi
+
+          if [[ -n "$release_tag" ]]; then
+            version="$(
+              RELEASE_TAG="$release_tag" \
+                GIT_COMMIT_SHA="$GITHUB_SHA" \
+                bash ./scripts/resolve_app_version.sh
+            )"
+          else
+            version="$(GIT_COMMIT_SHA="$GITHUB_SHA" bash ./scripts/resolve_app_version.sh)"
+          fi
+
+          artifact_name="LunarNX-${version}-${GITHUB_SHA}"
           echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+          {
+            echo "app_version=$version"
+            echo "artifact_name=$artifact_name"
+            echo "release_tag=$release_tag"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Prepare pinned source dependencies
         run: |
@@ -102,6 +130,7 @@ jobs:
           python3 tests/ps_bounded_video_queue_test.py
           python3 tests/ps_high_bitrate_contract_test.py
           python3 tests/ps_media_queue_simulation_test.py
+          python3 tests/github_release_workflow_test.py
           git diff --check
 
       - name: Package build artifact
@@ -118,7 +147,68 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
         with:
-          name: LunarNX-${{ env.APP_VERSION }}-${{ github.sha }}
+          name: ${{ steps.version.outputs.artifact_name }}
           path: ${{ runner.temp }}/LunarNX-${{ env.APP_VERSION }}
           if-no-files-found: error
           retention-days: 30
+
+  publish-release:
+    needs: [host-input-tests, build-switch]
+    if: ${{ needs.build-switch.outputs.release_tag != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download packaged Switch build
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.build-switch.outputs.artifact_name }}
+          path: ${{ runner.temp }}/release/LunarNX-${{ needs.build-switch.outputs.app_version }}
+
+      - name: Prepare release assets
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.build-switch.outputs.app_version }}
+        run: |
+          set -euo pipefail
+
+          release_root="$RUNNER_TEMP/release"
+          package_dir="$release_root/LunarNX-$APP_VERSION"
+          test -f "$package_dir/LunarNX.nro"
+          test -f "$package_dir/LICENSE"
+          test -f "$package_dir/THIRD_PARTY_NOTICES.md"
+          test -f "$package_dir/licenses/AGPL-3.0.txt"
+
+          cp "$package_dir/LunarNX.nro" "$release_root/LunarNX-$APP_VERSION.nro"
+          (
+            cd "$release_root"
+            zip -qr "LunarNX-$APP_VERSION.zip" "LunarNX-$APP_VERSION"
+            sha256sum \
+              "LunarNX-$APP_VERSION.nro" \
+              "LunarNX-$APP_VERSION.zip" > SHA256SUMS
+          )
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.build-switch.outputs.app_version }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.build-switch.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "LunarNX $RELEASE_TAG" \
+              --generate-notes
+          fi
+
+          gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/release/LunarNX-$APP_VERSION.nro" \
+            "$RUNNER_TEMP/release/LunarNX-$APP_VERSION.zip" \
+            "$RUNNER_TEMP/release/SHA256SUMS" \
+            --clobber

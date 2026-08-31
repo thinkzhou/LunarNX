@@ -58,7 +58,7 @@ def main():
     require("chiaki_discovery_service_init" in discovery,
             "LAN search must actively send discovery packets")
     wakeup = manager.split("void PsManager::wakeupHost", 1)[1].split(
-        "ResolvedRoute PsManager::resolveRoute", 1)[0]
+        "PsConnectionPlan PsManager::planConnection", 1)[0]
     require("strtoull" in wakeup and
             "cred->rp_regist_key" in wakeup and
             "memcpy(&user_credential" not in wakeup,
@@ -66,7 +66,10 @@ def main():
     require("pending_wake_mac_" in ui and
             "PsConsoleState::Ready" in ui and
             "connectToConsole(host)" in ui and
-            "std::chrono::seconds(25)" in ui,
+            "std::chrono::seconds(25)" in ui and
+            "wake_wait_cv_" in ui and
+            "wait_for" in ui and
+            "std::this_thread::sleep_for(std::chrono::seconds(25))" not in ui,
             "Wake & Connect must wait for the same console to become ready and time out")
 
     print("PS page flow tests passed")

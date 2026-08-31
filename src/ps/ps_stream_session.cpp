@@ -11,6 +11,15 @@
 
 namespace lunar::ps {
 
+namespace {
+
+long long elapsedMs(std::chrono::steady_clock::time_point started) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
+}
+
+} // namespace
+
 void PsStreamSession::setLastError(std::string error) {
     std::lock_guard<std::mutex> lock(last_error_mutex_);
     last_error_ = std::move(error);
@@ -26,6 +35,8 @@ void PsStreamSession::releaseRemoteHolepunch() {
 bool PsStreamSession::startupCancelled(const char* stage) {
     if (!callbacks_.external_cancel || !callbacks_.external_cancel()) return false;
     setLastError(std::string("Session start cancelled at ") + stage);
+    if (trace_) trace_->record(
+        "session-cancel", "cancelled", "stage=%s", stage ? stage : "unknown");
     diagnosticLog("ps-session", "%s", lastError().c_str());
     state_.store(PsSessionState::Idle);
     return true;
@@ -36,7 +47,8 @@ PsStreamSession::PsStreamSession(const std::string& host_addr,
                                   int target,
                                   int width, int height, int fps, int bitrate_kbps,
                                   stream::VideoCodec video_codec,
-                                  PsMediaBridge& bridge)
+                                  PsMediaBridge& bridge,
+                                  std::shared_ptr<PsConnectionTrace> trace)
     : host_addr_(host_addr)
     , is_ps5_(target >= 1000000)
     , width_(width)
@@ -44,7 +56,8 @@ PsStreamSession::PsStreamSession(const std::string& host_addr,
     , fps_(fps)
     , bitrate_kbps_(bitrate_kbps)
     , video_codec_(is_ps5_ ? video_codec : stream::VideoCodec::H264)
-    , bridge_(bridge) {
+    , bridge_(bridge)
+    , trace_(std::move(trace)) {
     std::memcpy(regist_key_, regist_key, sizeof(regist_key_));
     std::memcpy(morning_, morning, sizeof(morning_));
 }
@@ -59,6 +72,12 @@ void PsStreamSession::configureConnectInfo() {
     connect_info_.ps5 = is_ps5_;
     diagnosticLog("ps-session", "configure target_ps5=%d host=%s",
                   connect_info_.ps5 ? 1 : 0, host_addr_.c_str());
+    if (trace_) trace_->record(
+        "session-config", "begin",
+        "mode=%s target=%s host_present=%d profile=%dx%d@%d bitrate_kbps=%d codec=%s",
+        remote_mode_ ? "remote" : "lan", is_ps5_ ? "ps5" : "ps4",
+        host_addr_.empty() ? 0 : 1, width_, height_, fps_, bitrate_kbps_,
+        video_codec_ == stream::VideoCodec::HEVC ? "h265" : "h264");
     connect_info_.video_profile.width = static_cast<unsigned int>(width_);
     connect_info_.video_profile.height = static_cast<unsigned int>(height_);
     connect_info_.video_profile.max_fps = static_cast<unsigned int>(fps_);
@@ -81,6 +100,11 @@ void PsStreamSession::configureConnectInfo() {
         connect_info_.holepunch_session = remote_result_.holepunch_session;
         if (remote_result_.psn_account_id.size() !=
             sizeof(connect_info_.psn_account_id)) {
+            if (trace_) trace_->record(
+                "session-config", "failed",
+                "reason=account-size actual=%zu expected=%zu",
+                remote_result_.psn_account_id.size(),
+                sizeof(connect_info_.psn_account_id));
             setLastError("PSN account ID has invalid size");
             return;
         }
@@ -90,6 +114,11 @@ void PsStreamSession::configureConnectInfo() {
     } else {
         connect_info_.host = host_addr_.c_str();
     }
+    if (trace_) trace_->record(
+        "session-config", "ok",
+        "remote_holepunch=%d auto_downgrade=1 dualsense=%d keyboard=0 idr_on_fec_failure=1 packet_loss_max=0.05",
+        connect_info_.holepunch_session ? 1 : 0,
+        connect_info_.enable_dualsense ? 1 : 0);
 }
 
 bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
@@ -102,7 +131,9 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
     }
 
     log_ = makeChiakiDiagnosticLog("chiaki-session");
+    if (trace_) trace_->record("audio-decoder", "begin", "codec=opus");
     bridge_.initializeAudio(&log_);
+    if (trace_) trace_->record("audio-decoder", "configured", "codec=opus");
     diagnosticLog("ps-session", "doStart begin remote_mode=%d valid=%d acct_size=%zu BUILD_V3_SESSION_INIT_LOG",
                   remote_mode_, remote_result_.valid,
                   remote_result_.psn_account_id.size());
@@ -125,12 +156,18 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
                   static_cast<void*>(&session_), static_cast<void*>(&connect_info_),
                   static_cast<void*>(&log_), log_.level_mask,
                   reinterpret_cast<void*>(log_.cb), log_.user);
+    const auto init_started = std::chrono::steady_clock::now();
     ChiakiErrorCode err = chiaki_session_init(&session_, &connect_info_, &log_);
     diagnosticLog("ps-session", "chiaki_session_init rc=%d", err);
     if (remote_mode_) {
         remote_result_.holepunch_session = nullptr;
         remote_result_.valid = false;
     }
+    if (trace_) trace_->record(
+        "chiaki-init", err == CHIAKI_ERR_SUCCESS ? "ok" : "failed",
+        "mode=%s elapsed_ms=%lld error=%d error_name=%s",
+        remote_mode_ ? "remote" : "lan", elapsedMs(init_started),
+        static_cast<int>(err), chiaki_error_string(err));
     if (err != CHIAKI_ERR_SUCCESS) {
         setLastError("Session init failed: " + std::string(chiaki_error_string(err)));
         state_.store(PsSessionState::Error);
@@ -151,6 +188,9 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
 
     ChiakiAudioSink sink = bridge_.audioSink();
     chiaki_session_set_audio_sink(&session_, &sink);
+    if (trace_) trace_->record(
+        "session-callbacks", "configured",
+        "events=1 video=1 audio=1 rumble-via-bridge=1");
 
     if (startupCancelled("after init")) {
         chiaki_session_fini(&session_);
@@ -159,9 +199,14 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
     }
 
     diagnosticLog("ps-session", "calling chiaki_session_start");
+    const auto start_started = std::chrono::steady_clock::now();
     err = chiaki_session_start(&session_);
     diagnosticLog("ps-session", "chiaki_session_start rc=%d", err);
     if (err != CHIAKI_ERR_SUCCESS) {
+        if (trace_) trace_->record(
+            "chiaki-start", "failed", "elapsed_ms=%lld error=%d error_name=%s",
+            elapsedMs(start_started), static_cast<int>(err),
+            chiaki_error_string(err));
         setLastError("Session start failed: " + std::string(chiaki_error_string(err)));
         chiaki_session_fini(&session_);
         initialized_ = false;
@@ -169,6 +214,9 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
         if (callbacks_.on_error) callbacks_.on_error(lastError());
         return false;
     }
+    if (trace_) trace_->record(
+        "chiaki-start", "ok", "mode=%s elapsed_ms=%lld",
+        remote_mode_ ? "remote" : "lan", elapsedMs(start_started));
     started_ = true;
 
     if (startupCancelled("after start")) {
@@ -179,6 +227,8 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
     const char* mode = remote_mode_ ? "remote" : "LAN";
     diagnosticLog("ps-session", "Session started (%s) for %s",
                   mode, remote_mode_ ? "PSN" : host_addr_.c_str());
+    if (trace_) trace_->record(
+        "session-thread", "running", "mode=%s", mode);
     return true;
 }
 
@@ -197,6 +247,9 @@ bool PsStreamSession::startRemote(PsRemoteResult&& remote, PsSessionCallbacks ca
 void PsStreamSession::stop() {
     if (state_.load() == PsSessionState::Stopping) return;
     state_.store(PsSessionState::Stopping);
+    if (trace_ && !trace_->finished()) trace_->record(
+        "session-stop", "begin", "started=%d initialized=%d",
+        started_ ? 1 : 0, initialized_ ? 1 : 0);
 
     if (started_) {
         chiaki_session_stop(&session_);
@@ -287,11 +340,20 @@ void PsStreamSession::handleEvent(ChiakiEvent* event) {
     switch (event->type) {
         case CHIAKI_EVENT_CONNECTED: {
             diagnosticLog("ps-session", "Connected");
+            if (trace_) trace_->record(
+                "connected", "ok",
+                "ctrl_failed=%d ctrl_session_id=%d stream_switch=%d",
+                session_.ctrl_failed ? 1 : 0,
+                session_.ctrl_session_id_received ? 1 : 0,
+                session_.stream_connection_switch_received ? 1 : 0);
             state_.store(PsSessionState::Streaming);
             if (callbacks_.on_streaming) callbacks_.on_streaming();
             break;
         }
         case CHIAKI_EVENT_LOGIN_PIN_REQUEST: {
+            if (trace_) trace_->record(
+                "login-pin", "required", "incorrect=%d",
+                event->login_pin_request.pin_incorrect ? 1 : 0);
             if (callbacks_.on_status) {
                 callbacks_.on_status(event->login_pin_request.pin_incorrect
                     ? "Console login PIN incorrect"
@@ -304,6 +366,11 @@ void PsStreamSession::handleEvent(ChiakiEvent* event) {
             break;
         }
         case CHIAKI_EVENT_HOLEPUNCH: {
+            if (trace_) trace_->record(
+                "data-hole",
+                event->data_holepunch.finished ? "ready" : "begin",
+                "finished=%d",
+                event->data_holepunch.finished ? 1 : 0);
             if (callbacks_.on_status) {
                 callbacks_.on_status(event->data_holepunch.finished
                     ? "Data channel established"
@@ -312,6 +379,9 @@ void PsStreamSession::handleEvent(ChiakiEvent* event) {
             break;
         }
         case CHIAKI_EVENT_REGIST: {
+            if (trace_) trace_->record(
+                "dynamic-register", "complete", "remote_mode=%d",
+                remote_mode_ ? 1 : 0);
             if (callbacks_.on_registered) callbacks_.on_registered(event->host);
             break;
         }
@@ -322,6 +392,16 @@ void PsStreamSession::handleEvent(ChiakiEvent* event) {
                 "Quit: reason=%d reason_str=%s ctrl_failed=%d ctrl_session_id=%d stream_switch=%d",
                 static_cast<int>(event->quit.reason),
                 reason_str,
+                session_.ctrl_failed ? 1 : 0,
+                session_.ctrl_session_id_received ? 1 : 0,
+                session_.stream_connection_switch_received ? 1 : 0);
+            if (trace_) trace_->record(
+                "quit",
+                event->quit.reason == CHIAKI_QUIT_REASON_STOPPED
+                    ? "stopped" : chiaki_quit_reason_is_error(event->quit.reason)
+                        ? "error" : "disconnected",
+                "reason=%d reason_text=%s ctrl_failed=%d ctrl_session_id=%d stream_switch=%d",
+                static_cast<int>(event->quit.reason), reason_str,
                 session_.ctrl_failed ? 1 : 0,
                 session_.ctrl_session_id_received ? 1 : 0,
                 session_.stream_connection_switch_received ? 1 : 0);

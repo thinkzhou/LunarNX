@@ -3,6 +3,7 @@
 #include "../input/stream_input_router.h"
 #include <array>
 #include <cstdint>
+#include <functional>
 
 namespace lunar::stream {
 
@@ -52,8 +53,13 @@ struct TouchpadFeedback {
 // boundary.
 class IStreamRuntime {
 public:
+    using CancelCallback = std::function<bool()>;
+
     virtual ~IStreamRuntime() = default;
 
+    // Non-blocking cancellation used by UI teardown before the asynchronous
+    // resource cleanup worker can acquire protocol lifecycle locks.
+    virtual void requestStop() = 0;
     virtual void stopStream(bool set_disconnected) = 0;
     virtual StreamState getState() const = 0;
 
@@ -68,7 +74,7 @@ public:
     virtual void requestPlatformHomeButton() = 0;
     // Called from a network worker after Switch returns to the foreground.
     // Implementations keep a healthy session alive and rebuild a dead one.
-    virtual bool resumeAfterForeground() = 0;
+    virtual bool resumeAfterForeground(CancelCallback cancel = {}) = 0;
     virtual TouchpadFeedback getTouchpadFeedback() const { return {}; }
     virtual void update() = 0;
     virtual void presentVideoFrame() = 0;
