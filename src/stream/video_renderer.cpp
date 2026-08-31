@@ -1,6 +1,7 @@
 #include "video_renderer.h"
 #include "../diagnostics.h"
 #include "perf_stats.h"
+#include "nv12_texture_geometry.h"
 #include "software_video_frame.h"
 #include "video_resolution_transition.h"
 #include <algorithm>
@@ -1067,28 +1068,12 @@ void recordRenderTargetState(Deko3DRenderContext& s, RenderTarget& target) {
   s.present_cb.bindVtxBufferState(kVertexBufferState);
 }
 
-Tf cropToMappedSurface(const Deko3DRenderContext& s, Tf transform) {
-  if(s.frame_w<=0||s.frame_h<=0||s.mapped_luma_w==0||s.mapped_luma_h==0){
-    return transform;
-  }
-  const float scale_x=static_cast<float>(s.frame_w)/
-      static_cast<float>(s.mapped_luma_w);
-  const float scale_y=static_cast<float>(s.frame_h)/
-      static_cast<float>(s.mapped_luma_h);
-  transform.u[0]*=scale_x;
-  transform.u[1]*=scale_y;
-  transform.u[2]*=scale_x;
-  transform.u[3]*=scale_y;
-  return transform;
-}
-
 void recordNv12ToFramebufferPass(Deko3DRenderContext& s, const Tf& transform) {
   s.present_cb.bindShaders(DkStageFlag_GraphicsMask,{s.vs,s.fs});
   s.present_cb.bindTextures(DkStage_Fragment,0,dkMakeTextureHandle(s.li,0));
   s.present_cb.bindTextures(DkStage_Fragment,1,dkMakeTextureHandle(s.ci,0));
   s.present_cb.bindUniformBuffer(DkStage_Fragment,0,s.tu.getGpuAddr(),s.tu.getSize());
-  const Tf mapped_transform=cropToMappedSurface(s,transform);
-  s.present_cb.pushConstants(s.tu.getGpuAddr(),sizeof(Tf),0,sizeof(Tf),&mapped_transform);
+  s.present_cb.pushConstants(s.tu.getGpuAddr(),sizeof(Tf),0,sizeof(Tf),&transform);
   s.present_cb.draw(DkPrimitive_Quads,kQuadVertices.size(),1,0,0);
 }
 
@@ -1305,22 +1290,17 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
   const uint32_t luma_offset=static_cast<uint32_t>(luma_delta);
   const uint32_t chroma_offset=static_cast<uint32_t>(chroma_delta);
   const bool is_linear=nvmap->is_linear;
-  const auto align_up=[](uint32_t value,uint32_t alignment){
-    return (value+alignment-1u)&~(alignment-1u);
-  };
-  const uint32_t luma_width=std::max<uint32_t>(
-      static_cast<uint32_t>(frame->linesize[0]),static_cast<uint32_t>(frame->width));
-  const uint32_t luma_height=align_up(static_cast<uint32_t>(frame->height),32u);
-  const uint32_t chroma_width=std::max<uint32_t>(
-      static_cast<uint32_t>((frame->linesize[1]+1)/2),
-      static_cast<uint32_t>((frame->width+1)/2));
-  const uint32_t chroma_height=align_up(static_cast<uint32_t>(frame->height+1)/2u,16u);
-  if(frame->width<=0||frame->height<=0||luma_width==0||luma_height==0||
-     chroma_width==0||chroma_height==0){
+  const Nv12TextureGeometry geometry=makeNv12TextureGeometry(
+      frame->width,frame->height,frame->linesize[0],frame->linesize[1]);
+  if(!geometry.valid()){
     lunar::diagnosticLog("render","present reject invalid nvtegra geometry width=%d height=%d pitches=%d/%d",frame->width,frame->height,frame->linesize[0],frame->linesize[1]);
     markContextRenderFault(s, RenderFault::InvalidNvMap, "geometry");
     return false;
   }
+  const uint32_t luma_width=geometry.storage_luma_width;
+  const uint32_t luma_height=geometry.storage_luma_height;
+  const uint32_t chroma_width=geometry.storage_chroma_width;
+  const uint32_t chroma_height=geometry.storage_chroma_height;
 
   if(frame->width!=s.frame_w||frame->height!=s.frame_h){
     s.static_state_dirty=true;
@@ -1364,12 +1344,12 @@ bool updateFrameMapping(Deko3DRenderContext& s, AVFrame* frame) {
     dk::ImageLayoutMaker luma_maker{s.dev};
     luma_maker.setType(DkImageType_2D)
         .setFormat(DkImageFormat_R8_Unorm)
-        .setDimensions(luma_width,luma_height,1)
+        .setDimensions(geometry.luma_width,geometry.luma_height,1)
         .setFlags(layout_flags);
     dk::ImageLayoutMaker chroma_maker{s.dev};
     chroma_maker.setType(DkImageType_2D)
         .setFormat(DkImageFormat_RG8_Unorm)
-        .setDimensions(chroma_width,chroma_height,1)
+        .setDimensions(geometry.chroma_width,geometry.chroma_height,1)
         .setFlags(layout_flags);
     if(is_linear){
       luma_maker.setPitchStride(static_cast<uint32_t>(frame->linesize[0]));
