@@ -954,6 +954,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
     uint32_t renderer_recovery_attempts = 0;
     uint32_t decoder_recovery_attempts = 0;
     auto last_health_recovery = std::chrono::steady_clock::time_point{};
+    auto presentation_resumed_at = std::chrono::steady_clock::time_point{};
+    bool presentation_was_suspended = false;
     auto video_watchdog_started = std::chrono::steady_clock::time_point{};
     auto next_health_poll = std::chrono::steady_clock::now();
     stream::MediaHealthStats media_health{};
@@ -1287,6 +1289,19 @@ void XboxStreamSession::runLoop(StreamProfile profile,
         }
 
         const auto now = std::chrono::steady_clock::now();
+        if (media_health.presentation_suspended) {
+            presentation_was_suspended = true;
+            renderer_recovery_attempts = 0;
+            last_health_recovery = {};
+        } else if (presentation_was_suspended) {
+            presentation_was_suspended = false;
+            presentation_resumed_at = now;
+            renderer_recovery_attempts = 0;
+            last_health_recovery = {};
+        }
+        const bool presentation_resume_grace =
+            presentation_resumed_at.time_since_epoch().count() != 0 &&
+            now - presentation_resumed_at < kVideoPresentStallTimeout;
         const uint32_t source_discontinuities =
             media_stats.video_rtp_ssrc_changes +
             media_stats.video_rtp_timestamp_discontinuities;
@@ -1417,6 +1432,8 @@ void XboxStreamSession::runLoop(StreamProfile profile,
                 rtp_stalled,
                 decode_stalled,
                 present_stalled,
+                media_health.presentation_suspended ||
+                    presentation_resume_grace,
                 recovery_due,
                 media_.hasRendererRecoveryPending(),
                 renderer_recovery_attempts,

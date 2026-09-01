@@ -110,6 +110,7 @@ public:
     // Per-frame update for input + rendering
     void update() override;
     void presentVideoFrame() override;
+    void setVideoPresentationSuspended(bool suspended) override;
 
 private:
     api::HttpClient& http();

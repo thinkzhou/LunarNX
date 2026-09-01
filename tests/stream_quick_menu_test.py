@@ -10,6 +10,12 @@ def require(condition, message):
 def main():
     view = Path("src/ui/stream_view.cpp").read_text()
     header = Path("src/ui/stream_view.h").read_text()
+    runtime = Path("src/app/stream_runtime.h").read_text()
+    controller_h = Path("src/app/stream_controller.h").read_text()
+    controller = Path("src/app/stream_controller.cpp").read_text()
+    media_h = Path("src/stream/media_pipeline.h").read_text()
+    media = Path("src/stream/media_pipeline.cpp").read_text()
+    session = Path("src/app/xbox_stream_session.cpp").read_text()
     perf = Path("src/ui/perf_overlay.cpp").read_text()
     zh = Path("romfs/i18n/zh-Hans/lunarnx.json").read_text()
     en = Path("romfs/i18n/en-US/lunarnx.json").read_text()
@@ -53,6 +59,26 @@ def main():
             "void StreamView::onResume()" in view and
             "child_activity_visible_ = false" in view,
             "settings and mapping activities must keep UI input ownership until resume")
+    require("setVideoPresentationSuspended(true)" in view and
+            "setVideoPresentationSuspended(false)" in view,
+            "opaque stream child activities must suspend presentation watchdog checks")
+    require("setVideoPresentationSuspended" in runtime and
+            "setVideoPresentationSuspended(bool suspended) override" in controller_h and
+            "media_->setVideoPresentationSuspended(suspended)" in controller and
+            "presentation_suspended" in media_h and
+            "video_presentation_suspended_.exchange" in media and
+            "media_health.presentation_suspended" in session,
+            "presentation suspension must reach the Xbox video watchdog")
+    stop = view[view.index("void StreamView::stopAndReturn()"):
+                view.index("void StreamView::setQuickMenuVisible")]
+    resume = view[view.index("void StreamView::onResume()"):
+                  view.index("void StreamView::updatePerformanceVisibility")]
+    require("child_activity_visible_" in stop and
+            "deferred_stop_" in stop and
+            stop.index("child_activity_visible_") < stop.index("stop_started_.exchange") and
+            "deferred_stop_.exchange(false)" in resume and
+            "stopAndReturn()" in resume,
+            "stream teardown must wait until child activities return to StreamView")
     require("kQuickDisconnectConfirmWindow" in view and
             "menu_disconnect_confirm" in view and
             "std::atomic<bool> disconnect_armed_" in header,

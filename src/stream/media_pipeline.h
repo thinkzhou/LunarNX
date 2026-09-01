@@ -68,6 +68,7 @@ inline const char* videoRenderStageName(VideoRenderStage stage) {
 struct MediaHealthStats {
     bool has_decoded_video = false;
     bool has_presented_video = false;
+    bool presentation_suspended = false;
     uint64_t decoded_video_age_ms = 0;
     uint64_t presented_video_age_ms = 0;
     uint32_t render_fault_count = 0;
@@ -198,6 +199,7 @@ public:
     // resets both video and audio RTP/decode/playback state.
     void prepareForNewMediaSource(const char* reason);
     void presentVideoFrame();
+    void setVideoPresentationSuspended(bool suspended);
     void setVideoPresentationMode(VideoPresentationMode mode);
     void setVideoDecodeCatchUpMode(VideoDecodeCatchUpMode mode);
     bool setAudioLatencyMode(AudioLatencyMode mode);
@@ -333,6 +335,7 @@ private:
     // Published by the UI/present thread so the WebRTC owner loop can inspect
     // liveness without taking the renderer/lifecycle mutex.
     std::atomic<uint64_t> last_presented_video_ns_{0};
+    std::atomic<bool> video_presentation_suspended_{false};
     std::atomic<uint32_t> consecutive_render_faults_{0};
     // VideoRenderer writes these without logging on the hot path. The session
     // watchdog can therefore report the last Deko3D boundary even if the UI

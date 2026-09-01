@@ -40,6 +40,7 @@ private:
     std::atomic<bool> stop_started_{false};
     std::atomic<bool> backgrounded_{false};
     std::atomic<bool> foreground_recovery_running_{false};
+    std::atomic<bool> deferred_stop_{false};
     brls::Event<bool>::Subscription focus_subscription_;
 
     std::chrono::steady_clock::time_point exit_press_time_;

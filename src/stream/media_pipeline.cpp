@@ -68,6 +68,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
     decoded_video_frames_ = 0;
     render_fault_count_ = 0;
     last_presented_video_ns_ = 0;
+    video_presentation_suspended_ = false;
     consecutive_render_faults_ = 0;
     renderer_stage_ = static_cast<uint8_t>(VideoRenderStage::Idle);
     renderer_stage_started_ns_ = 0;
@@ -276,6 +277,7 @@ void MediaPipeline::shutdownUnlocked() {
     decoded_video_frames_ = 0;
     render_fault_count_ = 0;
     last_presented_video_ns_ = 0;
+    video_presentation_suspended_ = false;
     consecutive_render_faults_ = 0;
     renderer_stage_ = static_cast<uint8_t>(VideoRenderStage::Idle);
     renderer_stage_started_ns_ = 0;
@@ -1682,6 +1684,15 @@ void MediaPipeline::presentVideoFrame() {
     }
 }
 
+void MediaPipeline::setVideoPresentationSuspended(bool suspended) {
+    const bool previous = video_presentation_suspended_.exchange(
+        suspended, std::memory_order_acq_rel);
+    if (previous == suspended) return;
+    lunar::diagnosticLog(
+        "media", "video presentation watchdog %s for in-stream UI",
+        suspended ? "suspended" : "resumed");
+}
+
 void MediaPipeline::openAudioStartupGateIfNeeded() {
     if (audio_start_gate_open_.exchange(true, std::memory_order_acq_rel)) {
         return;
@@ -1695,6 +1706,8 @@ void MediaPipeline::openAudioStartupGateIfNeeded() {
 
 MediaHealthStats MediaPipeline::getHealthStats() const {
     MediaHealthStats stats;
+    stats.presentation_suspended = video_presentation_suspended_.load(
+        std::memory_order_acquire);
     const uint64_t now_ns = monotonicNowNs();
     const uint64_t decoded_ns = last_decoded_video_ns_.load(
         std::memory_order_acquire);

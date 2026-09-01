@@ -17,6 +17,7 @@ struct VideoWatchdogObservation {
     bool rtp_stalled = false;
     bool decode_stalled = false;
     bool present_stalled = false;
+    bool presentation_suspended = false;
     bool recovery_due = false;
     bool renderer_recovery_pending = false;
     uint32_t renderer_recovery_attempts = 0;
@@ -38,6 +39,13 @@ inline VideoWatchdogAction decideVideoWatchdogAction(
         return observation.decoder_recovery_attempts == 0
             ? VideoWatchdogAction::RecoverDecoder
             : VideoWatchdogAction::ReconnectSession;
+    }
+
+    // Opaque in-stream activities intentionally stop the render-thread
+    // presentation callback while decode and transport stay active. Do not
+    // turn that expected UI state into a renderer recovery or stream error.
+    if (observation.presentation_suspended) {
+        return VideoWatchdogAction::None;
     }
 
     // If decode is current but presentation is not, flushing a healthy decoder
