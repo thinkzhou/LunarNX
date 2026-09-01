@@ -62,8 +62,12 @@ def main():
             "frame retirement must advance with the command-ring slice")
     require("luma_delta" in renderer and "chroma_delta" in renderer,
             "NVTEGRA plane offsets must be computed from the NvMap base")
-    require("cropToMappedSurface" in renderer,
-            "sampling must crop aligned NVTEGRA surfaces to visible dimensions")
+    require("makeNv12TextureGeometry" in renderer and
+            ".setDimensions(geometry.luma_width,geometry.luma_height,1)" in renderer and
+            ".setDimensions(geometry.chroma_width,geometry.chroma_height,1)" in renderer,
+            "NVTEGRA descriptors must expose visible dimensions, not aligned padding")
+    require("cropToMappedSurface" not in renderer,
+            "visible descriptors must not be rescaled back across aligned padding")
     require("retireCompletedTargets(*s, submitted_index)" in present and
             "present_slice_active=true" in present,
             "post-process targets must retire against the same command-ring fence")

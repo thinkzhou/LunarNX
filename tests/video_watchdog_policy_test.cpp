@@ -32,6 +32,26 @@ void anExistingRendererRecoveryGetsOneBoundedGracePeriod() {
            VideoWatchdogAction::StopStream);
 }
 
+void intentionalPresentationSuspensionDoesNotStopTheStream() {
+    VideoWatchdogObservation observation;
+    observation.presentation_suspended = true;
+    observation.present_stalled = true;
+    observation.recovery_due = true;
+    observation.renderer_recovery_attempts = 1;
+
+    assert(decideVideoWatchdogAction(observation) ==
+           VideoWatchdogAction::None);
+
+    observation.rtp_stalled = true;
+    assert(decideVideoWatchdogAction(observation) ==
+           VideoWatchdogAction::ReconnectSession);
+
+    observation.rtp_stalled = false;
+    observation.decode_stalled = true;
+    assert(decideVideoWatchdogAction(observation) ==
+           VideoWatchdogAction::RecoverDecoder);
+}
+
 void decodeRecoveryEscalatesToFreshSession() {
     VideoWatchdogObservation observation;
     observation.decode_stalled = true;
@@ -70,6 +90,7 @@ void cooldownSuppressesDuplicateRecovery() {
 int main() {
     presentOnlyStallUsesRendererRecovery();
     anExistingRendererRecoveryGetsOneBoundedGracePeriod();
+    intentionalPresentationSuspensionDoesNotStopTheStream();
     decodeRecoveryEscalatesToFreshSession();
     rtpLivenessAlwaysWins();
     cooldownSuppressesDuplicateRecovery();

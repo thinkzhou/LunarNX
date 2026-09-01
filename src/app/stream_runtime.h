@@ -78,6 +78,9 @@ public:
     virtual TouchpadFeedback getTouchpadFeedback() const { return {}; }
     virtual void update() = 0;
     virtual void presentVideoFrame() = 0;
+    virtual void setVideoPresentationSuspended(bool suspended) {
+        (void)suspended;
+    }
 };
 
 } // namespace lunar::app

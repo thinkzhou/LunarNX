@@ -245,6 +245,7 @@ StreamView::~StreamView() {
     alive_->store(false);
     terminal_stop_->store(true);
     lifecycle_generation_->invalidate();
+    runtime_->setVideoPresentationSuspended(false);
     runtime_->requestStop();
     running_ = false;
     brls::Application::getWindowFocusChangedEvent()->unsubscribe(
@@ -450,6 +451,7 @@ brls::View* StreamView::createContentView() {
         brls::getStr("lunarnx/stream/menu_stream_settings"));
     settings_button->registerClickAction([this](brls::View*) -> bool {
         child_activity_visible_ = true;
+        runtime_->setVideoPresentationSuspended(true);
         setQuickMenuVisible(false);
         if (runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation) {
             brls::Application::pushActivity(
@@ -473,6 +475,7 @@ brls::View* StreamView::createContentView() {
     mapping_button->setText(brls::getStr("lunarnx/stream/menu_button_mapping"));
     mapping_button->registerClickAction([this](brls::View*) -> bool {
         child_activity_visible_ = true;
+        runtime_->setVideoPresentationSuspended(true);
         setQuickMenuVisible(false);
         brls::Application::pushActivity(new ButtonMappingActivity(
             runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation
@@ -637,6 +640,18 @@ void StreamView::showStoppingOverlay() {
 }
 
 void StreamView::stopAndReturn() {
+    if (child_activity_visible_) {
+        if (!deferred_stop_.exchange(true)) {
+            lunar::diagnosticLog(
+                "stream-view",
+                "deferring stream exit until child activity closes");
+        }
+        terminal_stop_->store(true);
+        lifecycle_generation_->invalidate();
+        runtime_->requestStop();
+        running_ = false;
+        return;
+    }
     if (stop_started_.exchange(true)) return;
     terminal_stop_->store(true);
     lifecycle_generation_->invalidate();
@@ -717,12 +732,23 @@ void StreamView::updateInputOwnership() {
 }
 
 void StreamView::onPause() {
-    if (child_activity_visible_) updateInputOwnership();
+    if (child_activity_visible_) {
+        runtime_->setVideoPresentationSuspended(true);
+        updateInputOwnership();
+    }
 }
 
 void StreamView::onResume() {
     child_activity_visible_ = false;
+    runtime_->setVideoPresentationSuspended(false);
     updateInputOwnership();
+    if (deferred_stop_.exchange(false)) {
+        auto alive = alive_;
+        brls::sync([this, alive]() {
+            if (alive->load()) stopAndReturn();
+        });
+        return;
+    }
     if (content_root_) brls::Application::giveFocus(content_root_);
 }
 

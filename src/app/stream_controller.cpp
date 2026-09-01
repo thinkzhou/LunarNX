@@ -1224,6 +1224,12 @@ void StreamController::presentVideoFrame() {
     }
 }
 
+void StreamController::setVideoPresentationSuspended(bool suspended) {
+    if (media_) {
+        media_->setVideoPresentationSuspended(suspended);
+    }
+}
+
 bool StreamController::bypassAuthForMock(const std::string& base_url) {
     base_url_ = base_url;
     mock_mode_ = true;
