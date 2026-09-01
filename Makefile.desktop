@@ -79,7 +79,7 @@ CXX_SRCS = src/platform/desktop_main.cpp lib/qrcodegen/qrcodegen.cpp \
            src/ps/chiaki_log_adapter.cpp src/ps/ps_credentials.cpp \
            src/ps/ps_discovery.cpp src/ps/ps_registration.cpp \
            src/ps/ps_registration_diagnostics.cpp src/ps/ps_manager.cpp \
-           src/ps/ps_input_mapper.cpp src/ps/ps_media_bridge.cpp \
+           src/ps/ps_input_mapper.cpp src/ps/ps_haptics_rumble.cpp src/ps/ps_media_bridge.cpp \
            src/ps/ps_stream_session.cpp src/ps/ps_stream_controller.cpp \
            src/ps/psn_auth_manager.cpp src/ps/psn_auth_utils.cpp src/ps/ps_console_repository.cpp \
            src/ps/ps_connection_plan.cpp src/ps/ps_remote_connector.cpp \
@@ -162,6 +162,9 @@ FEEDBACK_TEST_OBJS = $(BUILD)/tests/xbox_input_feedback_test.o \
 RUMBLE_TIMING_TEST_OBJS = $(BUILD)/tests/rumble_timing_test.o \
 	                         $(BUILD)/src/input/rumble_controller.o
 
+PS_HAPTICS_RUMBLE_TEST_OBJS = $(BUILD)/tests/ps_haptics_rumble_test.o \
+	                             $(BUILD)/src/ps/ps_haptics_rumble.o
+
 RTP_CLOCK_TEST_OBJS = $(BUILD)/tests/rtp_clock_mapper_test.o
 
 VIDEO_JITTER_TEST_OBJS = $(BUILD)/tests/video_rtp_jitter_buffer_test.o \
@@ -230,7 +233,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 RHO_SRCS = src/rho/rho_main.cpp
 RHO_OBJS = $(RHO_SRCS:%.cpp=$(BUILD)/%.o)
 
-.PHONY: xcloud_session_support_test adaptive_bitrate_tests video_watchdog_policy_tests realtime_latency_policy_tests network_strategy_sim xbox_local_latency_sim xbox_input_strategy_sim video_recovery_sim all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests nv12_texture_geometry_tests srtcp_capacity_tests input_tests xbox_input_accumulator_tests stream_input_router_tests feedback_tests rumble_timing_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
+.PHONY: xcloud_session_support_test adaptive_bitrate_tests video_watchdog_policy_tests realtime_latency_policy_tests network_strategy_sim xbox_local_latency_sim xbox_input_strategy_sim video_recovery_sim all clean run auth_test psn_auth_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests nv12_texture_geometry_tests srtcp_capacity_tests input_tests xbox_input_accumulator_tests stream_input_router_tests feedback_tests rumble_timing_tests ps_haptics_rumble_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
 
 all:  $(TARGET)
 	@echo "=== Desktop Build Complete ==="
@@ -335,6 +338,11 @@ rumble_timing_tests: $(RUMBLE_TIMING_TEST_OBJS)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/rumble_timing_test $(RUMBLE_TIMING_TEST_OBJS)
 	./$(BUILD)/rumble_timing_test
+
+ps_haptics_rumble_tests: $(PS_HAPTICS_RUMBLE_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/ps_haptics_rumble_test $(PS_HAPTICS_RUMBLE_TEST_OBJS)
+	./$(BUILD)/ps_haptics_rumble_test
 
 rtp_clock_tests: $(RTP_CLOCK_TEST_OBJS)
 	@mkdir -p $(BUILD)

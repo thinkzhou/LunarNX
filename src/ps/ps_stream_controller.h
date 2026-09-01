@@ -135,6 +135,7 @@ private:
     app::TouchpadFeedback touchpad_feedback_{};
     std::atomic<bool> rumble_enabled_{true};
     std::atomic<int> rumble_strength_percent_{50};
+    bool rumble_input_suppressed_ = false;
     std::atomic<bool> ps_button_requested_{false};
     int ps_button_pulse_frames_remaining_ = 0;
     bool ps_button_release_pending_ = false;

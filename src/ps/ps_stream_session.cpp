@@ -188,9 +188,14 @@ bool PsStreamSession::doStart(PsSessionCallbacks callbacks) {
 
     ChiakiAudioSink sink = bridge_.audioSink();
     chiaki_session_set_audio_sink(&session_, &sink);
+    if (connect_info_.enable_dualsense) {
+        ChiakiAudioSink haptics_sink = bridge_.hapticsSink();
+        chiaki_session_set_haptics_sink(&session_, &haptics_sink);
+    }
     if (trace_) trace_->record(
         "session-callbacks", "configured",
-        "events=1 video=1 audio=1 rumble-via-bridge=1");
+        "events=1 video=1 audio=1 haptics=%d rumble-via-bridge=1",
+        connect_info_.enable_dualsense ? 1 : 0);
 
     if (startupCancelled("after init")) {
         chiaki_session_fini(&session_);

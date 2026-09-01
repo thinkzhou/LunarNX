@@ -119,6 +119,13 @@ ChiakiAudioSink PsMediaBridge::audioSink() {
     return sink;
 }
 
+ChiakiAudioSink PsMediaBridge::hapticsSink() {
+    ChiakiAudioSink sink{};
+    sink.user = this;
+    sink.frame_cb = hapticsFrameCb;
+    return sink;
+}
+
 ChiakiEventCallback PsMediaBridge::eventCallback() {
     return eventCb;
 }
@@ -201,6 +208,23 @@ void PsMediaBridge::audioFrameCb(uint8_t* buf, size_t buf_size, void* user) {
     if (!self->audio_format_valid_ || !self->opus_sink_.frame_cb) return;
     self->media_.recordIncomingAudioPacket();
     self->opus_sink_.frame_cb(buf, buf_size, self->opus_sink_.user);
+}
+
+void PsMediaBridge::hapticsFrameCb(uint8_t* buf, size_t buf_size, void* user) {
+    auto* self = static_cast<PsMediaBridge*>(user);
+    if (!self || !buf || buf_size == 0) return;
+    if (!self->first_haptics_frame_logged_.exchange(true)) {
+        lunar::diagnosticLog("ps-haptics", "first frame bytes=%zu", buf_size);
+    }
+
+    PsHapticsRumbleCommand command;
+    if (!self->haptics_rumble_.pushFrame(buf, buf_size, command)) return;
+    if (!self->first_haptics_command_logged_.exchange(true)) {
+        lunar::diagnosticLog(
+            "ps-haptics", "first command left=%.0f right=%.0f",
+            command.left * 100.0f, command.right * 100.0f);
+    }
+    if (self->haptics_cb_) self->haptics_cb_(command.left, command.right);
 }
 
 void PsMediaBridge::decodedAudioSettingsCb(uint32_t channels, uint32_t rate, void* user) {
