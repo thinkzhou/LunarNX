@@ -43,6 +43,7 @@ def main() -> None:
     require("setRumbleEnabled" in ps_controller_header and
             "setRumbleStrengthPercent" in ps_controller_header and
             "setRumbleForwarder" in ps_controller_source and
+            "setHapticsForwarder" in ps_controller_source and
             "!input_router_.gameHasInput()" in ps_controller_source and
             "state_.load() != app::StreamState::Streaming" in ps_controller_source and
             "rumble_->update()" in ps_controller_source and
@@ -50,9 +51,18 @@ def main() -> None:
             "PS streams must forward Chiaki rumble through Switch HD rumble")
     require("bridge_.setEventForwarder" in ps_session_source and
             "bridge_.eventCallback()" in ps_session_source and
+            "bridge_.hapticsSink()" in ps_session_source and
+            "chiaki_session_set_haptics_sink" in ps_session_source and
             "&bridge_" in ps_session_source and
             "event->type == CHIAKI_EVENT_RUMBLE" in ps_bridge_source,
-            "the registered Chiaki event callback must pass through the rumble bridge")
+            "the registered Chiaki callbacks must pass rumble and PS5 haptics through the bridge")
+    require("kPsLegacyRumbleTimeoutMs" in ps_controller_source and
+            "kPsHapticsRumbleTimeoutMs" in ps_controller_source and
+            "0.0f, 0.0f, 30, 0, 0" not in ps_controller_source,
+            "PS rumble must latch long enough for state events and haptics packet jitter")
+    require("rumble_input_suppressed_" in ps_controller_header and
+            "input_suppressed != rumble_input_suppressed_" in ps_controller_source,
+            "opening stream UI must stop a latched PlayStation rumble command once")
     require("connect_info_.enable_keyboard = false" in ps_session_source,
             "PS sessions must not advertise the unimplemented remote keyboard")
     require("vibration_enabled" in ps_settings_header and

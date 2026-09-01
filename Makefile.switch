@@ -172,7 +172,7 @@ CXX_SRCS = src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_proces
     src/ps/chiaki_crypto_init.cpp src/ps/chiaki_log_adapter.cpp src/ps/ps_connection_trace.cpp src/ps/ps_credentials.cpp \
     src/ps/ps_discovery.cpp src/ps/ps_registration.cpp \
     src/ps/ps_registration_diagnostics.cpp src/ps/ps_manager.cpp \
-    src/ps/ps_input_mapper.cpp src/ps/ps_touchpad_reader.cpp src/ps/ps_motion_reader.cpp src/ps/ps_media_bridge.cpp \
+    src/ps/ps_input_mapper.cpp src/ps/ps_touchpad_reader.cpp src/ps/ps_motion_reader.cpp src/ps/ps_haptics_rumble.cpp src/ps/ps_media_bridge.cpp \
     src/ps/ps_mock_replay_session.cpp \
     src/ps/ps_stream_session.cpp src/ps/ps_stream_controller.cpp \
     src/ps/psn_auth_manager.cpp src/ps/psn_auth_utils.cpp src/ps/ps_pairing_account_codec.cpp src/ps/ps_pairing_account_store.cpp src/ps/ps_pairing_account.cpp src/ps/ps_phone_pairing_server.cpp src/ps/psn_callback_server.cpp src/ps/ps_console_repository.cpp \

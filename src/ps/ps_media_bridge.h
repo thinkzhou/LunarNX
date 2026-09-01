@@ -6,6 +6,7 @@
 #include <chiaki/audio.h>
 #include <chiaki/opusdecoder.h>
 #include "ps_connection_trace.h"
+#include "ps_haptics_rumble.h"
 #include "../stream/media_pipeline.h"
 #include "../stream/audio_decoder.h"
 #include <atomic>
@@ -22,6 +23,7 @@ class PsMediaBridge {
 public:
     using EventCallback = std::function<void(ChiakiEvent*)>;
     using RumbleCallback = std::function<void(uint8_t left, uint8_t right)>;
+    using HapticsCallback = std::function<void(float left, float right)>;
     explicit PsMediaBridge(stream::MediaPipeline& media, int fps,
                            std::shared_ptr<PsConnectionTrace> trace = {});
     ~PsMediaBridge();
@@ -37,11 +39,13 @@ public:
     void setMediaReady();
 
     ChiakiAudioSink audioSink();
+    ChiakiAudioSink hapticsSink();
     void initializeAudio(ChiakiLog* log);
     ChiakiEventCallback eventCallback();
 
     void setEventForwarder(EventCallback cb) { event_cb_ = std::move(cb); }
     void setRumbleForwarder(RumbleCallback cb) { rumble_cb_ = std::move(cb); }
+    void setHapticsForwarder(HapticsCallback cb) { haptics_cb_ = std::move(cb); }
 
     // Static C callbacks exposed for chiaki API registration
     static bool videoSampleCb(uint8_t* buf, size_t buf_size, int32_t frames_lost,
@@ -78,6 +82,8 @@ private:
 
     EventCallback event_cb_;
     RumbleCallback rumble_cb_;
+    HapticsCallback haptics_cb_;
+    PsHapticsRumbleAccumulator haptics_rumble_;
     ChiakiOpusDecoder opus_decoder_{};
     ChiakiAudioSink opus_sink_{};
     bool opus_decoder_initialized_ = false;
@@ -85,12 +91,15 @@ private:
     std::atomic<bool> first_audio_header_logged_{false};
     std::atomic<bool> first_audio_packet_logged_{false};
     std::atomic<bool> first_decoded_audio_logged_{false};
+    std::atomic<bool> first_haptics_frame_logged_{false};
+    std::atomic<bool> first_haptics_command_logged_{false};
 
     // Internal audio frame callback (called from chiaki thread)
     void onDecodedAudioFrame(int16_t* buf, size_t samples_count);
 
     static void audioHeaderCb(ChiakiAudioHeader* header, void* user);
     static void audioFrameCb(uint8_t* buf, size_t buf_size, void* user);
+    static void hapticsFrameCb(uint8_t* buf, size_t buf_size, void* user);
     static void decodedAudioSettingsCb(uint32_t channels, uint32_t rate, void* user);
     static void decodedAudioFrameCb(int16_t* buf, size_t samples_count, void* user);
 };

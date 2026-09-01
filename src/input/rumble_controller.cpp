@@ -12,6 +12,10 @@ namespace lunar::input {
 
 namespace {
 std::atomic<int> g_rumble_command_logs{0};
+#ifdef __SWITCH__
+std::atomic<int> g_rumble_send_failure_logs{0};
+std::atomic<bool> g_rumble_first_send_logged{false};
+#endif
 }
 
 RumblePhase evaluateRumblePhase(uint64_t elapsed_ms,
@@ -40,6 +44,10 @@ bool RumbleController::initialize() {
     stop();
     std::lock_guard<std::mutex> lock(mutex_);
     g_rumble_command_logs = 0;
+#ifdef __SWITCH__
+    g_rumble_send_failure_logs = 0;
+    g_rumble_first_send_logged = false;
+#endif
     states_ = {};
 #ifdef __SWITCH__
     handheld_device_ = {};
@@ -186,31 +194,45 @@ void RumbleController::stop() {
 void RumbleController::sendStateLocked(size_t gamepad_index, bool enabled) {
     const auto& state = states_[gamepad_index];
     HidVibrationValue values[2] = {};
+    for (auto& value : values) {
+        value.freq_low = 160.0f;
+        value.freq_high = 320.0f;
+    }
     if (enabled) {
         values[0].amp_low = state.left_motor * strength_scale_;
-        values[0].freq_low = 160.0f;
         values[0].amp_high = state.lt_motor * strength_scale_;
-        values[0].freq_high = 320.0f;
         values[1].amp_low = state.right_motor * strength_scale_;
-        values[1].freq_low = 160.0f;
         values[1].amp_high = state.rt_motor * strength_scale_;
-        values[1].freq_high = 320.0f;
     }
 
-    auto send = [&values](VibrationDevice& device) {
+    auto send = [&values, enabled](VibrationDevice& device, const char* target) {
         if (!device.initialized || device.handle_count <= 0) return;
-        hidSendVibrationValues(
+        const Result rc = hidSendVibrationValues(
             reinterpret_cast<HidVibrationDeviceHandle*>(device.handles.data()),
             values,
             std::min(device.handle_count, 2));
+        if (!g_rumble_first_send_logged.exchange(true)) {
+            lunar::diagnosticLog(
+                "rumble", "first hardware send target=%s enabled=%d rc=0x%08x",
+                target, enabled ? 1 : 0, rc);
+        }
+        if (R_FAILED(rc) && g_rumble_send_failure_logs.fetch_add(1) < 8) {
+            lunar::diagnosticLog(
+                "rumble", "hardware send failed target=%s enabled=%d rc=0x%08x",
+                target, enabled ? 1 : 0, rc);
+        }
     };
-    if (gamepad_index == 0) send(handheld_device_);
-    send(player_devices_[gamepad_index]);
+    if (gamepad_index == 0) send(handheld_device_, "handheld");
+    send(player_devices_[gamepad_index], "player");
 }
 
 void RumbleController::sendZeroLocked(VibrationDevice& device) {
     if (!device.initialized || device.handle_count <= 0) return;
     HidVibrationValue zero[2] = {};
+    for (auto& value : zero) {
+        value.freq_low = 160.0f;
+        value.freq_high = 320.0f;
+    }
     hidSendVibrationValues(
         reinterpret_cast<HidVibrationDeviceHandle*>(device.handles.data()),
         zero,

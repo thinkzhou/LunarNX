@@ -20,6 +20,8 @@ namespace lunar::ps {
 namespace {
 constexpr int kPsButtonPulseFrames = 16;
 constexpr std::chrono::milliseconds kPsInputInterval{8};
+constexpr uint16_t kPsLegacyRumbleTimeoutMs = 5000;
+constexpr uint16_t kPsHapticsRumbleTimeoutMs = 100;
 
 const char* streamStateName(app::StreamState state) {
     switch (state) {
@@ -314,7 +316,13 @@ bool PsStreamController::startStream() {
         rumble_->setRumble(0,
             static_cast<float>(left) / 255.0f,
             static_cast<float>(right) / 255.0f,
-            0.0f, 0.0f, 30, 0, 0);
+            0.0f, 0.0f, kPsLegacyRumbleTimeoutMs, 0, 0);
+    });
+    bridge_->setHapticsForwarder([this](float left, float right) {
+        if (!rumble_ || !input_router_.gameHasInput() ||
+            state_.load() != app::StreamState::Streaming) return;
+        rumble_->setRumble(0, left, right, 0.0f, 0.0f,
+                           kPsHapticsRumbleTimeoutMs, 0, 0);
     });
     if (mock_replay) {
         mock_session_ = std::make_unique<PsMockReplaySession>(
@@ -635,6 +643,7 @@ void PsStreamController::stopStream(bool set_disconnected) {
         diagnosticLog("ps-controller", "media pipeline stopped");
     }
     if (rumble_) rumble_->stop();
+    rumble_input_suppressed_ = false;
     if (gamepad_) gamepad_->releaseCaptureButton();
     if (connection_trace_ && !connection_trace_->finished()) {
         connection_trace_->finish("cancelled", "stream-stop-before-video");
@@ -706,6 +715,10 @@ void PsStreamController::update() {
 
     auto state = gamepad_->read();
     const bool input_suppressed = !input_router_.gameHasInput();
+    if (rumble_ && input_suppressed != rumble_input_suppressed_) {
+        rumble_input_suppressed_ = input_suppressed;
+        if (input_suppressed) rumble_->stop();
+    }
     PsTouchpadState touchpad = touchpad_reader_
         ? touchpad_reader_->read(input_suppressed)
         : PsTouchpadState{};

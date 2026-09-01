@@ -66,6 +66,7 @@ set(LUNARNX_SOURCES
     src/ps/ps_registration.cpp
     src/ps/ps_manager.cpp
     src/ps/ps_input_mapper.cpp
+    src/ps/ps_haptics_rumble.cpp
     src/ps/ps_media_bridge.cpp
     src/ps/ps_stream_session.cpp
     src/ps/ps_stream_controller.cpp

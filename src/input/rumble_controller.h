@@ -19,9 +19,9 @@ RumblePhase evaluateRumblePhase(uint64_t elapsed_ms,
                                 uint16_t delay_ms,
                                 uint8_t repeat);
 
-// Handles Xbox 4-motor rumble protocol (2 grip + 2 trigger motors)
-// Stores independent commands for each Xbox gamepad index and maps them to
-// Switch HD rumble devices.
+// Stores normalized streaming rumble commands and maps them to Switch HD
+// rumble devices. Xbox can populate all four motors; PlayStation uses the two
+// grip motors for legacy rumble and converted DualSense haptics.
 class RumbleController {
 public:
     RumbleController();
@@ -30,7 +30,8 @@ public:
     // Initialize HD rumble hardware for the current stream session.
     bool initialize();
 
-    // Called from WebRTC callback thread when Xbox sends vibration
+    // Called from a streaming callback thread when the remote host sends
+    // vibration feedback.
     void setRumble(uint8_t gamepad_index,
                    float left_motor, float right_motor,
                    float lt_motor, float rt_motor,
