@@ -5,7 +5,6 @@
 #include "ps_activity.h"
 #include "about_activity.h"
 #include "stream_settings_activity.h"
-#include "dev_tools_activity.h"
 #include "grid_navigation.h"
 #include "ui_style.h"
 #include "../common.h"
@@ -183,12 +182,15 @@ brls::View* PlatformActivity::createContentView() {
     ps_card->setMarginLeft(24);
     platforms->addView(ps_card);
     content->addView(platforms);
-    auto* dev_tools_tile = makeUtilityTile(
-        brls::getStr("lunarnx/dev/title"),
-        brls::getStr("lunarnx/dev/entry_desc"),
-        [this]() { openDevTools(); });
-    content->addView(dev_tools_tile);
-    wireVerticalGridNavigation({{xbox_card, ps_card}, {dev_tools_tile}});
+    auto* about_tile = makeUtilityTile(
+        brls::getStr("lunarnx/about/home_entry_title"),
+        brls::getStr("lunarnx/about/home_entry_desc"),
+        []() {
+            brls::Application::pushActivity(
+                new AboutActivity(), brls::TransitionAnimation::NONE);
+        });
+    content->addView(about_tile);
+    wireVerticalGridNavigation({{xbox_card, ps_card}, {about_tile}});
     workspace->addView(content);
 
     workspace->registerAction(brls::getStr("lunarnx/common/exit"),
@@ -235,12 +237,6 @@ void PlatformActivity::openPlayStation() {
         ps_activity,
         brls::TransitionAnimation::NONE);
     diagnosticLog("ui-platform", "PlayStation navigation complete");
-}
-
-void PlatformActivity::openDevTools() {
-    diagnosticLog("ui-platform", "Dev tools navigation begin");
-    brls::Application::pushActivity(
-        new DevToolsActivity(), brls::TransitionAnimation::NONE);
 }
 
 } // namespace lunar::ui

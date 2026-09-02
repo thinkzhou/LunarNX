@@ -35,7 +35,7 @@ psmedia: $(PSMEDIA_TARGET)
 
 $(PSMEDIA_TARGET): $(PSMEDIA_ELF) $(ROMFS_STAGE_STAMP)
 	$(OBJCOPY) -O binary $< $(PSMEDIA_BUILD)/LunarNXPsMediaReplay.bin
-	$(NACP) --create LunarNXPsMediaReplay "LunarNX Team" 0.1.0 $(PSMEDIA_BUILD)/nacp.tmp
+	$(NACP) --create LunarNXPsMediaReplay "thinkzhou" 0.1.0 $(PSMEDIA_BUILD)/nacp.tmp
 	$(ELF2NRO) $< $@ --icon=res/icon.jpg --nacp=$(PSMEDIA_BUILD)/nacp.tmp --romfsdir=$(ROMFS_STAGE)
 
 $(PSMEDIA_ELF): $(PSMEDIA_OBJS)

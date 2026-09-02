@@ -48,7 +48,7 @@ all: $(TARGET)
 
 $(TARGET): $(ELF) $(ROMFS)/.keep
 	$(OBJCOPY) -O binary $< $(BUILD)/LunarNXNetProbe.bin
-	$(NACP) --create LunarNXNetProbe "LunarNX Team" 0.1.0 $(BUILD)/nacp.tmp
+	$(NACP) --create LunarNXNetProbe "thinkzhou" 0.1.0 $(BUILD)/nacp.tmp
 	$(ELF2NRO) $< $@ --nacp=$(BUILD)/nacp.tmp --romfsdir=$(ROMFS)
 
 $(ELF): $(OBJS)

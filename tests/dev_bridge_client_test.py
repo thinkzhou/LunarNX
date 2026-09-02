@@ -57,8 +57,9 @@ require("X-LunarNX-Commit" in client and "X-LunarNX-Device" in client and
         "log upload must identify its build and return the server log ID")
 require("envSetNextLoad" in ui and "Application::quit" in ui,
         "successful installation must relaunch the installed NRO")
-require("new DevToolsActivity" in platform,
-        "platform page must expose development tools without account login")
+require("new DevToolsActivity" not in platform and
+        'lunarnx/about/home_entry_title' in platform,
+        "development bridge UI must remain built but hidden from the platform page")
 require('makeAppFrame(brls::getStr("lunarnx/dev/title"), scroll)' in ui and
         'title->setText(brls::getStr("lunarnx/dev/title"))' not in ui and
         'card->setHeight(92)' in ui,
