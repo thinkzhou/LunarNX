@@ -24,7 +24,7 @@ all: $(TARGET)
 
 $(TARGET): $(BUILD)/LunarNXSmoke.elf
 	$(OBJCOPY) -O binary $< $(BUILD)/LunarNXSmoke.bin
-	$(NACP) --create LunarNXSmoke "LunarNX Team" 0.1.0 $(BUILD)/nacp.tmp
+	$(NACP) --create LunarNXSmoke "thinkzhou" 0.1.0 $(BUILD)/nacp.tmp
 	$(ELF2NRO) $< $@ --nacp=$(BUILD)/nacp.tmp
 
 $(BUILD)/LunarNXSmoke.elf: $(BUILD)/src/tools/switch_smoke.o

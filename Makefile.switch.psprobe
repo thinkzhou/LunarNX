@@ -33,7 +33,7 @@ all: $(TARGET)
 
 $(TARGET): $(ELF)
 	$(OBJCOPY) -O binary $< $(BUILD)/LunarNXPsSessionProbe.bin
-	$(NACP) --create LunarNXPsSessionProbe "LunarNX Team" 0.1.0 $(BUILD)/nacp.tmp
+	$(NACP) --create LunarNXPsSessionProbe "thinkzhou" 0.1.0 $(BUILD)/nacp.tmp
 	$(ELF2NRO) $< $@ --nacp=$(BUILD)/nacp.tmp
 
 $(ELF): $(OBJS)

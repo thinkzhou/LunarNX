@@ -43,7 +43,8 @@ def main():
             "PS source pages must not duplicate their section headings")
 
     create = xbox.split("brls::View* MainActivity::createContentView()", 1)[1]
-    back = create.split("workspace->registerAction", 1)[1].split(");", 1)[0]
+    back = create.split("workspace->registerAction", 1)[1].split(
+        "workspace->registerAction", 1)[0]
     require("BUTTON_B" in back and "popActivity" in back,
             "Xbox B action must return to platform selection")
     require("resetToAuthActivity" not in back and "signOut" not in back,
@@ -54,8 +55,10 @@ def main():
 
     require("openBrowserDiagnostic" not in platform and
             "https://www.baidu.com" not in platform and
-            "new DevToolsActivity" in platform,
-            "temporary browser diagnostics must be consolidated into development tools")
+            "new DevToolsActivity" not in platform and
+            'lunarnx/about/home_entry_title' in platform and
+            "new AboutActivity" in platform,
+            "platform home must replace development tools with the About entry")
 
     print("Platform navigation UI tests passed")
 

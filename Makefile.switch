@@ -226,7 +226,7 @@ all: $(TARGET)
 
 $(TARGET): $(BUILD)/LunarNX.elf $(ROMFS_STAGE_STAMP)
 	$(OBJCOPY) -O binary $< $(BUILD)/LunarNX.bin
-	$(NACP) --create "$(APP_TITLE)" "LunarNX Team" $(APP_VERSION) $(BUILD)/nacp.tmp
+	$(NACP) --create "$(APP_TITLE)" "thinkzhou" $(APP_VERSION) $(BUILD)/nacp.tmp
 	$(ELF2NRO) $< $@ --icon=res/icon.jpg --nacp=$(BUILD)/nacp.tmp --romfsdir=$(ROMFS_STAGE)
 
 $(ROMFS_STAGE_STAMP): $(ROMFS_SHADERS) $(BOREALIS_RESOURCES) $(APP_ROMFS_FILES) $(XCLOUD_TITLES_RESOURCE)
@@ -286,7 +286,7 @@ rho: $(RHO_TARGET)
 
 $(RHO_TARGET): $(RHO_ELF) $(ROMFS_STAGE_STAMP)
 	$(OBJCOPY) -O binary $< $(BUILD)/Rho.bin
-	$(NACP) --create Rho "LunarNX Team" $(APP_VERSION) $(BUILD)/nacp_rho.tmp
+	$(NACP) --create Rho "thinkzhou" $(APP_VERSION) $(BUILD)/nacp_rho.tmp
 	$(ELF2NRO) $< $@ --icon=res/icon.jpg --nacp=$(BUILD)/nacp_rho.tmp --romfsdir=$(ROMFS_STAGE)
 
 $(RHO_ELF): $(RHO_CXX_OBJS) $(RHO_C_OBJS)

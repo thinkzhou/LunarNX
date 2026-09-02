@@ -50,7 +50,7 @@ add_custom_command(TARGET LunarNX_Minimal POST_BUILD
         $<TARGET_FILE:LunarNX_Minimal>
         ${CMAKE_BINARY_DIR}/LunarNX.bin
     COMMAND ${DEVKITPRO}/tools/bin/nacptool --create
-        "LunarNX" "LunarNX Team" "0.1.0"
+        "LunarNX" "thinkzhou" "0.1.0"
         ${CMAKE_BINARY_DIR}/nacp.tmp
     COMMAND ${DEVKITPRO}/tools/bin/elf2nro
         $<TARGET_FILE:LunarNX_Minimal>
