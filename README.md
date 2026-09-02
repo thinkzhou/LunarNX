@@ -2,11 +2,13 @@
 
 English | [简体中文](README.zh-CN.md)
 
+![LunarNX — Xbox, PlayStation, and cloud gaming on Nintendo Switch](res/appstore/banner.png)
+
 An unofficial Xbox and PlayStation game-streaming client for Nintendo Switch homebrew.
 
 LunarNX brings Xbox Remote Play, Xbox Cloud Gaming, and PlayStation Remote Play into one controller-first Switch application.
 
-![LunarNX streaming a game at 1080p on Nintendo Switch](docs/screenshots/streaming.jpg)
+**Download the latest build from [GitHub Releases](https://github.com/thinkzhou/LunarNX/releases/latest).**
 
 ## Highlights
 
@@ -19,6 +21,7 @@ LunarNX brings Xbox Remote Play, Xbox Cloud Gaming, and PlayStation Remote Play 
 - Hardware-accelerated H.264 and PS5 HEVC video, low-latency audio, and responsive controller input
 - Separate Xbox and PlayStation button-mapping profiles, including multi-button combinations
 - PlayStation touchpad gestures and Switch six-axis motion forwarding
+- PlayStation rumble and DualSense haptics forwarded to Switch vibration
 - In-stream performance monitoring, platform Home/Guide button, and safe disconnect controls
 - Stream recovery after returning from the HOME menu
 - Optional image upscaling and sharpening
@@ -64,14 +67,16 @@ Xbox Cloud Gaming availability depends on account entitlement and region. PlaySt
 
 ## Installation
 
-1. Download `LunarNX.nro` from the [Releases page](https://github.com/thinkzhou/LunarNX/releases).
-2. Copy it to the SD card:
+1. Download the latest ZIP or NRO asset from the [Releases page](https://github.com/thinkzhou/LunarNX/releases). Release filenames may include the version number.
+2. Install it at the following path:
 
    ```text
    sdmc:/switch/LunarNX/LunarNX.nro
    ```
 
-3. Open Homebrew Menu using title override, then launch LunarNX.
+   For a ZIP release, extract the packaged LunarNX directory and rename the directory to `LunarNX` if it contains a version suffix. For a standalone NRO, copy or rename the downloaded file to `LunarNX.nro` at the path above.
+
+3. Open Homebrew Menu using title override/full-memory mode, then launch LunarNX.
 
 Do not share the contents of `sdmc:/switch/LunarNX/`. It may contain Microsoft tokens, PlayStation credentials, PSN session data, console identifiers, and diagnostic logs.
 
@@ -139,6 +144,7 @@ The Switch Capture button can also be assigned. For example, assign **Capture** 
 - The touch menu also requires a second confirmation before disconnecting.
 - During a PlayStation stream, touches and swipes outside the menu gesture area are forwarded to the DualShock/DualSense touchpad. A short tap or long press sends a touchpad click.
 - During a PlayStation stream, supported Joy-Con, Pro Controller, and handheld-mode motion data is forwarded as controller gyroscope, accelerometer, and orientation input.
+- During supported PlayStation sessions, remote rumble and DualSense haptics are converted to Switch vibration.
 
 ## PlayStation Notes
 
@@ -171,10 +177,26 @@ The existing screenshots show the Xbox interface; updated PlayStation screenshot
 
 ![LunarNX establishing a streaming session](docs/screenshots/connecting.jpg)
 
-## Community, Support, And Privacy
+## Community, Author Support, And Privacy
 
+### Community
+
+- Project author: [thinkzhou](https://github.com/thinkzhou)
 - LunarNX QQ group: **736743823**
+- LunarNX Discord: [discord.gg/cFZj8mpg2K](https://discord.gg/cFZj8mpg2K)
 - Issues and releases: [GitHub repository](https://github.com/thinkzhou/LunarNX)
+
+### Support The Author
+
+LunarNX is free and open-source software. If it is useful to you and you would like to support continued development, you can use either option below.
+
+| WeChat Pay | Alipay |
+| --- | --- |
+| <img src="romfs/img/support/wechat.png" alt="WeChat Pay support QR code" width="220"> | <img src="romfs/img/support/alipay.png" alt="Alipay support QR code" width="220"> |
+
+Support is entirely optional and does not affect access to releases, features, or issue reporting.
+
+### Issue Reports And Privacy
 
 Before reporting a problem, read [SECURITY.md](SECURITY.md). Never post token files, PS credential files, complete logs, raw service responses, console identifiers, account IDs, or public IP addresses. A useful report includes the selected platform and quality profile, Switch model and firmware, local/cloud/PSN connection type, network type, and only the smallest redacted log excerpt needed.
 

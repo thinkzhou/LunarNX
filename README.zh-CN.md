@@ -2,11 +2,13 @@
 
 [English](README.md) | 简体中文
 
+![LunarNX — Nintendo Switch 上的 Xbox、PlayStation 与云游戏串流](res/appstore/banner.png)
+
 面向 Nintendo Switch 自制软件环境的非官方 Xbox 与 PlayStation 游戏串流客户端。
 
 LunarNX 将 Xbox Remote Play、Xbox Cloud Gaming 和 PlayStation Remote Play 整合到一款以手柄操作为核心的 Switch 应用中。
 
-![LunarNX 在 Nintendo Switch 上进行 1080p 游戏串流](docs/screenshots/streaming.jpg)
+**请从 [GitHub Releases](https://github.com/thinkzhou/LunarNX/releases/latest) 下载最新版本。**
 
 ## 项目亮点
 
@@ -19,6 +21,7 @@ LunarNX 将 Xbox Remote Play、Xbox Cloud Gaming 和 PlayStation Remote Play 整
 - 硬件 H.264 与 PS5 HEVC 视频解码、低延迟音频与高频手柄输入
 - Xbox 与 PlayStation 独立按键映射，支持组合键
 - PlayStation 触摸板手势与 Switch 六轴体感转发
+- 将 PlayStation 震动与 DualSense 触觉反馈转发为 Switch 手柄震动
 - 串流性能监控、平台 Home/Guide 按钮和安全退出菜单
 - 从 HOME 菜单返回后自动恢复串流会话
 - 可选的画面放大与锐化
@@ -64,14 +67,16 @@ Xbox Cloud Gaming 的可用性取决于账号权限和地区。PlayStation 远�
 
 ## 安装
 
-1. 从 [Releases 页面](https://github.com/thinkzhou/LunarNX/releases) 下载 `LunarNX.nro`。
-2. 将文件复制到 SD 卡：
+1. 从 [Releases 页面](https://github.com/thinkzhou/LunarNX/releases) 下载最新 ZIP 或 NRO；正式版文件名可能包含版本号。
+2. 将应用安装到以下路径：
 
    ```text
    sdmc:/switch/LunarNX/LunarNX.nro
    ```
 
-3. 使用 Title Override 打开 Homebrew Menu，然后启动 LunarNX。
+   如果下载 ZIP，请解压其中的 LunarNX 目录；目录名带版本号时，将其重命名为 `LunarNX`。如果单独下载 NRO，请将文件复制或重命名为上述路径中的 `LunarNX.nro`。
+
+3. 使用 Title Override / 完整内存模式打开 Homebrew Menu，然后启动 LunarNX。
 
 请勿分享 `sdmc:/switch/LunarNX/` 目录中的内容。该目录可能包含 Microsoft Token、PlayStation 配对凭据、PSN 会话、主机标识符和诊断日志。
 
@@ -139,6 +144,7 @@ Switch 截图键也可以参与映射。例如，在 Xbox 按键映射中将 **G
 - 使用触摸菜单断开串流时同样需要再次确认。
 - PlayStation 串流期间，菜单手势区域以外的触摸和滑动会转发为 DualShock/DualSense 触摸板操作；轻点或长按可发送触摸板按下。
 - PlayStation 串流期间，支持的 Joy-Con、Pro Controller 与掌机模式体感数据会作为陀螺仪、加速度计和方向输入转发。
+- 在支持的 PlayStation 会话中，远端震动与 DualSense 触觉反馈会转换为 Switch 手柄震动。
 
 ## PlayStation 说明
 
@@ -171,10 +177,26 @@ Switch 截图键也可以参与映射。例如，在 Xbox 按键映射中将 **G
 
 ![LunarNX 正在建立串流会话](docs/screenshots/connecting.jpg)
 
-## 社区、问题反馈与隐私
+## 社区、支持作者与隐私
 
+### 社区
+
+- 项目作者：[thinkzhou](https://github.com/thinkzhou)
 - LunarNX QQ 群：**736743823**
+- LunarNX Discord：[discord.gg/cFZj8mpg2K](https://discord.gg/cFZj8mpg2K)
 - Issue 与版本发布：[GitHub 仓库](https://github.com/thinkzhou/LunarNX)
+
+### 支持作者
+
+LunarNX 是免费开源软件。如果它对你有帮助，并且你愿意支持后续开发，可以使用以下任一方式。
+
+| 微信支付 | 支付宝 |
+| --- | --- |
+| <img src="romfs/img/support/wechat.png" alt="微信支付支持作者二维码" width="220"> | <img src="romfs/img/support/alipay.png" alt="支付宝支持作者二维码" width="220"> |
+
+赞助完全自愿，不影响版本获取、功能使用或问题反馈。
+
+### 问题反馈与隐私
 
 反馈问题前请阅读 [SECURITY.md](SECURITY.md)。请勿公开 Token 文件、PS 凭据文件、完整日志、原始服务响应、主机标识符、账号 ID 或公网 IP。有效的问题报告应包含平台、画质配置、Switch 型号和系统版本、本地/云游戏/PSN 连接类型、网络类型，以及能够说明问题的最小化脱敏日志片段。
 
