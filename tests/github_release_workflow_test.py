@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
@@ -14,7 +15,10 @@ def require(text: str, fragment: str, source: str) -> None:
 
 
 version = (ROOT / "version.txt").read_text().strip()
-assert version == "0.2.0", f"unexpected automated-release baseline: {version}"
+assert re.fullmatch(
+    r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)",
+    version,
+), f"version.txt must contain a release SemVer, got: {version}"
 
 manifest = json.loads((ROOT / ".release-please-manifest.json").read_text())
 assert manifest == {".": version}
@@ -63,22 +67,25 @@ development = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert development.stdout.strip() == "0.2.0-gabcdef0"
+assert development.stdout.strip() == f"{version}-gabcdef0"
 
 release = subprocess.run(
     ["bash", str(resolver)],
     cwd=ROOT,
-    env=base_env | {"RELEASE_TAG": "v0.2.0"},
+    env=base_env | {"RELEASE_TAG": f"v{version}"},
     check=True,
     capture_output=True,
     text=True,
 )
-assert release.stdout.strip() == "0.2.0"
+assert release.stdout.strip() == version
+
+major, minor, patch = (int(part) for part in version.split("."))
+mismatched_version = f"{major}.{minor}.{patch + 1}"
 
 mismatched_release = subprocess.run(
     ["bash", str(resolver)],
     cwd=ROOT,
-    env=base_env | {"RELEASE_TAG": "v1.4.2"},
+    env=base_env | {"RELEASE_TAG": f"v{mismatched_version}"},
     capture_output=True,
     text=True,
 )
