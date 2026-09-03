@@ -37,7 +37,9 @@ require('"chiaki-ng"' in ABOUT and '"Borealis"' in ABOUT and
         "AGPL-3.0-only-OpenSSL" in ABOUT,
         "About project tab must retain dependency URL and license attribution")
 require("makeDependencyTile" not in ABOUT and
-        '"XStreaming"' in ABOUT and '"Moonlight-Switch"' in ABOUT and
+        '"XStreaming"' in ABOUT and '"github.com/Geocld/XStreaming"' in ABOUT and
+        '"PeaSyo"' in ABOUT and '"github.com/Geocld/PeaSyo"' in ABOUT and
+        '"Moonlight-Switch"' in ABOUT and
         '"libnx"' in ABOUT and '"deko3d"' in ABOUT and
         '"wiliwili"' in ABOUT,
         "About project acknowledgements must use one expanded single-column list")
