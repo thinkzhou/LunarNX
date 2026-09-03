@@ -5,8 +5,10 @@
 #include "diagnostics.h"
 #include "app/runtime_context.h"
 #include "ps/chiaki_crypto_init.h"
+#include "platform/network_worker.h"
 #include "ui/applet_mode_activity.h"
 #include "ui/platform_activity.h"
+#include "ui/poster_loader.h"
 #include "ui/i18n.h"
 #include "ui/ui_style.h"
 #if LUNARNX_PS_MOCK_AUTORUN
@@ -84,6 +86,15 @@ int main(int argc, char* argv[]) {
     brls::Application::getPlatform()->setThemeVariant(brls::ThemeVariant::DARK);
     brls::Application::setGlobalQuit(false);
     brls::Application::setFPSStatus(false);
+    brls::Application::getExitEvent()->subscribe([]() {
+        // Borealis destroys every Activity immediately after this event. Stop
+        // raw-view poster work first, then wait for the remaining detached
+        // workers so none can enqueue UI work against destroyed platform state.
+        lunar::persistentEventLog("main", "application worker shutdown begin");
+        lunar::ui::PosterLoader::instance().shutdown();
+        lunar::platform::shutdownNetworkWorkers();
+        lunar::persistentEventLog("main", "application worker shutdown complete");
+    });
     lunar::diagnosticLog("main", "createWindow done");
 
     lunar::diagnosticLog("main", "push root activity begin");

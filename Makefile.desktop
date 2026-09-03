@@ -231,6 +231,10 @@ AUTH_REFRESH_CANCEL_TEST_OBJS = $(BUILD)/tests/auth_refresh_cancel_test.o \
 	                          $(BUILD)/src/api/http_client.o \
 	                          $(BUILD)/lib/cJSON.o
 
+NETWORK_WORKER_SHUTDOWN_TEST_OBJS = \
+	$(BUILD)/tests/network_worker_shutdown_test.o \
+	$(BUILD)/src/platform/network_worker.o
+
 SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
                  $(BUILD)/src/auth/auth_manager.o $(BUILD)/src/auth/token_store.o \
                  $(BUILD)/src/auth/xbox_signing.o \
@@ -246,7 +250,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 RHO_SRCS = src/rho/rho_main.cpp
 RHO_OBJS = $(RHO_SRCS:%.cpp=$(BUILD)/%.o)
 
-.PHONY: xcloud_session_support_test adaptive_bitrate_tests video_watchdog_policy_tests realtime_latency_policy_tests network_strategy_sim xbox_local_latency_sim xbox_input_strategy_sim video_recovery_sim all clean run auth_test psn_auth_tests http_client_cancel_tests auth_refresh_cancel_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests nv12_texture_geometry_tests srtcp_capacity_tests input_tests xbox_input_accumulator_tests stream_input_router_tests feedback_tests rumble_timing_tests ps_haptics_rumble_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
+.PHONY: xcloud_session_support_test adaptive_bitrate_tests video_watchdog_policy_tests realtime_latency_policy_tests network_strategy_sim xbox_local_latency_sim xbox_input_strategy_sim video_recovery_sim all clean run auth_test psn_auth_tests http_client_cancel_tests auth_refresh_cancel_tests network_worker_shutdown_tests stream_tests h264_rtp_tests video_codec_tests rtp_clock_tests video_jitter_tests outbound_queue_tests stream_resilience_tests video_resolution_transition_tests nv12_texture_geometry_tests srtcp_capacity_tests input_tests xbox_input_accumulator_tests stream_input_router_tests feedback_tests rumble_timing_tests ps_haptics_rumble_tests audio_reorder_tests audio_decoder_tests audio_timing_tests av_sync_tests stun_ice_tests auth_ui_tests sdp_probe rho
 
 all:  $(TARGET)
 	@echo "=== Desktop Build Complete ==="
@@ -290,6 +294,11 @@ auth_refresh_cancel_tests: $(AUTH_REFRESH_CANCEL_TEST_OBJS)
 	@mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/auth_refresh_cancel_test $(AUTH_REFRESH_CANCEL_TEST_OBJS) -L/opt/homebrew/lib -lcurl -lssl -lcrypto
 	./$(BUILD)/auth_refresh_cancel_test
+
+network_worker_shutdown_tests: $(NETWORK_WORKER_SHUTDOWN_TEST_OBJS)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/network_worker_shutdown_test $(NETWORK_WORKER_SHUTDOWN_TEST_OBJS)
+	./$(BUILD)/network_worker_shutdown_test
 
 xcloud_session_support_test: $(XCLOUD_TEST_OBJS)
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/$@ $(XCLOUD_TEST_OBJS)

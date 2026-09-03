@@ -117,8 +117,13 @@ def main() -> None:
         main_source,
         "void MainActivity::rebuildCloudList()",
         "void MainActivity::refreshCloudTitles")
-    require("console_list_->isChildFocused()" in rebuild_body and
-            "giveFocus(selected_tab)" in rebuild_body,
+    safe_replace_body = method_body(
+        main_source,
+        "void MainActivity::prepareConsoleListForReplacement(",
+        "void MainActivity::confirmSignOut")
+    require("prepareConsoleListForReplacement(selected_tab)" in rebuild_body and
+            "console_list_->isChildFocused()" in safe_replace_body and
+            "giveFocus(stable_focus)" in safe_replace_body,
             "rebuilding a cloud tab must hand focus off before deleting cards")
     require("giveFocus(cloud_search_btn_)" not in rebuild_body,
             "tab changes must not force focus back to Search")
@@ -229,8 +234,11 @@ def main() -> None:
     ):
         body = method_body(main_source, signature, next_signature)
         require(body.find("PosterLoader::instance().beginBatch()") <
-                body.find("console_list_->clearViews()"),
+                body.find("prepareConsoleListForReplacement("),
                 f"{signature} must invalidate poster jobs before clearing views")
+    require("console_list_->clearViews()" in safe_replace_body and
+            "cloud_navigation_rows_.clear()" in safe_replace_body,
+            "centralized list replacement must clear views and stale navigation pointers")
 
     print("xCloud library UX tests passed")
 

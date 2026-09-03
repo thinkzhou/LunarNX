@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <cstdio>
@@ -40,8 +41,10 @@ struct PosterJob {
 };
 
 std::mutex g_mutex;
+std::condition_variable g_worker_idle;
 std::deque<PosterJob> g_queue;
 bool g_running = false;
+std::atomic<bool> g_shutting_down{false};
 std::atomic<uint32_t> g_seq{0};
 PosterLoader::BatchId g_batch = 0;
 
@@ -239,10 +242,10 @@ struct UiCompletion {
     bool done = false;
 };
 
-void runOnUiAndWait(std::function<void()> action) {
+bool runOnUiAndWait(std::function<void()> action) {
     auto completion = std::make_shared<UiCompletion>();
     brls::sync([action = std::move(action), completion]() {
-        action();
+        if (!g_shutting_down.load()) action();
         {
             std::lock_guard<std::mutex> lock(completion->mutex);
             completion->done = true;
@@ -250,7 +253,16 @@ void runOnUiAndWait(std::function<void()> action) {
         completion->condition.notify_one();
     });
     std::unique_lock<std::mutex> lock(completion->mutex);
-    completion->condition.wait(lock, [&completion]() { return completion->done; });
+    while (!completion->done && !g_shutting_down.load()) {
+        completion->condition.wait_for(lock, std::chrono::milliseconds(10));
+    }
+    return completion->done && !g_shutting_down.load();
+}
+
+void markWorkerIdle() {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_running = false;
+    g_worker_idle.notify_all();
 }
 
 void runQueueWorker() {
@@ -260,8 +272,9 @@ void runQueueWorker() {
         std::string url;
         {
             std::lock_guard<std::mutex> lock(g_mutex);
-            if (g_queue.empty()) {
+            if (g_shutting_down.load() || g_queue.empty()) {
                 g_running = false;
+                g_worker_idle.notify_all();
                 lunar::diagnosticLog("poster", "queue worker idle");
                 return;
             }
@@ -287,18 +300,32 @@ void runQueueWorker() {
             body = readDiskPoster(url);
             if (!body) {
                 lunar::api::HttpClient http;
-                auto resp = http.get(url, {{"Accept", "image/*"}});
+                auto resp = http.get(url, {{"Accept", "image/*"}}, []() {
+                    return g_shutting_down.load() ||
+                        lunar::platform::networkWorkersShuttingDown();
+                });
+                if (g_shutting_down.load() ||
+                    lunar::platform::networkWorkersShuttingDown()) {
+                    markWorkerIdle();
+                    return;
+                }
                 if (resp.status_code != 200 || resp.body.empty()) {
                     lunar::diagnosticLog("poster", "download fail seq=%u status=%d",
                                          seq, resp.status_code);
-                    runOnUiAndWait([image]() { image->ptrUnlock(); });
+                    if (!runOnUiAndWait([image]() { image->ptrUnlock(); })) {
+                        markWorkerIdle();
+                        return;
+                    }
                     continue;
                 }
                 if (resp.body.size() > kMaximumPosterBytes ||
                     !hasImageSignature(resp.body)) {
                     lunar::diagnosticLog("poster", "download invalid seq=%u bytes=%zu",
                                          seq, resp.body.size());
-                    runOnUiAndWait([image]() { image->ptrUnlock(); });
+                    if (!runOnUiAndWait([image]() { image->ptrUnlock(); })) {
+                        markWorkerIdle();
+                        return;
+                    }
                     continue;
                 }
                 writeDiskPoster(url, resp.body);
@@ -311,7 +338,7 @@ void runQueueWorker() {
             lunar::diagnosticLog("poster", "download ok seq=%u bytes=%zu", seq, body->size());
         }
 
-        runOnUiAndWait([image, body, seq, batch]() {
+        if (!runOnUiAndWait([image, body, seq, batch]() {
             if (isBatchCurrent(batch)) {
                 replacePosterTexture(image, body);
                 lunar::diagnosticLog("poster", "apply texture seq=%u tex=%d",
@@ -321,7 +348,10 @@ void runQueueWorker() {
                                      seq, batch);
             }
             image->ptrUnlock();
-        });
+        })) {
+            markWorkerIdle();
+            return;
+        }
     }
 }
 
@@ -335,6 +365,7 @@ void startQueueWorker() {
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             g_running = false;
+            g_worker_idle.notify_all();
             failed.swap(g_queue);
         }
         for (auto& job : failed) {
@@ -362,6 +393,7 @@ PosterLoader::BatchId PosterLoader::beginBatch() {
     BatchId batch = 0;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
+        if (g_shutting_down.load()) return 0;
         batch = ++g_batch;
         if (batch == 0) batch = ++g_batch;
         cancelled.swap(g_queue);
@@ -384,7 +416,7 @@ void PosterLoader::load(brls::Image* view, const std::string& url, BatchId batch
     bool start_worker = false;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (batch == 0 || batch != g_batch) {
+        if (g_shutting_down.load() || batch == 0 || batch != g_batch) {
             lunar::diagnosticLog("poster", "ignore stale enqueue seq=%u batch=%u current=%u",
                                  seq, batch, g_batch);
             return;
@@ -427,12 +459,20 @@ void PosterLoader::shutdown() {
     std::deque<PosterJob> cancelled;
     {
         std::lock_guard<std::mutex> lock(g_mutex);
+        g_shutting_down = true;
         ++g_batch;
         cancelled.swap(g_queue);
-        g_memory_cache.clear();
-        g_memory_cache_bytes = 0;
     }
+    // Wake a worker blocked waiting for its UI completion. During Borealis'
+    // exit event no more sync callbacks are executed, so waiting here would
+    // otherwise deadlock the UI thread immediately before view destruction.
+    g_worker_idle.notify_all();
     for (auto& job : cancelled) unlockJob(job);
+
+    std::unique_lock<std::mutex> lock(g_mutex);
+    g_worker_idle.wait(lock, []() { return !g_running; });
+    g_memory_cache.clear();
+    g_memory_cache_bytes = 0;
 }
 
 } // namespace lunar::ui

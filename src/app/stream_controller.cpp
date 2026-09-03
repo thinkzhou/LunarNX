@@ -5,11 +5,13 @@
 #include "../common.h"
 #include "../diagnostics.h"
 #include "stream_profile.h"
+#include "../platform/network_worker.h"
 #include <cJSON.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 
 #include <cstdio>
@@ -249,7 +251,8 @@ std::string StreamController::getAuthUrl() const {
 bool StreamController::fetchConsoles() {
     std::lock_guard<std::mutex> auth_lock(auth_operation_mutex_);
     auto signout_requested = [this]() {
-        return signing_out_.load();
+        return signing_out_.load() ||
+            lunar::platform::networkWorkersShuttingDown();
     };
 
     if (mock_mode_.load()) {
@@ -296,10 +299,10 @@ bool StreamController::fetchConsoles() {
     auto& auth_ref = auth();
     // If cloud still missing (e.g. previous InvalidCountry), force re-derive after region change.
     if (!auth_ref.hasCloudAccess() && !auth_ref.getForceRegionIp().empty()) {
-        auth_ref.refreshStreamingTokens(true);
+        auth_ref.refreshStreamingTokens(true, signout_requested);
     }
     if (signout_requested() ||
-        !auth_ref.refreshTokensIfNeeded() ||
+        !auth_ref.refreshTokensIfNeeded(signout_requested) ||
         !auth_ref.isAuthenticated() ||
         signout_requested()) {
         std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
@@ -394,7 +397,8 @@ bool StreamController::restoreCloudTitlesFromCache() {
 bool StreamController::fetchCloudTitles(bool force_refresh) {
     std::lock_guard<std::mutex> auth_lock(auth_operation_mutex_);
     auto signout_requested = [this]() {
-        return signing_out_.load();
+        return signing_out_.load() ||
+            lunar::platform::networkWorkersShuttingDown();
     };
 
     if (!force_refresh) {
@@ -432,10 +436,10 @@ bool StreamController::fetchCloudTitles(bool force_refresh) {
     auto& auth_ref = auth();
     // If cloud still missing (e.g. previous InvalidCountry), force re-derive after region change.
     if (!auth_ref.hasCloudAccess() && !auth_ref.getForceRegionIp().empty()) {
-        auth_ref.refreshStreamingTokens(true);
+        auth_ref.refreshStreamingTokens(true, signout_requested);
     }
     if (signout_requested() ||
-        !auth_ref.refreshTokensIfNeeded() ||
+        !auth_ref.refreshTokensIfNeeded(signout_requested) ||
         !auth_ref.isAuthenticated() ||
         signout_requested()) {
         std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
@@ -551,8 +555,47 @@ std::string StreamController::getCloudTitleFetchError() const {
 
 namespace {
 
+constexpr long kMaxCloudLibraryCacheBytes = 16L * 1024L * 1024L;
+constexpr long kMaxConsoleCacheBytes = 1024L * 1024L;
+
+bool writeCacheAtomically(const std::string& path, const char* data) {
+    if (!data) return false;
+    const std::string temporary = path + ".tmp";
+    const std::string backup = path + ".bak";
+
+    FILE* output = std::fopen(temporary.c_str(), "wb");
+    if (!output) return false;
+    const size_t length = std::strlen(data);
+    const bool wrote = std::fwrite(data, 1, length, output) == length;
+    const bool closed = std::fclose(output) == 0;
+    if (!wrote || !closed) {
+        std::remove(temporary.c_str());
+        return false;
+    }
+
+    bool had_existing = false;
+    if (FILE* current = std::fopen(path.c_str(), "rb")) {
+        had_existing = true;
+        std::fclose(current);
+    }
+    std::remove(backup.c_str());
+    if (had_existing && std::rename(path.c_str(), backup.c_str()) != 0) {
+        std::remove(temporary.c_str());
+        return false;
+    }
+    if (std::rename(temporary.c_str(), path.c_str()) != 0) {
+        if (had_existing) std::rename(backup.c_str(), path.c_str());
+        std::remove(temporary.c_str());
+        return false;
+    }
+    if (had_existing) std::remove(backup.c_str());
+    return true;
+}
+
 void appendCloudTitleJson(cJSON* arr, const api::CloudTitle& title) {
+    if (!arr) return;
     cJSON* obj = cJSON_CreateObject();
+    if (!obj) return;
     cJSON_AddStringToObject(obj, "title_id", title.title_id.c_str());
     cJSON_AddStringToObject(obj, "product_id", title.product_id.c_str());
     cJSON_AddStringToObject(obj, "name", title.name.c_str());
@@ -598,7 +641,10 @@ bool StreamController::loadCloudLibraryCache(bool allow_stale) {
     if (!f) return false;
     if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return false; }
     long len = std::ftell(f);
-    if (len <= 0) { std::fclose(f); return false; }
+    if (len <= 0 || len > kMaxCloudLibraryCacheBytes) {
+        std::fclose(f);
+        return false;
+    }
     std::rewind(f);
     std::string content(static_cast<size_t>(len), '\0');
     if (std::fread(content.data(), 1, static_cast<size_t>(len), f) != static_cast<size_t>(len)) {
@@ -668,6 +714,7 @@ void StreamController::saveCloudLibraryCache() const {
     if (library.empty()) return;
 
     cJSON* root = cJSON_CreateObject();
+    if (!root) return;
     const auto now_ms = static_cast<double>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
@@ -676,6 +723,13 @@ void StreamController::saveCloudLibraryCache() const {
     cJSON* lib_arr = cJSON_CreateArray();
     cJSON* recent_arr = cJSON_CreateArray();
     cJSON* new_arr = cJSON_CreateArray();
+    if (!lib_arr || !recent_arr || !new_arr) {
+        cJSON_Delete(lib_arr);
+        cJSON_Delete(recent_arr);
+        cJSON_Delete(new_arr);
+        cJSON_Delete(root);
+        return;
+    }
     for (const auto& t : library) appendCloudTitleJson(lib_arr, t);
     for (const auto& t : recent) appendCloudTitleJson(recent_arr, t);
     for (const auto& t : newly) appendCloudTitleJson(new_arr, t);
@@ -686,10 +740,7 @@ void StreamController::saveCloudLibraryCache() const {
     char* json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!json) return;
-    FILE* f = std::fopen(lunar::get_cloud_library_cache_path(), "wb");
-    if (f) {
-        std::fputs(json, f);
-        std::fclose(f);
+    if (writeCacheAtomically(lunar::get_cloud_library_cache_path(), json)) {
         lunar::diagnosticLog("stream-controller", "Saved cloud library cache path=%s",
                              lunar::get_cloud_library_cache_path());
     }
@@ -703,7 +754,10 @@ bool StreamController::loadConsoleCache() {
     if (!f) return false;
     if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return false; }
     long len = std::ftell(f);
-    if (len <= 0) { std::fclose(f); return false; }
+    if (len <= 0 || len > kMaxConsoleCacheBytes) {
+        std::fclose(f);
+        return false;
+    }
     std::rewind(f);
     std::string content(static_cast<size_t>(len), '\0');
     if (std::fread(content.data(), 1, static_cast<size_t>(len), f) != static_cast<size_t>(len)) {
@@ -752,8 +806,14 @@ void StreamController::saveConsoleCache() const {
 
     cJSON* root = cJSON_CreateObject();
     cJSON* arr = cJSON_CreateArray();
+    if (!root || !arr) {
+        cJSON_Delete(root);
+        cJSON_Delete(arr);
+        return;
+    }
     for (const auto& c : copy) {
         cJSON* entry = cJSON_CreateObject();
+        if (!entry) continue;
         cJSON_AddStringToObject(entry, "id", c.id.c_str());
         cJSON_AddStringToObject(entry, "name", c.name.c_str());
         cJSON_AddStringToObject(entry, "console_type", c.console_type.c_str());
@@ -765,10 +825,7 @@ void StreamController::saveConsoleCache() const {
     char* json = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!json) return;
-    FILE* f = std::fopen(lunar::get_xbox_console_cache_path(), "wb");
-    if (f) {
-        std::fputs(json, f);
-        std::fclose(f);
+    if (writeCacheAtomically(lunar::get_xbox_console_cache_path(), json)) {
         lunar::diagnosticLog("stream-controller", "Saved console cache count=%zu",
                              copy.size());
     }
