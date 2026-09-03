@@ -2138,7 +2138,7 @@ void XboxStreamSession::controlLoop(std::string session_id,
                                 "xbox-stream",
                                 "Keep-alive auth failure status=%d; refreshing streaming token",
                                 keep_alive_result.status_code);
-                            const bool refreshed = callbacks.refresh_tokens(true);
+                            const bool refreshed = callbacks.refresh_tokens(true, cancel);
                             if (refreshed && streaming_.load() &&
                                 !isCancelled(callbacks)) {
                                 keep_alive_result =
@@ -2197,7 +2197,7 @@ void XboxStreamSession::controlLoop(std::string session_id,
                     try {
                         std::lock_guard<std::mutex> api_lock(session_api_mutex_);
                         if (streaming_.load() && !isCancelled(callbacks)) {
-                            refresh_ok = callbacks.refresh_tokens(false);
+                            refresh_ok = callbacks.refresh_tokens(false, cancel);
                         }
                     } catch (const std::exception& e) {
 #if LUNARNX_DROP_DIAGNOSTIC_LOG

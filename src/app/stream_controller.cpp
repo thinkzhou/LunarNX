@@ -955,6 +955,10 @@ bool StreamController::startStreamWithProfile(
     }
     const uint32_t generation = stream_generation_.fetch_add(1) + 1;
     cancel_requested_ = false;
+    auto stream_cancel = [this, generation, cancel]() {
+        return isStreamCancelled(generation) || signing_out_.load() ||
+            (cancel && cancel());
+    };
     if (cancel && cancel()) {
         requestStreamStop();
         return false;
@@ -974,7 +978,9 @@ bool StreamController::startStreamWithProfile(
 
     if (!mock_mode_.load()) {
         auto& auth_ref = auth();
-        if (!auth_ref.refreshTokensIfNeeded() || !auth_ref.isAuthenticated()) {
+        if (!auth_ref.refreshTokensIfNeeded(stream_cancel) ||
+            !auth_ref.isAuthenticated()) {
+            if (stream_cancel()) return false;
             {
                 std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
                 last_stream_error_ = auth_ref.getLastError().empty()
@@ -999,8 +1005,10 @@ bool StreamController::startStreamWithProfile(
                 return false;
             }
             // Must be XStreaming lpt (cloud transfer token), not xboxlive.signin access token.
-            profile.msal_user_token = auth_ref.getXcloudTransferToken(true);
+            profile.msal_user_token =
+                auth_ref.getXcloudTransferToken(true, stream_cancel);
             if (profile.msal_user_token.empty()) {
+                if (stream_cancel()) return false;
                 {
                     std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
                     last_stream_error_ = auth_ref.getLastError().empty()
@@ -1072,9 +1080,7 @@ bool StreamController::startStreamWithProfile(
         perf_);
 
     XboxStreamSession::RuntimeCallbacks callbacks;
-    callbacks.external_cancel = [this, generation]() {
-        return isStreamCancelled(generation);
-    };
+    callbacks.external_cancel = stream_cancel;
     callbacks.consume_guide_button = [this]() {
         return consumeGuideButtonRequest();
     };
@@ -1113,15 +1119,17 @@ bool StreamController::startStreamWithProfile(
         lunar::diagnosticLog("stream-controller", "Stream error: %s", reason.c_str());
         setState(StreamState::Error, reason);
     };
-    callbacks.refresh_tokens = [this](bool force) {
+    callbacks.refresh_tokens = [this](
+                                   bool force,
+                                   XboxStreamSession::RuntimeCallbacks::CancelCallback cancel) {
         if (mock_mode_.load()) {
             return true;
         }
         auto& auth_ref = auth();
         const bool refreshed = force
-            ? auth_ref.refreshStreamingTokens(true)
-            : auth_ref.refreshTokensIfNeeded();
-        if (!refreshed) {
+            ? auth_ref.refreshStreamingTokens(true, cancel)
+            : auth_ref.refreshTokensIfNeeded(cancel);
+        if (!refreshed || (cancel && cancel())) {
             return false;
         }
         auth_ref.saveTokens(lunar::get_token_path());

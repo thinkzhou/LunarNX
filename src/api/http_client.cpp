@@ -1,5 +1,6 @@
 #include "http_client.h"
 #include "../diagnostics.h"
+#include <chrono>
 #include <curl/curl.h>
 #include <cstdio>
 #include <cstring>
@@ -153,6 +154,31 @@ static int progress_callback(void* userp, curl_off_t, curl_off_t, curl_off_t, cu
     return (cancel && *cancel && (*cancel)()) ? 1 : 0;
 }
 
+static bool lockUnlessCancelled(std::unique_lock<std::timed_mutex>& lock,
+                                const HttpClient::CancelCallback& cancel) {
+    if (!cancel) {
+        lock.lock();
+        return true;
+    }
+    if (cancel()) return false;
+
+    constexpr auto kCancelPollInterval = std::chrono::milliseconds(10);
+    while (!lock.try_lock_for(kCancelPollInterval)) {
+        if (cancel()) return false;
+    }
+    return !cancel();
+}
+
+static HttpResponse cancelledResponse(const char* method,
+                                      const std::string& diagnostic_url) {
+    HttpResponse response;
+    response.network_error = true;
+    response.error_message = "cancelled";
+    lunar::diagnosticLog("http", "%s %s cancelled before transfer",
+                         method, diagnostic_url.c_str());
+    return response;
+}
+
 static void apply_common_options(CURL* curl, const std::string& url, struct curl_slist* hlist,
                                  std::string* body, std::map<std::string, std::string>* headers,
                                  HttpClient::CancelCallback* cancel, char* error_buffer) {
@@ -235,7 +261,10 @@ HttpResponse HttpClient::getImpl(const std::string& url,
                                   const std::string& diagnostic_url,
                                   const std::map<std::string, std::string>& headers,
                                   CancelCallback cancel) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+    if (!lockUnlessCancelled(lock, cancel)) {
+        return cancelledResponse("GET", diagnostic_url);
+    }
     HttpResponse response;
     body_buf_.clear();
     resp_headers_.clear();
@@ -285,7 +314,10 @@ HttpResponse HttpClient::post(const std::string& url,
                                const std::string& body,
                                const std::map<std::string, std::string>& headers,
                                CancelCallback cancel) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+    if (!lockUnlessCancelled(lock, cancel)) {
+        return cancelledResponse("POST", url);
+    }
     HttpResponse response;
     body_buf_.clear();
     resp_headers_.clear();
@@ -336,7 +368,10 @@ HttpResponse HttpClient::post(const std::string& url,
 HttpResponse HttpClient::del(const std::string& url,
                               const std::map<std::string, std::string>& headers,
                               CancelCallback cancel) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::timed_mutex> lock(mutex_, std::defer_lock);
+    if (!lockUnlessCancelled(lock, cancel)) {
+        return cancelledResponse("DELETE", url);
+    }
     HttpResponse response;
     body_buf_.clear();
     resp_headers_.clear();

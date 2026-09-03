@@ -40,7 +40,7 @@ private:
     void* curl_handle_ = nullptr;
     std::string body_buf_;
     std::map<std::string, std::string> resp_headers_;
-    std::mutex mutex_;
+    std::timed_mutex mutex_;
 
     HttpResponse getImpl(const std::string& url, const std::string& diagnostic_url,
                          const std::map<std::string, std::string>& headers,

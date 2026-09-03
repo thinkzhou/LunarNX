@@ -303,7 +303,7 @@ if rg -n 'return auth_->isAuthenticated\(\);' src/app/stream_controller.cpp >/de
   fail "StreamController::loadTokens/hasCredentials must not require already-derived streaming tokens"
 fi
 
-if awk '/bool AuthManager::refreshTokensIfNeeded\(\)/ { inside=1 } inside && /if \(msal_refresh_token_\.empty\(\)\) return false;/ { found=1 } inside && /^}/ { inside=0 } END { exit found ? 0 : 1 }' src/auth/auth_manager.cpp; then
+if awk '/bool AuthManager::refreshTokensIfNeeded\(/ { inside=1 } inside && /if \(msal_refresh_token_\.empty\(\)\) return false;/ { found=1 } inside && /^}/ { inside=0 } END { exit found ? 0 : 1 }' src/auth/auth_manager.cpp; then
   fail "AuthManager::refreshTokensIfNeeded must allow already usable streaming tokens without a refresh token"
 fi
 
