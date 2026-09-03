@@ -27,7 +27,7 @@ LunarNX brings Xbox Remote Play, Xbox Cloud Gaming, and PlayStation Remote Play 
 - Optional image upscaling and sharpening
 - English, Simplified Chinese, and Traditional Chinese interfaces
 
-Xbox Remote Play, Xbox Cloud Gaming, and PS5 Remote Play through PSN have been tested on real Nintendo Switch hardware. The PlayStation path can stream continuously with video, audio, and controller input. Local PS4/PS5 support is implemented but still needs broader testing across console models, firmware versions, and network environments.
+Xbox Remote Play on local and remote networks, Xbox Cloud Gaming, local PS4 and PS5 Remote Play, and PS5 Remote Play through PSN have all been tested on real Nintendo Switch hardware. These paths can stream video and audio and accept controller input; availability still varies with console configuration, account permissions, NAT behavior, and network quality.
 
 > [!WARNING]
 > LunarNX is early-stage homebrew software. It requires a modified Nintendo Switch capable of running NRO applications and does not work on an unmodified retail console.
@@ -39,10 +39,10 @@ Xbox Remote Play, Xbox Cloud Gaming, and PS5 Remote Play through PSN have been t
 | Xbox Remote Play on the same LAN | Tested on real Switch hardware |
 | Xbox Cloud Gaming | Tested on real Switch hardware |
 | PS5 Remote Play through PlayStation Network | Tested on real Switch hardware |
-| Local PS5 discovery, pairing, wake-up, and streaming | Implemented; more real-hardware coverage needed |
-| Local PS4 discovery, pairing, wake-up, and streaming | Implemented; more real-hardware coverage needed |
+| Local PS5 discovery, pairing, wake-up, and streaming | Tested on real Switch hardware |
+| Local PS4 discovery, pairing, wake-up, and streaming | Tested on real Switch hardware |
 | 720p / 1080p / 1080p HQ | Available for Xbox and PlayStation sessions |
-| Xbox Remote Play over the internet | Experimental; requires a direct network path |
+| Xbox Remote Play over the internet | Tested on real Switch hardware; requires a compatible direct network path |
 
 Remote streaming still depends on account permissions, console settings, NAT behavior, Sony/Microsoft services, and network quality. A successful test on one network does not guarantee connectivity on every network.
 
@@ -222,7 +222,7 @@ Real Nintendo Switch hardware remains the final compatibility target.
 
 ## Credits And License
 
-LunarNX builds on [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng), [libpeer](https://github.com/sepfy/libpeer), [Borealis](https://github.com/XITRIX/borealis), [FFmpeg](https://github.com/FFmpeg/FFmpeg), [libnx](https://github.com/switchbrew/libnx), [deko3d](https://github.com/devkitPro/deko3d), [Moonlight-Switch](https://github.com/XITRIX/Moonlight-Switch), and other projects listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+LunarNX builds on [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng), [libpeer](https://github.com/sepfy/libpeer), [Borealis](https://github.com/XITRIX/borealis), [FFmpeg](https://github.com/FFmpeg/FFmpeg), [libnx](https://github.com/switchbrew/libnx), [deko3d](https://github.com/devkitPro/deko3d), [Moonlight-Switch](https://github.com/XITRIX/Moonlight-Switch), and other projects listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Xbox and PlayStation protocol behavior and client workflows were also studied with [XStreaming](https://github.com/Geocld/XStreaming) and [PeaSyo](https://github.com/Geocld/PeaSyo); they are reference projects rather than bundled LunarNX runtime dependencies.
 
 Original LunarNX code outside the PlayStation module is available under the MIT License. PlayStation support links against chiaki-ng under AGPL-3.0. A combined binary containing the PlayStation path must be distributed under AGPL-3.0 terms with the complete corresponding source code and applicable dependency modifications available. See [LICENSE](LICENSE), [LICENSES/AGPL-3.0.txt](LICENSES/AGPL-3.0.txt), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 

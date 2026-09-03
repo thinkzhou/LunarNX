@@ -1,5 +1,9 @@
 # 异地 Xbox 串流 ICE 调查报告
 
+> 状态更新（2026-09）：Xbox 互联网 Remote Play 已在真实 Nintendo Switch
+> 硬件上完成串流测试。本文保留 2026-07 调查时不同网络和 ICE 路径的原始
+> 结果；严格 NAT、防火墙和缺少可用直连路径仍可能导致连接失败。
+
 - 日期：2026-07-13
 - 范围：LunarNX（macOS `sdp_probe` / libpeer）与 XStreaming-desktop / XStreaming 手机版对照
 - 目标：解释“内网串流正常，异地串流失败”的根因，并记录可用网络下的真实连通路径

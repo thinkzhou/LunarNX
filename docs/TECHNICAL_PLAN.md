@@ -1,4 +1,4 @@
-# LunarNX — 技术方案文档 (v0.1 实现后更新)
+# LunarNX — 当前技术架构与实现状态
 
 > Xbox + PlayStation 双平台扩展的当前设计见
 > [xbox_playstation_dual_streaming_design.md](xbox_playstation_dual_streaming_design.md)。
@@ -23,107 +23,48 @@
 
 ## 1. 当前状态
 
-### 已完成 (v0.1)
+本节描述当前 `main`，不再沿用早期 v0.1/v0.2 的实施清单。“真机测试通过”表示该链路已经在真实 Nintendo Switch 上完成过端到端验证，不代表所有主机固件、账号地区、NAT 和网络环境都必然兼容。
 
-| 模块 | 状态 | 说明 |
-|------|------|------|
-| 认证 | ✅ 完成 | MSAL Device Code Flow → RPS → XSTS → GSSV，含 Token 刷新 |
-| API 客户端 | ✅ 完成 | Xbox REST API 完整封装 (Console 列表 / Session / SDP / ICE) |
-| WebRTC | ✅ 完成 | libpeer 集成，SDP/ICE 交换，4 个 DataChannel (chat/control/input/message) |
-| 视频解码 | ✅ 完成 | FFmpeg NVDEC H.264 硬件解码 (AV_PIX_FMT_NVTEGRA) |
-| 视频渲染 | ✅ 完成 | deko3d NV12→RGB BT.709 shader，零拷贝 NVDEC→GPU，主线程提交 |
-| 音频解码 | ✅ 完成 | FFmpeg Opus 软件解码 (48kHz 立体声 S16) |
-| 音频输出 | ✅ 完成 | libnx audout DMA 环形缓冲区 |
-| 手柄输入 | ✅ 完成 | Switch HID → Xbox 按键物理位置映射 + XInput 编码 |
-| HD 震动 | ✅ 完成 | 4-motor rumble 协议解析，50% 强度缩放 |
-| 音画同步 | ✅ 完成 | 基于时间戳的帧调度 (>5ms 丢帧, >2ms sleep) |
-| UI | ✅ 完成 | borealis 3 页面 (Auth → Console List → Stream + Perf Overlay) |
-| 稳定性 | ✅ 完成 | Keepalive 轮询，指数退避自动重连 (max 5 次)，Token 自动刷新 |
-| 构建系统 | ✅ 完成 | Makefile.switch + CMake (desktop) 双目标 |
-
-### PlayStation 当前边界 (v0.2 开发中)
-
-- ✅ PSN OAuth 登录、refresh token 恢复和 PS5 device list 已在 Ryubing 验证；
-- ✅ HTTP 401 会强制刷新 token 并重试一次；
-- 🚧 LAN Pair 凭据改为 server MAC 主键，正在修复持久化和主机注入；
-- 🚧 PSN Remote 正在对齐 chiaki-ng：control hole 后由 ChiakiSession 完成动态 registration 和 data hole；
-- 📝 真机 `native_switch` 的可靠性策略仍待对齐 Akira：当前不会继承 Ryubing 专用的 4 次
-  holepunch 重试、退避与 relay 兼容逻辑；模拟器链路跑通后需单独审计原生重试条件、
-  port guessing 默认值和 PS5 唤醒时序，且真机始终不得经过 Mac relay；
-- 🚧 PlayStation 页面将重做为 Account / My Consoles / Local Network，并使用 Pair、Connect、Wake & Connect 的真实状态；
-- ⛔ 当前 PSN 目录成功不代表 NAT 打洞、媒体、输入或真机兼容已经完成。
-
-- [ ] xCloud 支持
-- [ ] 键盘输入 (Swkbd / USB HID)
-- [ ] RCAS 锐化 / FSR 超分
-- [ ] 设置页面 (码率/编解码器)
-- [ ] 自适应码率
-- [ ] 局域网 mDNS 主机发现
+| 模块 | 状态 | 当前实现 |
+|------|------|---------|
+| Xbox 认证与 API | ✅ 已实现 | Microsoft Device Code、RPS/XSTS/GSSV、Token 恢复与刷新、主机列表、Cloud 游戏库和 Session API |
+| Xbox 主机 Remote Play | ✅ 真机通过 | 局域网和互联网连接均已在真实 Switch 上串流；互联网连接仍要求 NAT/防火墙允许建立兼容的直连路径 |
+| Xbox Cloud Gaming | ✅ 真机通过 | 游戏库、地区选择、会话建立、音视频、输入和恢复链路均已验证 |
+| Xbox WebRTC | ✅ 已实现 | legacy libpeer、SDP/ICE、DTLS-SRTP、usrsctp DataChannel、成功 STUN 与 Home ICE 路径复用 |
+| PlayStation 本地主机 | ✅ 真机通过 | PS4/PS5 的发现、PIN 配对、凭据保存、唤醒和局域网串流均已验证 |
+| PlayStation Network | ✅ 真机通过 | PSN OAuth、PS5 设备列表、动态注册、打洞和远程串流均已验证 |
+| PlayStation 媒体与输入 | ✅ 已实现 | PS4/PS5 H.264、PS5 HEVC、Opus、按键、触摸板、体感、普通震动和 DualSense 触觉反馈 |
+| 共享媒体管线 | ✅ 已实现 | 协议隔离的接收策略、NVDEC、deko3d 零拷贝呈现、Audren、音画同步和分辨率切换 |
+| 网络适应与恢复 | ✅ 已实现 | 路径质量估计、自适应 REMB 码率、动态延迟模式、NACK/PLI、关键帧恢复和有界队列 |
+| UI 与设置 | ✅ 已实现 | 平台首页、Xbox/PS 主机与游戏列表、画质/解码/锐化设置、独立按键映射、串流菜单和性能统计 |
+| 生命周期 | ✅ 已实现 | 取消、Token 刷新、HOME 前后台恢复、控制链路重建、安全退出和可取消的网络等待 |
+| 构建与发布 | ✅ 已实现 | Docker/devkitA64 Switch 构建、Desktop 测试目标、BSS 守卫、版本化 NRO/ZIP Release 和校验和 |
 
 ---
 
 ## 2. 代码结构
 
-```
+```text
 LunarNX/
 ├── src/
-│   ├── main.cpp                       # 入口点，borealis Application 初始化
-│   ├── common.h                       # 平台宏、路径常量、兼容类型
-│   │
-│   ├── auth/                          # 认证模块
-│   │   ├── auth_manager.cpp/h         # 认证状态机 (Device Code → Poll → Xbox tokens)
-│   │   ├── token_store.cpp/h          # Token 持久化到 SD 卡 JSON
-│   │   └── xbox_signing.cpp/h         # ECDSA P-256 签名 (mbedtls/OpenSSL)
-│   │
-│   ├── api/                           # Xbox REST API 模块
-│   │   ├── xbox_api_client.cpp/h      # Xbox API 封装 (Console/Session/SDP/ICE)
-│   │   ├── http_client.cpp/h          # libcurl C++ 封装
-│   │   └── api_constants.h            # URL/常量 (inline constexpr)
-│   │
-│   ├── webrtc/                        # WebRTC 模块
-│   │   └── peer_manager.cpp/h         # libpeer 封装 (Offer/Answer, ICE, DataChannel, Rumble)
-│   │
-│   ├── stream/                        # 流处理模块
-│   │   ├── video_decoder.cpp/h        # FFmpeg NVDEC H.264 硬解
-│   │   ├── audio_decoder.cpp/h        # FFmpeg Opus 软解
-│   │   ├── video_renderer.cpp/h       # deko3d NV12→RGB 渲染 (descriptor set + BT.709)
-│   │   ├── audio_player.cpp/h         # libnx audout 音频输出 (环形缓冲)
-│   │   ├── av_sync.cpp/h              # 音视频同步
-│   │   └── perf_stats.h              # 性能统计 (FPS/解码延迟/丢包)
-│   │
-│   ├── input/                         # 输入模块
-│   │   ├── gamepad_reader.cpp/h       # libnx HID 手柄读取
-│   │   ├── xinput_encoder.cpp/h       # Switch→Xbox 按键映射 + XInput wire format
-│   │   └── rumble_controller.cpp/h    # HD 震动 (4-motor rumble)
-│   │
-│   ├── app/                           # 应用层
-│   │   └── stream_controller.cpp/h    # 串流生命周期管理 (Auth→Connect→Stream→Stop)
-│   │
-│   └── ui/                            # 界面模块
-│       ├── auth_activity.cpp/h        # 认证页面 (显示设备码)
-│       ├── main_activity.cpp/h        # 主机列表 + 分辨率选择
-│       ├── stream_view.cpp/h          # 串流画面 + 状态/性能覆盖层
-│       └── perf_overlay.cpp/h         # 半透明性能统计叠加层
-│
-├── lib/
-│   ├── libpeer/                       # sepfy/libpeer (WebRTC C 实现)
-│   ├── borealis/                      # natinusala/borealis (Switch UI 框架)
-│   ├── switch/                        # Switch 预编译库 (FFmpeg, curl)
-│   └── stubs/                         # 平台兼容桩 (mbedtls_timing, dav1d)
-│
-├── shaders/                           # deko3d shader 源码
-│   ├── basic_vsh.glsl                 # 全屏四边形顶点着色器
-│   └── texture_fsh.glsl               # NV12→RGB 片段着色器 (BT.709)
-│
-├── romfs/shaders/                     # 编译后的 dksh shader (嵌入 NRO)
-│   ├── basic_vsh.dksh
-│   └── texture_fsh.dksh
-│
-├── Makefile.switch                    # Switch 交叉编译 Makefile
-└── CMakeLists.txt                     # Desktop 编译
+│   ├── auth/       # Microsoft/Xbox 认证、签名和 Token 持久化
+│   ├── api/        # HTTP、Xbox 主机/Cloud 目录和 Session API
+│   ├── app/        # Xbox Profile、Session、SDP/ICE、DataChannel 和生命周期
+│   ├── webrtc/     # legacy libpeer 封装、路径估计、RTP jitter 与 Xbox 反馈
+│   ├── ps/         # PS4/PS5 发现、配对、PSN、Chiaki Session、输入和触觉反馈
+│   ├── stream/     # 共享 H.264/HEVC/Opus 解码、同步、渲染、音频和统计
+│   ├── input/      # Switch HID、Xbox XInput 编码和震动输出
+│   ├── ui/         # Borealis 页面、列表、设置、串流画面和覆盖层
+│   └── platform/   # Switch/desktop 平台适配与网络工作线程
+├── tools/
+│   ├── libpeer_legacy/  # 可复现的 legacy libpeer Switch 补丁链
+│   ├── chiaki_switch/   # chiaki-ng Switch SDK 构建和补丁
+│   └── ffmpeg_switch_build/ # FFmpeg/NVDEC Switch 构建
+├── shaders/        # deko3d shader 源码
+├── romfs/          # UI 资源、语言和编译后的 shader
+├── Makefile.switch # Switch 交叉编译入口
+└── Makefile.desktop / CMakeLists.txt # Desktop 构建和测试入口
 ```
-
-> 注：实际代码结构已精简。认证模块移除了未使用的 device_code/embedded_login/sisu_auth 独立类（功能已整合进 auth_manager）；WebRTC 模块移除了 sdp_handler/ice_handler/session_manager/data_channel 独立类（功能已整合进 peer_manager + stream_controller）；UI 模块移除了占位 main_menu/remote_play_view/xcloud_view（由 main_activity/stream_view 替代）。
 
 ---
 
@@ -133,14 +74,18 @@ LunarNX/
 
 | 库 | 版本/来源 | 许可证 | 用途 |
 |------|---------|------|------|
-| [libpeer](https://github.com/sepfy/libpeer) | git submodule | MIT | 轻量 WebRTC C 实现 (~1MB binary) |
-| [averne/FFmpeg](https://github.com/averne/FFmpeg) | 预编译 .a | LGPL/GPL | H.264 NVDEC 硬解 + Opus 解码 |
-| [borealis](https://github.com/natinusala/borealis) | git submodule | MIT | Switch 风格 C++ UI 框架 |
+| [libpeer](https://github.com/sepfy/libpeer) | 固定 revision + LunarNX 补丁链 | MIT | Xbox WebRTC、ICE、DTLS-SRTP 和 DataChannel |
+| [FFmpeg](https://github.com/FFmpeg/FFmpeg) | wiliwili/averne Switch NVDEC 补丁路线 | LGPL/GPL，取决于构建配置 | H.264/HEVC NVDEC 硬解和 Opus 解码 |
+| [Borealis](https://github.com/XITRIX/borealis) | XITRIX fork 固定 revision + GPU 生命周期补丁 | MIT | Switch 风格 C++ UI 框架 |
+| [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng) | 固定 revision + LunarNX Switch 补丁链 | AGPL-3.0 | PlayStation Remote Play 协议、PSN 连接和媒体传输 |
 | [deko3d](https://github.com/devkitPro/deko3d) | devkitPro | Zlib | Switch 原生 GPU API |
 | [libnx](https://github.com/switchbrew/libnx) | devkitPro | ISC | Switch 硬件 API (HID, audout, fs) |
-| [libcurl](https://curl.se) | devkitPro switch-curl | MIT | HTTP 客户端 |
-| [mbedtls](https://github.com/Mbed-TLS/mbedtls) | libpeer 自带 + 自编译 | Apache 2.0 | DTLS/SRTP + ECDSA P-256 签名 |
+| [curl](https://curl.se) | Moonlight Switch curl 8.x 构建 | curl license | Xbox/PS HTTP、HTTPS 和 PSN WSS 信令 |
+| [Mbed TLS](https://github.com/Mbed-TLS/mbedtls) | libpeer 与 Switch curl 构建使用 | Apache-2.0 或 GPL-2.0-or-later，取决于版本 | TLS、DTLS-SRTP 和 ECDSA P-256 签名 |
 | [libsrtp](https://github.com/cisco/libsrtp) | libpeer 自带 + 自编译 | BSD-3 | SRTP 媒体加密 |
+| [usrsctp](https://github.com/sctplab/usrsctp) | libpeer 自带 + Switch 兼容补丁 | BSD-3-Clause | Xbox SCTP DataChannel |
+| [json-c](https://github.com/json-c/json-c) | Switch portlib | MIT | chiaki-ng/PSN JSON 支持 |
+| [miniupnpc](https://github.com/miniupnp/miniupnp) | Switch portlib | BSD-3-Clause | PlayStation 网络连接支持 |
 | [cJSON](https://github.com/DaveGamble/cJSON) | libpeer 自带 | MIT | JSON 解析 |
 
 ### 3.2 libpeer 传递依赖
@@ -164,21 +109,32 @@ libpeer
 
 ---
 
-## 4. 协议参考
+## 4. 协议路径
 
 ### Xbox GameStream 协议栈
 
-LunarNX 实现了完整的 Xbox Remote Play 协议，从认证到串流：
+LunarNX 实现了 Xbox 主机 Remote Play 和 Xbox Cloud Gaming 从认证到串流的完整客户端路径：
 
 ```
 认证: MSAL Device Code → RPS auth → XSTS (GSSV + web) → GSSV token
-API:  GET /lists/devices → POST /v5/sessions/home/play → poll state
-SDP:  POST/GET /v5/sessions/home/{id}/sdp (含 chat/control/input/message channel 配置)
-ICE:  POST/GET /v5/sessions/home/{id}/ice
+API:  主机列表 / Cloud 游戏库 → Home 或 Cloud Session → poll state
+SDP:  POST/GET Session SDP（含 chat/control/input/message channel 配置）
+ICE:  POST/GET Session ICE → 候选排序与上次成功路径软复用
 媒体: WebRTC H.264 (NVDEC) + Opus → DTLS-SRTP 加密
 数据: SCTP DataChannel (SID 0-3): chat, control, input, message
 输入: XInput wire format (38 bytes/frame) via input channel
 震动: FourMotorRumble protocol (0x80 report type)
+```
+
+### PlayStation Remote Play 协议栈
+
+```text
+本地: UDP discovery → PIN registration → credential store → wake/connect
+远程: PSN OAuth → PS5 device list → control/data hole punching → dynamic registration
+会话: chiaki-ng Session → Takion encrypted media/control transport
+媒体: H.264/HEVC (NVDEC) + Opus → shared MediaPipeline
+输入: Switch HID → ChiakiControllerState + touchpad + motion
+反馈: PlayStation rumble / DualSense haptics → Switch vibration
 ```
 
 ### 关键协议细节
@@ -210,8 +166,8 @@ ICE:  POST/GET /v5/sessions/home/{id}/ice
 ### 5.3 音频
 
 - Opus 软件解码 (FFmpeg)，CPU 开销极低
-- libnx audout DMA 异步输出，环形缓冲区 (64KB) + mutex 线程安全
-- 环绕写入正确处理 split 写入
+- libnx Audren 异步输出，按 Realtime、Balanced、Resilient 三档动态控制 60–100ms 缓冲容量
+- Xbox 与 PlayStation 使用独立的入队和恢复策略，来源切换时保留安全的 voice 生命周期
 
 ### 5.4 震动
 
@@ -229,6 +185,7 @@ ICE:  POST/GET /v5/sessions/home/{id}/ice
 | 项目 | 说明 | 参考了什么 |
 |------|------|-----------|
 | [XStreaming](https://github.com/Geocld/XStreaming) | iOS/Android Xbox 串流客户端 | Xbox 协议完整文档、XInput 线格式、FourMotorRumble 协议、API 端点和 JSON 格式 |
+| [PeaSyo](https://github.com/Geocld/PeaSyo) | Android PlayStation Remote Play 客户端 | PlayStation Remote Play 产品流程、连接行为和交互设计参考 |
 | [libnxbox](https://github.com/ursusworks/libnxbox) | Switch Xbox 串流客户端 | libpeer + NVDEC + deko3d 技术路线验证、contract v4 channel 配置、50% rumble 缩放 |
 | [Moonlight-Switch](https://github.com/XITRIX/Moonlight-Switch) | Switch NVIDIA GameStream 客户端 | deko3d 渲染模式 (DKVideoRenderer)、audout 音频输出、borealis UI 模式、FFmpeg NVDEC 配置、deko3d 线程模型 |
 | [xbox-xcloud-player](https://github.com/unknownskl/xbox-xcloud-player) | JS xCloud WebRTC 库 | SDP 配置格式、Channel 声明、contract 版本号 |
@@ -253,4 +210,4 @@ Moonlight-Switch 已验证以下模式在 Switch 上可行：
 - ✅ audout DMA 环形缓冲区
 - ✅ borealis Activity 导航模式
 
-LunarNX 在上述验证基础上独立实现。
+XStreaming 和 PeaSyo 是协议行为与客户端流程参考，并非 LunarNX 的运行时依赖。LunarNX 在上述开源项目和平台验证基础上实现自己的 Switch 应用层、生命周期与适配代码。

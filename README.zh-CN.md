@@ -27,7 +27,7 @@ LunarNX 将 Xbox Remote Play、Xbox Cloud Gaming 和 PlayStation Remote Play 整
 - 可选的画面放大与锐化
 - 英文、简体中文和繁体中文界面
 
-Xbox 本地 Remote Play、Xbox Cloud Gaming，以及通过 PSN 连接 PS5 的 Remote Play 均已在真实 Nintendo Switch 硬件上完成测试。PlayStation 串流已经能够持续输出画面、声音并响应手柄输入。PS4/PS5 局域网能力已经实现，但仍需要覆盖更多主机型号、系统版本和网络环境。
+Xbox 局域网与异地 Remote Play、Xbox Cloud Gaming、PS4/PS5 局域网 Remote Play，以及通过 PSN 连接 PS5 的 Remote Play 均已在真实 Nintendo Switch 硬件上完成测试。这些链路已经能够输出画面和声音并响应手柄输入；实际可用性仍会受到主机设置、账号权限、NAT 和网络质量影响。
 
 > [!WARNING]
 > LunarNX 仍处于早期开发阶段。它需要能够运行 NRO 的改装 Nintendo Switch，无法在未经修改的零售版主机上运行。
@@ -39,10 +39,10 @@ Xbox 本地 Remote Play、Xbox Cloud Gaming，以及通过 PSN 连接 PS5 的 Re
 | 同一局域网内的 Xbox Remote Play | 已在真实 Switch 硬件上测试 |
 | Xbox Cloud Gaming | 已在真实 Switch 硬件上测试 |
 | 通过 PlayStation Network 连接 PS5 | 已在真实 Switch 硬件上测试 |
-| PS5 局域网发现、配对、唤醒与串流 | 已实现，仍需更多实机覆盖 |
-| PS4 局域网发现、配对、唤醒与串流 | 已实现，仍需更多实机覆盖 |
+| PS5 局域网发现、配对、唤醒与串流 | 已在真实 Switch 硬件上测试 |
+| PS4 局域网发现、配对、唤醒与串流 | 已在真实 Switch 硬件上测试 |
 | 720p / 1080p / 1080p HQ | Xbox 与 PlayStation 会话均可选择 |
-| 通过互联网连接自己的 Xbox | 实验性，需要网络能够建立直连 |
+| 通过互联网连接自己的 Xbox | 已在真实 Switch 硬件上测试，需要网络能够建立兼容的直连路径 |
 
 远程串流仍会受到账号权限、主机设置、NAT、Sony/Microsoft 服务状态和网络质量影响。在某个网络中成功连接，并不代表所有网络都能正常使用。
 
@@ -222,7 +222,7 @@ docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
 
 ## 致谢与许可证
 
-LunarNX 使用了 [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng)、[libpeer](https://github.com/sepfy/libpeer)、[Borealis](https://github.com/XITRIX/borealis)、[FFmpeg](https://github.com/FFmpeg/FFmpeg)、[libnx](https://github.com/switchbrew/libnx)、[deko3d](https://github.com/devkitPro/deko3d)、[Moonlight-Switch](https://github.com/XITRIX/Moonlight-Switch) 等开源项目，完整清单请查看 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+LunarNX 使用了 [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng)、[libpeer](https://github.com/sepfy/libpeer)、[Borealis](https://github.com/XITRIX/borealis)、[FFmpeg](https://github.com/FFmpeg/FFmpeg)、[libnx](https://github.com/switchbrew/libnx)、[deko3d](https://github.com/devkitPro/deko3d)、[Moonlight-Switch](https://github.com/XITRIX/Moonlight-Switch) 等开源项目，完整清单请查看 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。Xbox 与 PlayStation 的协议行为和客户端流程还参考了 [XStreaming](https://github.com/Geocld/XStreaming) 与 [PeaSyo](https://github.com/Geocld/PeaSyo)；它们是参考项目，并非 LunarNX 打包的运行时依赖。
 
 LunarNX 在 PlayStation 模块以外的自有代码使用 MIT License。PlayStation 支持链接了采用 AGPL-3.0 的 chiaki-ng。包含 PlayStation 路径的合并二进制必须遵守 AGPL-3.0，并提供完整对应源码和相关依赖修改。详见 [LICENSE](LICENSE)、[LICENSES/AGPL-3.0.txt](LICENSES/AGPL-3.0.txt) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 

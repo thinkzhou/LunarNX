@@ -47,9 +47,23 @@ engineering inventory, not legal advice.
 
 ## Referenced projects
 
-Protocol and platform behavior was studied using XStreaming, Greenlight,
-xbox-xcloud-player, libnxbox, Moonlight-Switch, and wiliwili. LunarNX does not
-include their trademarks and is not endorsed by their maintainers.
+The following projects were studied for protocol behavior, interoperability,
+platform integration, or client workflows. Listing a project here does not mean
+that its source code is bundled or linked into LunarNX; runtime and build
+dependencies are listed separately above.
+
+| Project | License | Reference area |
+| --- | --- | --- |
+| [XStreaming](https://github.com/Geocld/XStreaming) | MIT | Xbox Remote Play, Xbox Cloud Gaming, signaling, ICE, input, and vibration behavior |
+| [PeaSyo](https://github.com/Geocld/PeaSyo) | AGPL-3.0 | PlayStation Remote Play workflows and connectivity behavior |
+| [Greenlight](https://github.com/unknownskl/greenlight) | See upstream project | Xbox authentication and streaming behavior |
+| [xbox-xcloud-player](https://github.com/unknownskl/xbox-xcloud-player) | See upstream project | Xbox Cloud Gaming WebRTC behavior |
+| [libnxbox](https://github.com/ursusworks/libnxbox) | See upstream project | Nintendo Switch Xbox streaming integration |
+| [Moonlight-Switch](https://github.com/XITRIX/Moonlight-Switch) | See upstream project | Nintendo Switch media, audio, rendering, and UI integration |
+| [wiliwili](https://github.com/xfangfang/wiliwili) | See upstream project | Nintendo Switch FFmpeg and NVDEC integration |
+
+LunarNX does not include these projects' trademarks and is not endorsed by
+their maintainers.
 
 ## Platform marks
 

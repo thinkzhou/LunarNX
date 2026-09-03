@@ -1,5 +1,12 @@
 # Real-hardware log analysis — 2026-08-26
 
+> Historical status note (2026-09): this document analyses one earlier G9
+> diagnostic build. Subsequent releases added network-path-aware recovery,
+> asymmetric bitrate adaptation, dynamic latency modes, control-thread
+> lifecycle hardening, cancellable shutdown waits, and successful ICE-path
+> reuse. Keep the measurements below as evidence for that build, not as a list
+> of missing features in current `main`.
+
 ## Scope and status
 
 - Source log: `/Users/zhouyang/Downloads/lunarnx[2].log`

@@ -1,5 +1,11 @@
 # WebRTC 串流低延迟与抗波动审计报告
 
+> 历史状态说明（2026-09）：本文是 2026-07 的静态基线。此后当前实现已经
+> 引入独立高频输入采样、网络路径估计、有界媒体队列、NACK/PLI 恢复、
+> 自适应 REMB 码率和动态 Realtime/Balanced/Recovery 延迟模式。下方问题与
+> Phase 列表用于解释演进背景，不应直接视为当前待办；当前状态以
+> [TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) 和代码为准。
+
 - 日期：2026-07-26
 - 范围：LunarNX 当前工作区中的 Xbox WebRTC、RTP/SRTP、H.264/Opus、解码、A/V sync 和 Switch 零拷贝渲染链路
 - 目标：评估局域网 Xbox 串流能否达到约 20ms 延迟，并在网络波动时减少掉帧、冻结和累计延迟
