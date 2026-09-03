@@ -69,6 +69,7 @@ CXX_SRCS = src/platform/desktop_main.cpp lib/qrcodegen/qrcodegen.cpp \
            src/app/ice_candidate_processor.cpp \
            src/app/stream_controller.cpp \
            src/app/web_rtc_transport.cpp \
+           src/app/xbox_ice_preferences.cpp \
            src/app/xbox_channel_manager.cpp \
            src/app/xbox_session_client.cpp \
            src/app/xbox_stream_session.cpp \
@@ -126,6 +127,7 @@ AUTH_TEST_OBJS = $(BUILD)/src/platform/desktop_auth_test.o \
 
 STREAM_TEST_OBJS = $(BUILD)/tests/ice_candidate_processor_test.o \
 	                   $(BUILD)/src/app/ice_candidate_processor.o \
+	                   $(BUILD)/src/app/xbox_ice_preferences.o \
 	                   $(BUILD)/lib/cJSON.o
 
 XCLOUD_TEST_OBJS = $(BUILD)/tests/xcloud_session_support_test.o

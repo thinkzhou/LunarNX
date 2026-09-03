@@ -1,4 +1,5 @@
 #include "stream_controller.h"
+#include "xbox_ice_preferences.h"
 #include "../api/api_constants.h"
 
 #include "../common.h"
@@ -224,6 +225,7 @@ void StreamController::signOut() {
     }
     std::remove(lunar::get_token_path());
     std::remove(lunar::get_xbox_console_cache_path());
+    std::remove(lunar::get_xbox_ice_preferences_path());
     setState(StreamState::Idle, "Signed out");
     signing_out_ = false;
 }
@@ -928,12 +930,19 @@ bool StreamController::startStreamWithProfile(
     const stream::MediaPipelineOptions& options,
     CancelCallback cancel) {
     StreamProfile profile = input_profile;
+    const XboxIcePreference ice_preference = XboxIcePreferenceStore().load(
+        profile.type == SessionType::Home ? profile.server_id : std::string{});
+    profile.preferred_stun_url = ice_preference.preferred_stun_url;
+    if (profile.type == SessionType::Home && ice_preference.hasHomeRoute()) {
+        profile.preferred_remote_ice_address = ice_preference.remote_address;
+        profile.preferred_remote_ice_port = ice_preference.remote_port;
+    }
     stream::MediaPipelineOptions xbox_options = options;
     xbox_options.video_scheduling =
         stream::VideoSchedulingMode::RealtimeQueued;
     {
         std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
-        active_profile_ = input_profile;
+        active_profile_ = profile;
         active_media_options_ = xbox_options;
         has_active_profile_ = true;
     }

@@ -3,6 +3,7 @@
 #include "adaptive_bitrate_controller.h"
 #include "video_recovery_request_policy.h"
 #include "video_watchdog_policy.h"
+#include "xbox_ice_preferences.h"
 #include "../diagnostics.h"
 #include "../webrtc/video_jitter_policy.h"
 
@@ -67,6 +68,40 @@ void notify(const std::function<void(const std::string&)>& callback,
     if (callback) {
         callback(message);
     }
+}
+
+void rememberSuccessfulIcePreferences(WebRtcTransport& transport,
+                                      const StreamProfile& profile) {
+    XboxIcePreference preference;
+    preference.preferred_stun_url = transport.successfulIceServerUrl();
+    if (profile.type == SessionType::Home) {
+        const auto stats = transport.getMediaStats();
+        if (stats.ice_pair_selected && stats.ice_remote_address[0] != '\0' &&
+            stats.ice_remote_port > 0) {
+            preference.remote_address = stats.ice_remote_address;
+            preference.remote_port = stats.ice_remote_port;
+        }
+    }
+    if (preference.preferred_stun_url.empty() &&
+        !preference.hasHomeRoute()) {
+        return;
+    }
+
+    const std::string server_id = profile.type == SessionType::Home
+        ? profile.server_id
+        : std::string{};
+    const bool saved = XboxIcePreferenceStore().save(server_id, preference);
+    lunar::diagnosticLog(
+        "xbox-stream",
+        "ICE preference save result=%s stun=%s remote=%s:%d",
+        saved ? "true" : "false",
+        preference.preferred_stun_url.empty()
+            ? "none"
+            : preference.preferred_stun_url.c_str(),
+        preference.remote_address.empty()
+            ? "none"
+            : preference.remote_address.c_str(),
+        preference.remote_port);
 }
 
 std::string offerForProfile(std::string offer, const StreamProfile& profile) {
@@ -142,6 +177,7 @@ bool XboxStreamSession::start(const StreamProfile& profile,
         profile.type == SessionType::Cloud
             ? webrtc::VideoJitterMode::Cloud
             : webrtc::VideoJitterMode::Home);
+    transport_.setPreferredIceServerUrl(profile.preferred_stun_url);
 
     auto cancel = [this, callbacks]() { return isCancelled(callbacks); };
     auto sleep = [this, callbacks](std::chrono::milliseconds duration) {
@@ -280,6 +316,9 @@ bool XboxStreamSession::start(const StreamProfile& profile,
     if (!negotiated) {
         return failStart(start_error, callbacks);
     }
+    // The data channel proves ICE/DTLS/SCTP are usable. Capture the selected
+    // pair before the realtime owner thread starts pumping this PeerConnection.
+    rememberSuccessfulIcePreferences(transport_, profile);
 
     notify(callbacks.on_status, "Initializing media pipeline...");
     if (isCancelled(callbacks)) {
@@ -836,6 +875,8 @@ bool XboxStreamSession::reconnectWithFreshSession(
         }
         return false;
     }
+
+    rememberSuccessfulIcePreferences(transport_, profile);
 
     control_recovery_requested_ = false;
     lunar::persistentEventLog(

@@ -5,8 +5,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PEER_MANAGER = ROOT / "src/webrtc/peer_manager.cpp"
+PEER_MANAGER_HEADER = ROOT / "src/webrtc/peer_manager.h"
 PEER_HEADER = ROOT / "lib/libpeer/src/peer_connection.h"
+PEER_SOURCE = ROOT / "lib/libpeer/src/peer_connection.c"
 AGENT_SOURCE = ROOT / "lib/libpeer/src/agent.c"
+AGENT_HEADER = ROOT / "lib/libpeer/src/agent.h"
 TRACKED_PATCH = ROOT / "tools/libpeer_legacy/legacy-libpeer-switch.patch"
 
 XSTREAMING_STUN_SERVERS = (
@@ -20,7 +23,8 @@ XSTREAMING_STUN_SERVERS = (
 )
 
 
-def validate_libpeer(header: str, agent: str, label: str) -> None:
+def validate_libpeer(header: str, peer: str, agent: str, agent_header: str,
+                     label: str) -> None:
     assert "IceServer ice_servers[7];" in header, (
         f"{label}: PeerConfiguration cannot hold XStreaming's STUN list"
     )
@@ -30,15 +34,33 @@ def validate_libpeer(header: str, agent: str, label: str) -> None:
     assert "agent_has_candidate_address" in agent, (
         f"{label}: duplicate server-reflexive candidates are published"
     )
+    assert "int agent_gather_candidate(" in agent_header, (
+        f"{label}: ICE gathering does not report whether a server succeeded"
+    )
+    assert "if (agent_gather_candidate(&pc->agent" in peer and "break;" in peer, (
+        f"{label}: candidate gathering does not stop after the first valid server"
+    )
+    assert "successful_ice_server_index" in peer, (
+        f"{label}: successful ICE server is not retained for app-level reuse"
+    )
+    assert "peer_connection_get_successful_ice_server_url" in header, (
+        f"{label}: successful ICE server is not exposed to LunarNX"
+    )
 
 
 def main() -> None:
     manager = PEER_MANAGER.read_text()
-    for index, server in enumerate(XSTREAMING_STUN_SERVERS):
-        expected = f'config.ice_servers[{index}].urls = "{server}";'
-        assert expected in manager, f"missing XStreaming ICE server: {server}"
+    for server in XSTREAMING_STUN_SERVERS:
+        assert f'"{server}"' in manager, f"missing XStreaming ICE server: {server}"
+    assert "preferred_ice_server_url_" in PEER_MANAGER_HEADER.read_text(), (
+        "PeerManager does not retain a preferred ICE server"
+    )
+    assert "setPreferredIceServerUrl" in manager, (
+        "PeerManager cannot prioritize the last successful ICE server"
+    )
 
-    validate_libpeer(PEER_HEADER.read_text(), AGENT_SOURCE.read_text(),
+    validate_libpeer(PEER_HEADER.read_text(), PEER_SOURCE.read_text(),
+                     AGENT_SOURCE.read_text(), AGENT_HEADER.read_text(),
                      "legacy libpeer")
     patch = TRACKED_PATCH.read_text()
     added_lines = "\n".join(
@@ -46,7 +68,8 @@ def main() -> None:
         for line in patch.splitlines()
         if line.startswith("+") and not line.startswith("+++")
     )
-    validate_libpeer(added_lines, added_lines, "tracked legacy patch")
+    validate_libpeer(added_lines, added_lines, added_lines, added_lines,
+                     "tracked legacy patch")
     print("XStreaming ICE server tests passed")
 
 

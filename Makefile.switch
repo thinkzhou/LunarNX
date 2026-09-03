@@ -159,6 +159,7 @@ ROMFS_SHADERS = romfs/shaders/basic_vsh.dksh \
 CXX_SRCS = src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_processor.cpp src/app/stream_controller.cpp \
     src/app/dev_bridge_client.cpp \
     src/app/web_rtc_transport.cpp \
+    src/app/xbox_ice_preferences.cpp \
     src/app/xbox_channel_manager.cpp \
     src/app/xbox_session_client.cpp src/app/xbox_stream_session.cpp \
     src/ui/auth_activity.cpp src/ui/main_activity.cpp src/ui/cloud_library_model.cpp src/ui/cloud_game_card.cpp src/ui/stream_view.cpp src/ui/stream_loading_activity.cpp src/ui/stream_settings_activity.cpp src/ui/button_mapping_activity.cpp src/ui/i18n.cpp src/ui/ui_style.cpp src/ui/qr_code.cpp src/ui/qr_code_view.cpp src/ui/poster_loader.cpp src/ui/recycling_list.cpp \

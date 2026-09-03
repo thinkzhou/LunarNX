@@ -33,6 +33,7 @@ inline const char* get_psn_token_path() { return "sdmc:/switch/LunarNX/psn_token
 inline const char* get_ps_console_cache_path() { return "sdmc:/switch/LunarNX/ps_console_cache.json"; }
 inline const char* get_psn_callback_import_path() { return "sdmc:/switch/LunarNX/psn_callback.txt"; }
 inline const char* get_xbox_console_cache_path() { return "sdmc:/switch/LunarNX/xbox_console_cache.json"; }
+inline const char* get_xbox_ice_preferences_path() { return "sdmc:/switch/LunarNX/xbox_ice_preferences.json"; }
 #else
 inline const char* get_config_path() { return "./config.json"; }
 inline const char* get_token_path()  { return "./token.json"; }
@@ -44,6 +45,7 @@ inline const char* get_psn_token_path() { return "./psn_token.json"; }
 inline const char* get_ps_console_cache_path() { return "./ps_console_cache.json"; }
 inline const char* get_psn_callback_import_path() { return "./psn_callback.txt"; }
 inline const char* get_xbox_console_cache_path() { return "./xbox_console_cache.json"; }
+inline const char* get_xbox_ice_preferences_path() { return "./xbox_ice_preferences.json"; }
 #endif
 
 } // namespace lunar

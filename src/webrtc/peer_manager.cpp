@@ -7,6 +7,7 @@
 #include <cJSON.h>
 #include <peer.h>
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <cctype>
@@ -18,6 +19,15 @@ constexpr uint32_t kMaxReliableSendAttempts = 128;
 constexpr uint32_t kMaxConsecutiveSctpSendFailures = 128;
 constexpr std::chrono::milliseconds kMaxSctpRecoverableFailureAge{250};
 constexpr std::chrono::milliseconds kMediaStatsCacheInterval{250};
+constexpr std::array<const char*, 7> kXStreamingIceServers{
+    "stun:worldaz.relay.teams.microsoft.com:3478",
+    "stun:stun.l.google.com:19302",
+    "stun:stun1.l.google.com:19302",
+    "stun:relay1.expressturn.com",
+    "stun:relay2.expressturn.com",
+    "stun:stun.kinesisvideo.us-east-1.amazonaws.com:443",
+    "stun:stun.douyucdn.cn:18000",
+};
 uint64_t elapsedNs(std::chrono::steady_clock::time_point start) {
     if (start.time_since_epoch().count() == 0) return 0;
     auto now = std::chrono::steady_clock::now();
@@ -377,6 +387,7 @@ bool PeerManager::initialize() {
     local_candidates_.clear();
     connected_ = false;
     data_channels_created_ = false;
+    successful_ice_server_url_.clear();
     video_callback_logs_ = 0;
     crash_probe_access_units_ = 0;
     audio_callback_logs_ = 0;
@@ -408,14 +419,22 @@ bool PeerManager::initialize() {
     config.datachannel = DATA_CHANNEL_STRING;
     config.raw_video_rtp = 1;
 
-    // Keep candidate gathering aligned with XStreaming's WebRTC configuration.
-    config.ice_servers[0].urls = "stun:worldaz.relay.teams.microsoft.com:3478";
-    config.ice_servers[1].urls = "stun:stun.l.google.com:19302";
-    config.ice_servers[2].urls = "stun:stun1.l.google.com:19302";
-    config.ice_servers[3].urls = "stun:relay1.expressturn.com";
-    config.ice_servers[4].urls = "stun:relay2.expressturn.com";
-    config.ice_servers[5].urls = "stun:stun.kinesisvideo.us-east-1.amazonaws.com:443";
-    config.ice_servers[6].urls = "stun:stun.douyucdn.cn:18000";
+    // Keep XStreaming's complete fallback list. A previously successful
+    // server is only moved to the front when it is still in that list.
+    size_t next_server = 0;
+    const auto preferred = std::find_if(
+        kXStreamingIceServers.begin(),
+        kXStreamingIceServers.end(),
+        [this](const char* url) { return preferred_ice_server_url_ == url; });
+    if (preferred != kXStreamingIceServers.end()) {
+        config.ice_servers[next_server++].urls = *preferred;
+    }
+    for (const char* url : kXStreamingIceServers) {
+        if (preferred != kXStreamingIceServers.end() && url == *preferred) {
+            continue;
+        }
+        config.ice_servers[next_server++].urls = url;
+    }
 
     config.onvideotrack = onVideoTrack;
     config.onaudiotrack = onAudioTrack;
@@ -451,9 +470,26 @@ void PeerManager::setCallbacks(const PeerCallbacks& callbacks) {
     callbacks_ = callbacks;
 }
 
+void PeerManager::setPreferredIceServerUrl(const std::string& url) {
+    preferred_ice_server_url_ = url;
+}
+
+std::string PeerManager::successfulIceServerUrl() const {
+    return successful_ice_server_url_;
+}
+
 std::string PeerManager::createOffer() {
     if (!pc_) return "";
     const char* sdp = peer_connection_create_offer(pc_);
+    const char* successful_url =
+        peer_connection_get_successful_ice_server_url(pc_);
+    if (successful_url) {
+        successful_ice_server_url_ = successful_url;
+        preferred_ice_server_url_ = successful_url;
+        lunar::diagnosticLog("webrtc",
+                             "ICE server succeeded url=%s",
+                             successful_url);
+    }
     return sdp ? sdp : "";
 }
 
