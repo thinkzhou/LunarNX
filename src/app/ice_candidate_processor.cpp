@@ -8,6 +8,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
@@ -258,6 +259,25 @@ bool isPublicIpv4(const std::string& ip) {
            octets[0] < 224;
 }
 
+bool addressesEqual(const std::string& left, const std::string& right) {
+    if (left == right) {
+        return true;
+    }
+    const bool left_v6 = left.find(':') != std::string::npos;
+    const bool right_v6 = right.find(':') != std::string::npos;
+    if (left_v6 != right_v6) {
+        return false;
+    }
+
+    std::array<uint8_t, 16> left_bytes{};
+    std::array<uint8_t, 16> right_bytes{};
+    const int family = left_v6 ? AF_INET6 : AF_INET;
+    const size_t byte_count = left_v6 ? 16 : 4;
+    return inet_pton(family, left.c_str(), left_bytes.data()) == 1 &&
+           inet_pton(family, right.c_str(), right_bytes.data()) == 1 &&
+           std::memcmp(left_bytes.data(), right_bytes.data(), byte_count) == 0;
+}
+
 // Home: prefer LAN private IPv4 first, then public IPv4, then IPv6.
 // Cloud/WAN: prefer public IPv4 / IPv6 and deprioritize private LAN candidates.
 int remoteCandidateRank(const CandidateParts& parts, bool prefer_public) {
@@ -289,12 +309,15 @@ int remoteCandidateRank(const CandidateParts& parts, bool prefer_public) {
 
 std::vector<IceCandidatePayload> rewriteCandidatesLikeXStreaming(
     std::vector<IceCandidatePayload> candidates,
-    bool prefer_public) {
+    bool prefer_public,
+    const std::string& preferred_address,
+    int preferred_port) {
     auto expanded = expandTeredoCandidatesLikeXStreaming(std::move(candidates));
 
     struct RankedCandidate {
         IceCandidatePayload payload;
         CandidateParts parts;
+        bool preferred = false;
         int rank = 3;
         size_t order = 0;
     };
@@ -316,9 +339,13 @@ std::vector<IceCandidatePayload> rewriteCandidatesLikeXStreaming(
             continue;
         }
         const int rank = remoteCandidateRank(parts, prefer_public);
+        const bool preferred = !prefer_public && preferred_port > 0 &&
+            addressesEqual(parts.ip, preferred_address) &&
+            parts.port == preferred_port;
         ranked.push_back(RankedCandidate{
             std::move(candidate),
             std::move(parts),
+            preferred,
             rank,
             order++,
         });
@@ -327,6 +354,9 @@ std::vector<IceCandidatePayload> rewriteCandidatesLikeXStreaming(
     std::stable_sort(ranked.begin(),
                      ranked.end(),
                      [](const RankedCandidate& left, const RankedCandidate& right) {
+                         if (left.preferred != right.preferred) {
+                             return left.preferred;
+                         }
                          if (left.rank != right.rank) {
                              return left.rank < right.rank;
                          }
@@ -537,7 +567,11 @@ std::vector<IceCandidatePayload> IceCandidateProcessor::parseRemotePayloads(
     }
 
     const bool prefer_public = profile.type == SessionType::Cloud || profile.prefer_ipv6;
-    return rewriteCandidatesLikeXStreaming(std::move(candidates), prefer_public);
+    return rewriteCandidatesLikeXStreaming(
+        std::move(candidates),
+        prefer_public,
+        profile.preferred_remote_ice_address,
+        profile.preferred_remote_ice_port);
 }
 
 bool IceCandidateProcessor::hasRealCandidate(const std::string& payload) const {

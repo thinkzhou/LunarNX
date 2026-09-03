@@ -46,6 +46,16 @@ void WebRtcTransport::setCallbacks(const webrtc::PeerCallbacks& callbacks) {
     }
 }
 
+void WebRtcTransport::setPreferredIceServerUrl(const std::string& url) {
+    if (peer_) {
+        peer_->setPreferredIceServerUrl(url);
+    }
+}
+
+std::string WebRtcTransport::successfulIceServerUrl() const {
+    return peer_ ? peer_->successfulIceServerUrl() : std::string{};
+}
+
 std::string WebRtcTransport::createOffer() {
     lunar::diagnosticLog("webrtc-transport", "createOffer begin peer=%s", peer_ ? "true" : "false");
     auto offer = peer_ ? peer_->createOffer() : "";

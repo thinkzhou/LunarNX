@@ -26,6 +26,12 @@ struct StreamProfile {
     std::string base_url;  // Override GSSV API base URL (empty = use default)
     // MSAL access token used for cloud ReadyToConnect → /connect (XStreaming "lpt").
     std::string msal_user_token;
+    // Soft ICE preferences learned from a previous successful connection.
+    // They only reorder servers/candidates present in the current attempt;
+    // stale values never create synthetic ICE candidates.
+    std::string preferred_stun_url;
+    std::string preferred_remote_ice_address;
+    int preferred_remote_ice_port = 0;
 };
 
 inline StreamProfile makeHomeStreamProfile(const std::string& server_id,

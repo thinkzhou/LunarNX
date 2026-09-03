@@ -67,7 +67,7 @@ def main() -> None:
     require("std::chrono::seconds(std::max(1, keep_alive_seconds))" in control_loop,
             "keep-alive cadence must use the server-provided interval")
     require("keep_alive_result.isAuthError()" in control_loop and
-            "callbacks.refresh_tokens(true)" in control_loop and
+            "callbacks.refresh_tokens(true, cancel)" in control_loop and
             control_loop.count("keepAliveDetailed(") >= 2,
             "401/403 keep-alive failures must force token refresh and retry once")
     require("preserving WebRTC media" in control_loop and

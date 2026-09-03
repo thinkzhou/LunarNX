@@ -37,6 +37,7 @@ enum class DeviceCodePollResult {
 class AuthManager {
 public:
     using StateCallback = std::function<void(AuthState state, const std::string& info)>;
+    using CancelCallback = api::HttpClient::CancelCallback;
 
     AuthManager(api::HttpClient& http);
     ~AuthManager();
@@ -58,7 +59,7 @@ public:
     // Token access
     bool isAuthenticated() const;
     bool hasSavedCredentials() const;
-    bool refreshTokensIfNeeded();
+    bool refreshTokensIfNeeded(CancelCallback cancel = {});
     std::string getGssvToken() const;
     StreamingToken getHomeStreamingToken() const;
     StreamingToken getCloudStreamingToken() const;
@@ -67,11 +68,13 @@ public:
     void setForceRegionIp(const std::string& ip);
     std::string getForceRegionIp() const { return force_region_ip_; }
     // Re-run Xbox token derivation (home+cloud). Force bypasses 1-minute throttle.
-    bool refreshStreamingTokens(bool force = false);
+    bool refreshStreamingTokens(bool force = false,
+                                CancelCallback cancel = {});
     std::string getMsalAccessToken() const { return msal_access_token_; }
     // XStreaming "lpt" token for cloud ReadyToConnect /connect.
     // This is NOT the normal xboxlive.signin access token.
-    std::string getXcloudTransferToken(bool force_refresh = false);
+    std::string getXcloudTransferToken(bool force_refresh = false,
+                                       CancelCallback cancel = {});
     std::string getWebToken() const { return web_token_; }
     std::string getUserHash() const { return user_hash_; }
     std::string getGamertag() const { return gamertag_; }
@@ -92,12 +95,13 @@ private:
     bool hasUsableStreamingTokens() const;
 
     // Token chain steps
-    bool stepGetStreamingTokens();
+    bool stepGetStreamingTokens(CancelCallback cancel = {});
     bool fetchStreamToken(const std::string& xsts_token,
                           const std::string& offering_id,
                           const std::string& login_url,
                           StreamingToken* out_token,
-                          bool required);
+                          bool required,
+                          CancelCallback cancel = {});
 
     api::HttpClient& http_;
     TokenStore tokens_;

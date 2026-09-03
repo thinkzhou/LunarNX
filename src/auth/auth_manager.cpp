@@ -100,6 +100,10 @@ static void log_auth_failure_body(const char* label, int status, const std::stri
         error_description.c_str());
 }
 
+static bool is_cancelled(const AuthManager::CancelCallback& cancel) {
+    return cancel && cancel();
+}
+
 } // namespace
 
 // =============================================================================
@@ -311,7 +315,8 @@ static std::map<std::string, std::string> xbox_headers() {
 // =============================================================================
 // Get Xbox streaming tokens (RPS → XSTS → GSSV)
 // =============================================================================
-bool AuthManager::stepGetStreamingTokens() {
+bool AuthManager::stepGetStreamingTokens(CancelCallback cancel) {
+    if (is_cancelled(cancel)) return false;
     // Step 1: RPS Authentication - get Xbox user token
     // Exact match with Greenlight's doXstsAuthentication()
     cJSON* rps_props = cJSON_CreateObject();
@@ -330,8 +335,11 @@ bool AuthManager::stepGetStreamingTokens() {
 
     auto headers = xbox_headers();
 
-    auto resp = http_.post("https://user.auth.xboxlive.com/user/authenticate", rps_str, headers);
+    auto resp = http_.post("https://user.auth.xboxlive.com/user/authenticate",
+                           rps_str, headers, cancel);
     free(rps_str);
+
+    if (is_cancelled(cancel)) return false;
 
     if (resp.status_code != 200) {
         last_error_ = resp.network_error
@@ -386,8 +394,11 @@ bool AuthManager::stepGetStreamingTokens() {
         cJSON_Delete(xsts_body);
 
         headers = xbox_headers();
-        resp = http_.post("https://xsts.auth.xboxlive.com/xsts/authorize", xsts_str, headers);
+        resp = http_.post("https://xsts.auth.xboxlive.com/xsts/authorize",
+                          xsts_str, headers, cancel);
         free(xsts_str);
+
+        if (is_cancelled(cancel)) return false;
 
         if (resp.status_code != 200) {
             last_error_ = resp.network_error
@@ -453,8 +464,11 @@ bool AuthManager::stepGetStreamingTokens() {
         cJSON_Delete(wbody);
 
         headers = xbox_headers();
-        resp = http_.post("https://xsts.auth.xboxlive.com/xsts/authorize", wstr, headers);
+        resp = http_.post("https://xsts.auth.xboxlive.com/xsts/authorize",
+                          wstr, headers, cancel);
         free(wstr);
+
+        if (is_cancelled(cancel)) return false;
 
         if (resp.status_code == 200) {
             cJSON* wroot = cJSON_Parse(resp.body.c_str());
@@ -491,7 +505,7 @@ bool AuthManager::stepGetStreamingTokens() {
                           OFFERING_XHOME,
                           GSSV_XHOME_LOGIN,
                           &home_token_,
-                          true)) {
+                          true, cancel)) {
         return false;
     }
     gssv_token_ = home_token_.gs_token;
@@ -501,14 +515,16 @@ bool AuthManager::stepGetStreamingTokens() {
                           OFFERING_XGPUWEB,
                           GSSV_XGPUWEB_LOGIN,
                           &cloud_token_,
-                          false)) {
+                          false, cancel)) {
+        if (is_cancelled(cancel)) return false;
         // Free-to-play fallback, matching XStreaming/Greenlight.
         fetchStreamToken(xsts_gssv_token_,
                          OFFERING_XGPUWEBF2P,
                          GSSV_XGPUWEBF2P_LOGIN,
                          &cloud_token_,
-                         false);
+                         false, cancel);
     }
+    if (is_cancelled(cancel)) return false;
     if (cloud_token_.valid()) {
         lunar::diagnosticLog("auth", "Cloud streaming token acquired base=%s",
                              cloud_token_.base_uri.c_str());
@@ -559,7 +575,9 @@ bool AuthManager::fetchStreamToken(const std::string& xsts_token,
                                    const std::string& offering_id,
                                    const std::string& login_url,
                                    StreamingToken* out_token,
-                                   bool required) {
+                                   bool required,
+                                   CancelCallback cancel) {
+    if (is_cancelled(cancel)) return false;
     if (!out_token) {
         return false;
     }
@@ -583,8 +601,10 @@ bool AuthManager::fetchStreamToken(const std::string& xsts_token,
                              offering_id.c_str(), force_region_ip_.c_str());
     }
 
-    auto resp = http_.post(login_url, gstr, gssv_headers);
+    auto resp = http_.post(login_url, gstr, gssv_headers, cancel);
     free(gstr);
+
+    if (is_cancelled(cancel)) return false;
 
     if (resp.status_code != 200) {
         if (required) {
@@ -702,7 +722,8 @@ static std::string urlEncode(const std::string& value) {
     return escaped.str();
 }
 
-bool AuthManager::refreshTokensIfNeeded() {
+bool AuthManager::refreshTokensIfNeeded(CancelCallback cancel) {
+    if (is_cancelled(cancel)) return false;
     if (!shouldRefreshTokens()) return hasUsableStreamingTokens();
     if (msal_refresh_token_.empty()) return hasUsableStreamingTokens();
 
@@ -722,7 +743,14 @@ bool AuthManager::refreshTokensIfNeeded() {
     std::map<std::string, std::string> headers;
     headers["Content-Type"] = "application/x-www-form-urlencoded";
 
-    auto resp = http_.post(TOKEN_URL, body.str(), headers);
+    auto resp = http_.post(TOKEN_URL, body.str(), headers, cancel);
+
+    if (is_cancelled(cancel)) {
+        // A user-initiated stop is not a failed refresh attempt. Allow an
+        // immediate reconnect instead of applying the one-minute retry guard.
+        last_refresh_attempt_ = {};
+        return false;
+    }
 
     if (resp.status_code != 200) {
         last_error_ = resp.network_error
@@ -763,7 +791,11 @@ bool AuthManager::refreshTokensIfNeeded() {
     tokens_.setUserToken(msal_access_token_, msal_refresh_token_, "", expires_in);
 
     // Re-derive Xbox streaming tokens with the new MSAL token
-    if (!stepGetStreamingTokens()) {
+    if (!stepGetStreamingTokens(cancel)) {
+        if (is_cancelled(cancel)) {
+            last_refresh_attempt_ = {};
+            return false;
+        }
         fprintf(stderr, "[auth] Token refresh: Xbox token derivation failed\n");
         lunar::diagnosticLog("auth", "Token refresh Xbox token derivation failed: %s",
                              last_error_.c_str());
@@ -830,7 +862,8 @@ void AuthManager::setForceRegionIp(const std::string& ip) {
     last_refresh_attempt_ = {};
 }
 
-bool AuthManager::refreshStreamingTokens(bool force) {
+bool AuthManager::refreshStreamingTokens(bool force, CancelCallback cancel) {
+    if (is_cancelled(cancel)) return false;
     if (msal_refresh_token_.empty()) {
         // A forced refresh is an authentication operation, not a token
         // availability check.  Do not report success just because an older
@@ -845,7 +878,7 @@ bool AuthManager::refreshStreamingTokens(bool force) {
         tokens_.data().expires_at_ms = 1; // force shouldRefreshTokens() true
         cloud_token_ = {};
     }
-    const bool refreshed = refreshTokensIfNeeded();
+    const bool refreshed = refreshTokensIfNeeded(cancel);
     if (force) {
         // Never substitute stale web/gs tokens for the result of the forced
         // refresh.  A failed refresh must prevent a keep-alive retry with
@@ -858,7 +891,9 @@ bool AuthManager::refreshStreamingTokens(bool force) {
     return hasUsableStreamingTokens();
 }
 
-std::string AuthManager::getXcloudTransferToken(bool force_refresh) {
+std::string AuthManager::getXcloudTransferToken(bool force_refresh,
+                                                CancelCallback cancel) {
+    if (is_cancelled(cancel)) return "";
     // XStreaming/Greenlight: exchange refresh_token for a cloud console transfer
     // token (lpt) used as userToken in POST .../sessions/cloud/{id}/connect.
     if (msal_refresh_token_.empty()) {
@@ -887,7 +922,8 @@ std::string AuthManager::getXcloudTransferToken(bool force_refresh) {
     headers["Content-Type"] = "application/x-www-form-urlencoded";
     headers["Cache-Control"] = "no-store, must-revalidate, no-cache";
 
-    auto resp = http_.post(LIVE_TOKEN_URL, body.str(), headers);
+    auto resp = http_.post(LIVE_TOKEN_URL, body.str(), headers, cancel);
+    if (is_cancelled(cancel)) return "";
     if (resp.status_code != 200) {
         last_error_ = resp.network_error
             ? "Network error while getting xCloud connect token."

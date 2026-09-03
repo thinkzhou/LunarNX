@@ -41,6 +41,7 @@ credentials.json
 *.token.json
 xcloud_library_cache.json
 xbox_console_cache.json
+xbox_ice_preferences.json
 ps_console_cache.json
 ps_credentials.json
 ps_token.json

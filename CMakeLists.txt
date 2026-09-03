@@ -55,6 +55,7 @@ set(LUNARNX_SOURCES
     src/app/ice_candidate_processor.cpp
     src/app/stream_controller.cpp
     src/app/web_rtc_transport.cpp
+    src/app/xbox_ice_preferences.cpp
     src/app/xbox_channel_manager.cpp
     src/app/xbox_session_client.cpp
     src/app/xbox_stream_session.cpp

@@ -26,16 +26,18 @@ namespace lunar::app {
 class XboxStreamSession {
 public:
     struct RuntimeCallbacks {
+        using CancelCallback = std::function<bool()>;
+
         std::function<void(const std::string&)> on_status;
         std::function<void()> on_streaming;
         std::function<void(const std::string&)> on_cancelled;
         std::function<void(const std::string&)> on_error;
         std::function<void(const std::string&)> on_session_id;
-        std::function<bool()> external_cancel;
+        CancelCallback external_cancel;
         std::function<bool()> consume_guide_button;
         // force=true is used only after a keep-alive 401/403. It bypasses
         // the normal expiry throttle and obtains a fresh streaming token.
-        std::function<bool(bool force)> refresh_tokens;
+        std::function<bool(bool force, CancelCallback cancel)> refresh_tokens;
     };
 
     XboxStreamSession(XboxSessionClient& session_client,

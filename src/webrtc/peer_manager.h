@@ -120,6 +120,8 @@ public:
     void setCallbacks(const PeerCallbacks& callbacks);
 
     // SDP
+    void setPreferredIceServerUrl(const std::string& url);
+    std::string successfulIceServerUrl() const;
     std::string createOffer();
     void setRemoteAnswer(const std::string& sdp);
 
@@ -190,6 +192,8 @@ private:
     std::atomic<bool> connected_{false};
     bool initialized_ = false;
     bool data_channels_created_ = false;
+    std::string preferred_ice_server_url_;
+    std::string successful_ice_server_url_;
     std::atomic<int> video_callback_logs_{0};
     std::atomic<uint32_t> crash_probe_access_units_{0};
     std::atomic<int> audio_callback_logs_{0};

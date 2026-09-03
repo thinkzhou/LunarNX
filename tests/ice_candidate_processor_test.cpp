@@ -1,13 +1,16 @@
 #include "../src/app/ice_candidate_processor.h"
 #include "../src/app/stream_profile.h"
 #include "../src/app/web_rtc_transport.h"
+#include "../src/app/xbox_ice_preferences.h"
 #include "../src/app/xbox_channel_manager.h"
 #include "../src/app/xbox_session_client.h"
 #include "../src/app/xbox_stream_session.h"
 
 #include <cstdlib>
+#include <cstdio>
 #include <iostream>
 #include <string>
+#include <unistd.h>
 
 namespace {
 
@@ -151,6 +154,84 @@ int main() {
             "aggregated home ICE should prefer the later LAN candidate");
     require(processor.parseRemotePayloads({}, profile).empty(),
             "no remote ICE payload must remain a signaling failure");
+
+    auto preferred_profile = profile;
+    preferred_profile.preferred_remote_ice_address = "203.0.113.50";
+    preferred_profile.preferred_remote_ice_port = 3074;
+    auto preferred = processor.parseRemotePayload(
+        R"([{"candidate":"candidate:1 1 UDP 1 192.168.1.20 9002 typ host"},{"candidate":"candidate:2 1 UDP 1 203.0.113.50 3074 typ host"},{"candidate":"a=end-of-candidates"}])",
+        preferred_profile);
+    require(preferred[0].candidate.find("203.0.113.50 3074") !=
+                std::string::npos,
+            "a previously successful fresh Home endpoint should be tried first");
+    require(preferred[0].candidate.find(" 2130706431 ") != std::string::npos,
+            "the preferred fresh Home endpoint should receive top priority");
+
+    preferred_profile.preferred_remote_ice_address = "198.51.100.99";
+    preferred_profile.preferred_remote_ice_port = 3074;
+    auto stale_preference = processor.parseRemotePayload(
+        R"([{"candidate":"candidate:1 1 UDP 1 192.168.1.20 9002 typ host"},{"candidate":"candidate:2 1 UDP 1 203.0.113.50 3074 typ host"}])",
+        preferred_profile);
+    require(stale_preference[0].candidate.find("192.168.1.20 9002") !=
+                std::string::npos,
+            "a stale Home endpoint must fall back to the normal LAN-first order");
+
+    preferred_profile.preferred_remote_ice_address = "2001:db8::1";
+    preferred_profile.preferred_remote_ice_port = 9002;
+    auto canonical_ipv6_preference = processor.parseRemotePayload(
+        R"([{"candidate":"candidate:1 1 UDP 1 192.168.1.20 9002 typ host"},{"candidate":"candidate:2 1 UDP 1 2001:0db8:0:0:0:0:0:1 9002 typ host"}])",
+        preferred_profile);
+    require(canonical_ipv6_preference[0].candidate.find(
+                "2001:0db8:0:0:0:0:0:1 9002") != std::string::npos,
+            "equivalent IPv6 spellings should match a successful Home endpoint");
+
+    auto cloud_profile = lunar::app::makeCloudStreamProfile("title-1", 1280, 720);
+    cloud_profile.preferred_remote_ice_address = "192.168.1.20";
+    cloud_profile.preferred_remote_ice_port = 9002;
+    auto cloud_candidates = processor.parseRemotePayload(
+        R"([{"candidate":"candidate:1 1 UDP 1 192.168.1.20 9002 typ host"},{"candidate":"candidate:2 1 UDP 1 203.0.113.50 3074 typ host"}])",
+        cloud_profile);
+    require(cloud_candidates[0].candidate.find("203.0.113.50 3074") !=
+                std::string::npos,
+            "Home endpoint reuse must not override Cloud public-first ordering");
+
+    const std::string preference_path =
+        "/tmp/lunarnx-xbox-ice-preferences-" +
+        std::to_string(static_cast<long long>(getpid())) + ".json";
+    std::remove(preference_path.c_str());
+    lunar::app::XboxIcePreferenceStore preference_store(preference_path);
+    auto empty_preference = preference_store.load("console-1");
+    require(empty_preference.preferred_stun_url.empty() &&
+                !empty_preference.hasHomeRoute(),
+            "missing preference file should be an empty cache miss");
+
+    lunar::app::XboxIcePreference saved_preference;
+    saved_preference.preferred_stun_url =
+        "stun:worldaz.relay.teams.microsoft.com:3478";
+    saved_preference.remote_address = "203.0.113.50";
+    saved_preference.remote_port = 3074;
+    require(preference_store.save("console-1", saved_preference),
+            "successful ICE preference should persist");
+    auto loaded_preference = preference_store.load("console-1");
+    require(loaded_preference.preferred_stun_url ==
+                saved_preference.preferred_stun_url &&
+                loaded_preference.remote_address == "203.0.113.50" &&
+                loaded_preference.remote_port == 3074,
+            "persisted STUN and Home route should round-trip");
+
+    lunar::app::XboxIcePreference second_preference;
+    second_preference.preferred_stun_url = "stun:stun.l.google.com:19302";
+    second_preference.remote_address = "192.168.1.30";
+    second_preference.remote_port = 9002;
+    require(preference_store.save("console-2", second_preference),
+            "a second console preference should persist");
+    loaded_preference = preference_store.load("console-1");
+    require(loaded_preference.preferred_stun_url ==
+                second_preference.preferred_stun_url &&
+                loaded_preference.remote_address == "203.0.113.50" &&
+                loaded_preference.remote_port == 3074,
+            "global STUN preference should update without losing another console route");
+    std::remove(preference_path.c_str());
 
     auto lines = processor.toLibPeerLines(array);
     require(lines.size() == 1, "libpeer lines should skip end-of-candidates");

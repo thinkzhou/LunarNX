@@ -21,6 +21,8 @@ public:
 
     bool initialize();
     void setCallbacks(const webrtc::PeerCallbacks& callbacks);
+    void setPreferredIceServerUrl(const std::string& url);
+    std::string successfulIceServerUrl() const;
     std::string createOffer();
     void setRemoteAnswer(const std::string& answer);
     void setRemoteAnswer(const std::string& answer,

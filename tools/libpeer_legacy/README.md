@@ -243,8 +243,17 @@ Switch release builds default to `CONFIG_IPV6=0`; pass `IPV6=1` to the Switch
 make invocation when testing native IPv6 paths. When enabled, IPv6 host
 discovery uses a UDP route probe, filters unspecified, loopback, and link-local
 addresses, and falls back to IPv4 when an IPv6 socket is unavailable. Peer
-configuration uses XStreaming's seven default STUN URLs in the same order;
+configuration keeps XStreaming's seven default STUN URLs as a complete fallback
+list. LunarNX may move the last successful URL to the front, and synchronous
+gathering stops after the first validated response. If that preferred URL no
+longer works, the remaining servers are still tried in their original order.
 STUN URLs without an explicit port use port 3478.
+
+After a Home stream succeeds, LunarNX also stores the selected remote ICE
+address and port per console. A later session only promotes that endpoint when
+it appears in the Xbox's freshly signaled candidates; it never injects a stale
+candidate. Missing or stale cache entries therefore retain the normal Home
+LAN-first candidate order.
 
 Every synchronous STUN/TURN receive records the returned datagram length before
 parsing, and STUN integrity validation initializes the same length explicitly.
