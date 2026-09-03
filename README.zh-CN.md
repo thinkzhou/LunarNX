@@ -10,6 +10,11 @@ LunarNX 将 Xbox Remote Play、Xbox Cloud Gaming 和 PlayStation Remote Play 整
 
 **请从 [GitHub Releases](https://github.com/thinkzhou/LunarNX/releases/latest) 下载最新版本。**
 
+第一次安装或不熟悉各类串流入口，请阅读
+[LunarNX 新手安装与使用指南](docs/USER_GUIDE.zh-CN.md)。指南分别说明了
+Xbox 与 PlayStation 的本地串流、异地串流、云游戏、账号登录、主机配对，
+以及串流中快捷菜单和安全退出方式。
+
 ## 项目亮点
 
 - 串流自己的 Xbox One 或 Xbox Series 主机
