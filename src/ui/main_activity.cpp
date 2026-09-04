@@ -147,6 +147,7 @@ brls::View* MainActivity::createContentView() {
     workspace->registerAction("", brls::ControllerButton::BUTTON_X,
         [this](brls::View*) -> bool {
             if (stream_source_ != StreamSource::Cloud) return false;
+            if (fetching_cloud_->load() || fetching_consoles_->load()) return true;
             const auto model = buildCloudLibraryViewModel(
                 ctrl_->getCloudTitles(), ctrl_->getRecentCloudTitles(),
                 ctrl_->getNewCloudTitles(), cloud_search_query_, cloud_filter_,
@@ -601,7 +602,7 @@ void MainActivity::refreshConsoles() {
     setCloudListVisible(false);
     console_list_->setVisibility(brls::Visibility::VISIBLE);
     PosterLoader::instance().beginBatch();
-    console_list_->clearViews();
+    prepareConsoleListForReplacement(refresh_btn_);
 
     auto consoles = ctrl_->getConsoles();
     if (consoles.empty()) {
@@ -684,7 +685,8 @@ void MainActivity::setConsoleListMessage(const std::string& message) {
     setCloudListVisible(false);
     console_list_->setVisibility(brls::Visibility::VISIBLE);
     PosterLoader::instance().beginBatch();
-    console_list_->clearViews();
+    prepareConsoleListForReplacement(
+        stream_source_ == StreamSource::Cloud ? source_cloud_ : source_xbox_);
 
     const auto& p = uiPalette();
     auto* card = makeUiCard(brls::Axis::COLUMN);
@@ -716,7 +718,8 @@ void MainActivity::setListLoading(const std::string& title,
     setCloudListVisible(false);
     console_list_->setVisibility(brls::Visibility::VISIBLE);
     PosterLoader::instance().beginBatch();
-    console_list_->clearViews();
+    prepareConsoleListForReplacement(
+        stream_source_ == StreamSource::Cloud ? source_cloud_ : source_xbox_);
 
     const auto& p = uiPalette();
     auto* card = makeUiCard(brls::Axis::ROW);
@@ -763,6 +766,35 @@ void MainActivity::setFetchControlsEnabled(bool enabled) {
         : brls::ButtonState::DISABLED;
     if (refresh_btn_) refresh_btn_->setState(state);
     if (cloud_search_btn_) cloud_search_btn_->setState(state);
+}
+
+void MainActivity::prepareConsoleListForReplacement(brls::View* preferred_focus) {
+    if (!console_list_) return;
+
+    if (console_list_->isChildFocused()) {
+        brls::View* stable_focus = preferred_focus;
+        if (!stable_focus) {
+            stable_focus = stream_source_ == StreamSource::Cloud
+                ? static_cast<brls::View*>(source_cloud_)
+                : static_cast<brls::View*>(source_xbox_);
+        }
+        if (stable_focus) brls::Application::giveFocus(stable_focus);
+    }
+
+    // Persistent controls can retain raw custom routes into the dynamic list.
+    // Rewire them to persistent peers before any card is queued for deletion.
+    if (stream_source_ == StreamSource::Cloud) {
+        wireVerticalGridNavigation({{refresh_btn_, cloud_search_btn_},
+            {cloud_recent_tab_, cloud_new_tab_, cloud_all_tab_, cloud_sort_btn_}});
+    } else {
+        wireVerticalGridNavigation({{refresh_btn_}});
+    }
+
+    console_list_->clearViews();
+    cloud_more_btn_ = nullptr;
+    cloud_prev_sentinel_ = nullptr;
+    cloud_rendered_count_ = 0;
+    cloud_navigation_rows_.clear();
 }
 
 void MainActivity::confirmSignOut() {
@@ -1001,15 +1033,22 @@ brls::View* MainActivity::appendCloudCards(
 void MainActivity::attachCloudMoreButton(size_t remaining) {
     if (!console_list_ || remaining == 0) return;
     (void) remaining;
-    cloud_more_btn_ = new CloudPageSentinel([this]() { loadMoreCloudTitles(); });
+    auto alive = alive_;
+    cloud_more_btn_ = new CloudPageSentinel([this, alive]() {
+        if (!alive->load()) return;
+        loadMoreCloudTitles();
+    });
     console_list_->addView(cloud_more_btn_);
     rewireCloudNavigation();
 }
 
 void MainActivity::attachCloudPreviousSentinel() {
     if (!console_list_ || cloud_page_start_ == 0) return;
-    cloud_prev_sentinel_ = new CloudPageSentinel(
-        [this]() { loadPreviousCloudTitles(); });
+    auto alive = alive_;
+    cloud_prev_sentinel_ = new CloudPageSentinel([this, alive]() {
+        if (!alive->load()) return;
+        loadPreviousCloudTitles();
+    });
     console_list_->addView(cloud_prev_sentinel_);
     cloud_navigation_rows_.push_back({cloud_prev_sentinel_});
 }
@@ -1037,17 +1076,8 @@ void MainActivity::rebuildCloudList() {
     brls::Button* selected_tab = cloud_filter_ == CloudLibraryFilter::Recent
         ? cloud_recent_tab_
         : cloud_filter_ == CloudLibraryFilter::New ? cloud_new_tab_ : cloud_all_tab_;
-    if (console_list_->isChildFocused() && selected_tab) {
-        brls::Application::giveFocus(selected_tab);
-    }
     if (scroll_frame_) scroll_frame_->setContentOffsetY(0, false);
-    wireVerticalGridNavigation({{refresh_btn_, cloud_search_btn_},
-        {cloud_recent_tab_, cloud_new_tab_, cloud_all_tab_, cloud_sort_btn_}});
-    console_list_->clearViews();
-    cloud_more_btn_ = nullptr;
-    cloud_prev_sentinel_ = nullptr;
-    cloud_rendered_count_ = 0;
-    cloud_navigation_rows_.clear();
+    prepareConsoleListForReplacement(selected_tab);
     cloud_navigation_rows_.push_back({refresh_btn_, cloud_search_btn_});
     cloud_navigation_rows_.push_back(
         {cloud_recent_tab_, cloud_new_tab_, cloud_all_tab_, cloud_sort_btn_});
@@ -1145,8 +1175,10 @@ void MainActivity::refreshCloudTitles() {
 
 void MainActivity::promptCloudSearch() {
     // Swkbd on Switch; plain empty-clear if dialog cancelled.
+    auto alive = alive_;
     brls::Application::getImeManager()->openForText(
-        [this](const std::string& text) {
+        [this, alive](const std::string& text) {
+            if (!alive->load()) return;
             cloud_search_query_ = text;
             // trim
             while (!cloud_search_query_.empty() &&

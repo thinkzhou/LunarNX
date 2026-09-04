@@ -1,6 +1,6 @@
 #include "xbox_session_client.h"
-#include "../diagnostics.h"
 #include "../platform/network_worker.h"
+#include "../diagnostics.h"
 
 #include <algorithm>
 
@@ -339,7 +339,9 @@ void XboxSessionClient::deleteSessionAsync(const std::string& session_id) {
     auto api = api_;
     lunar::platform::startNetworkWorker("delete-session", [api, session_id]() {
         lunar::diagnosticLog("xbox-session", "Delete session begin id=%s", session_id.c_str());
-        const bool ok = api->deleteSession(session_id);
+        const bool ok = api->deleteSession(session_id, []() {
+            return lunar::platform::networkWorkersShuttingDown();
+        });
         lunar::diagnosticLog("xbox-session", "Delete session done id=%s ok=%s",
                              session_id.c_str(), ok ? "true" : "false");
     });

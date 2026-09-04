@@ -75,6 +75,7 @@ private:
     void refreshConsoles();
     void refreshCloudTitles();
     void rebuildCloudList();
+    void prepareConsoleListForReplacement(brls::View* preferred_focus = nullptr);
     void setCloudListVisible(bool visible);
     void setConsoleListMessage(const std::string& message);
     void setListLoading(const std::string& title, const std::string& detail);
