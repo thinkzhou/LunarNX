@@ -77,7 +77,7 @@ CXX_SRCS = src/platform/desktop_main.cpp lib/qrcodegen/qrcodegen.cpp \
            src/auth/xbox_auth_errors.cpp \
            src/api/xbox_api_client.cpp src/api/http_client.cpp \
            src/platform/network_worker.cpp \
-           src/ps/chiaki_log_adapter.cpp src/ps/ps_credentials.cpp \
+           src/ps/chiaki_log_adapter.cpp src/ps/ps_credentials.cpp src/ps/ps_route_preferences.cpp \
            src/ps/ps_discovery.cpp src/ps/ps_registration.cpp \
            src/ps/ps_registration_diagnostics.cpp src/ps/ps_manager.cpp \
            src/ps/ps_input_mapper.cpp src/ps/ps_haptics_rumble.cpp src/ps/ps_media_bridge.cpp \

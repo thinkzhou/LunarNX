@@ -8,7 +8,10 @@ Run it from the LunarNX root. It uses `devkitpro/devkita64:20251117` unless
 `1597a48514e5d9e67168ca40e6fa40c0171cd379`. The checkout remains clean. The
 temporary build copy receives the tracked Switch patches. The STUN patch uses
 the real-hardware-tested ordered IPv4 STUN list instead of the GitHub-hosted
-dynamic list. The stream-switch patch handles a PSN console sending the CTRL
+dynamic list. The route-preference patch can move a previously responsive STUN
+server and PlayStation endpoint to the front only when they are still present
+in the current lists; stale values never create candidates or bypass the normal
+fallbacks. The stream-switch patch handles a PSN console sending the CTRL
 switch ACK while Senkusha is still waiting for BANG, and adds targeted Takion
 sequence diagnostics. The focused hole-punch reliability patch removes consumed
 ACK notifications, retries only a timed-out short ACK once with the same request

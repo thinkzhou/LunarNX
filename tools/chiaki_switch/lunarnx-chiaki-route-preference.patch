@@ -1,0 +1,268 @@
+diff --git a/lib/include/chiaki/remote/holepunch.h b/lib/include/chiaki/remote/holepunch.h
+index d1fd89ef..05dd92f8 100644
+--- a/lib/include/chiaki/remote/holepunch.h
++++ b/lib/include/chiaki/remote/holepunch.h
+@@ -160,6 +160,22 @@ CHIAKI_EXPORT chiaki_socket_t *chiaki_get_holepunch_sock(ChiakiHolepunchSession
+ CHIAKI_EXPORT bool chiaki_holepunch_session_get_stun_allocation(
+     ChiakiHolepunchSession session, int32_t *allocation_increment, bool *random_allocation);
+ 
++/** Prefer a STUN server only when it is present in the current server list. */
++CHIAKI_EXPORT void chiaki_holepunch_session_set_preferred_stun_server(
++    ChiakiHolepunchSession session, const char *host, uint16_t port);
++
++/** Prefer a PlayStation candidate only when it is present in the current offer. */
++CHIAKI_EXPORT void chiaki_holepunch_session_set_preferred_remote_candidate(
++    ChiakiHolepunchSession session, const char *address, uint16_t port);
++
++/** Return the first STUN server that answered during this session. */
++CHIAKI_EXPORT bool chiaki_holepunch_session_get_successful_stun_server(
++    ChiakiHolepunchSession session, char *host, size_t host_size, uint16_t *port);
++
++/** Return the candidate selected by the most recent successful hole punch. */
++CHIAKI_EXPORT bool chiaki_holepunch_session_get_selected_remote_candidate(
++    ChiakiHolepunchSession session, char *address, size_t address_size, uint16_t *port);
++
+ /**
+  * Return the HTTP response code from the most recent holepunch HTTP request.
+  * Zero means that no HTTP response was received.
+diff --git a/lib/src/remote/holepunch.c b/lib/src/remote/holepunch.c
+index 93c95134..6106e3e3 100644
+--- a/lib/src/remote/holepunch.c
++++ b/lib/src/remote/holepunch.c
+@@ -326,6 +326,13 @@ typedef struct session_t
+     uint16_t local_port_data;
+     int32_t stun_allocation_increment;
+     bool stun_random_allocation;
++    char preferred_stun_host[256];
++    uint16_t preferred_stun_port;
++    char successful_stun_host[256];
++    uint16_t successful_stun_port;
++    char preferred_remote_address[INET6_ADDRSTRLEN];
++    uint16_t preferred_remote_port;
++    uint16_t selected_remote_port;
+     bool force_port_guessing;
+     int port_guessing_count;
+     int port_guessing_socks;
+@@ -683,6 +690,49 @@ CHIAKI_EXPORT uint16_t chiaki_get_ps_ctrl_port(Session *session)
+     return session->ctrl_port;
+ }
+ 
++CHIAKI_EXPORT void chiaki_holepunch_session_set_preferred_stun_server(
++    Session *session, const char *host, uint16_t port)
++{
++    if(!session)
++        return;
++    snprintf(session->preferred_stun_host, sizeof(session->preferred_stun_host),
++        "%s", host ? host : "");
++    session->preferred_stun_port = host && host[0] ? port : 0;
++}
++
++CHIAKI_EXPORT void chiaki_holepunch_session_set_preferred_remote_candidate(
++    Session *session, const char *address, uint16_t port)
++{
++    if(!session)
++        return;
++    snprintf(session->preferred_remote_address,
++        sizeof(session->preferred_remote_address), "%s", address ? address : "");
++    session->preferred_remote_port = address && address[0] ? port : 0;
++}
++
++CHIAKI_EXPORT bool chiaki_holepunch_session_get_successful_stun_server(
++    Session *session, char *host, size_t host_size, uint16_t *port)
++{
++    if(!session || !host || host_size == 0 || !port ||
++        session->successful_stun_host[0] == '\0' ||
++        session->successful_stun_port == 0)
++        return false;
++    snprintf(host, host_size, "%s", session->successful_stun_host);
++    *port = session->successful_stun_port;
++    return true;
++}
++
++CHIAKI_EXPORT bool chiaki_holepunch_session_get_selected_remote_candidate(
++    Session *session, char *address, size_t address_size, uint16_t *port)
++{
++    if(!session || !address || address_size == 0 || !port ||
++        session->ps_ip[0] == '\0' || session->selected_remote_port == 0)
++        return false;
++    snprintf(address, address_size, "%s", session->ps_ip);
++    *port = session->selected_remote_port;
++    return true;
++}
++
+ CHIAKI_EXPORT chiaki_socket_t *chiaki_get_holepunch_sock(ChiakiHolepunchSession session, ChiakiHolepunchPortType type)
+ {
+     switch(type)
+@@ -786,6 +836,13 @@ CHIAKI_EXPORT Session* chiaki_holepunch_session_init(
+     session->local_port_data = 0;
+     session->stun_random_allocation = false;
+     session->stun_allocation_increment = -1;
++    memset(session->preferred_stun_host, 0, sizeof(session->preferred_stun_host));
++    session->preferred_stun_port = 0;
++    memset(session->successful_stun_host, 0, sizeof(session->successful_stun_host));
++    session->successful_stun_port = 0;
++    memset(session->preferred_remote_address, 0, sizeof(session->preferred_remote_address));
++    session->preferred_remote_port = 0;
++    session->selected_remote_port = 0;
+     session->force_port_guessing = false;
+     session->port_guessing_count = RANDOM_ALLOCATION_GUESSES_NUMBER;
+     session->port_guessing_socks = RANDOM_ALLOCATION_SOCKS_NUMBER;
+@@ -1680,6 +1737,7 @@ CHIAKI_EXPORT ChiakiErrorCode chiaki_holepunch_session_punch_hole(Session* sessi
+     }
+     chiaki_mutex_unlock(&session->stop_mutex);
+     memcpy(session->ps_ip, selected_candidate.addr, sizeof(session->ps_ip));
++    session->selected_remote_port = selected_candidate.port;
+ 
+     chiaki_mutex_lock(&session->state_mutex);
+     if(port_type == CHIAKI_HOLEPUNCH_PORT_TYPE_CTRL)
+@@ -3724,11 +3782,18 @@ static bool get_client_addr_remote_stun(Session *session, char *address, uint16_
+         {
+             CHIAKI_LOGW(session->log, "Getting stun servers returned error %s", chiaki_error_string(err));
+         }
+-        if (!stun_port_allocation_test(session->log, address, port, &session->stun_allocation_increment, &session->stun_random_allocation, session->stun_server_list, session->num_stun_servers, sock))
++        StunServer *successful_server = NULL;
++        if (!stun_port_allocation_test(session->log, address, port, &session->stun_allocation_increment, &session->stun_random_allocation, session->stun_server_list, session->num_stun_servers, sock, &successful_server))
+         {
+             CHIAKI_LOGE(session->log, "get_client_addr_remote_stun: Failed to get external address");
+             return false;
+         }
++        if(successful_server && successful_server->host)
++        {
++            snprintf(session->successful_stun_host,
++                sizeof(session->successful_stun_host), "%s", successful_server->host);
++            session->successful_stun_port = successful_server->port;
++        }
+         return true;
+     }
+     if(ipv4)
+@@ -3879,6 +3944,48 @@ static ChiakiErrorCode check_candidates(
+     socklen_t lens[num_candidates + EXTRA_CANDIDATE_ADDRESSES];
+     Candidate candidates[num_candidates + EXTRA_CANDIDATE_ADDRESSES];
+     memcpy(candidates, candidates_received, num_candidates * sizeof(Candidate));
++    const char *preferred_address = session->preferred_remote_address;
++    uint16_t preferred_port = session->preferred_remote_port;
++    if(session->ctrl_port != 0 && session->ps_ip[0] != '\0')
++    {
++        // DATA candidates use a different port, but the CTRL-selected address
++        // remains a useful preference when it is also in the fresh DATA offer.
++        preferred_address = session->ps_ip;
++        preferred_port = 0;
++    }
++    size_t preferred_index = num_candidates;
++    if(preferred_address[0] != '\0')
++    {
++        for(size_t i = 0; i < num_candidates; i++)
++        {
++            if(strcmp(candidates[i].addr, preferred_address) == 0 &&
++                (preferred_port == 0 || candidates[i].port == preferred_port))
++            {
++                preferred_index = i;
++                break;
++            }
++        }
++        if(preferred_index == num_candidates && preferred_port != 0)
++        {
++            for(size_t i = 0; i < num_candidates; i++)
++            {
++                if(strcmp(candidates[i].addr, preferred_address) == 0)
++                {
++                    preferred_index = i;
++                    break;
++                }
++            }
++        }
++    }
++    if(preferred_index > 0 && preferred_index < num_candidates)
++    {
++        Candidate preferred = candidates[preferred_index];
++        memmove(&candidates[1], &candidates[0], preferred_index * sizeof(Candidate));
++        candidates[0] = preferred;
++        CHIAKI_LOGI(session->log,
++            "Prioritizing previously successful PlayStation candidate %s:%u",
++            preferred.addr, preferred.port);
++    }
+     int responses_received[num_candidates + EXTRA_CANDIDATE_ADDRESSES];
+ #ifdef __SWITCH__
+     // Use poll() on Switch — select() fails when FD numbers >= FD_SETSIZE (256)
+@@ -5785,16 +5892,35 @@ static ChiakiErrorCode get_stun_servers(Session *session)
+         {"stun.moonlight-stream.org", 3478},
+     };
+ 
++    size_t preferred_index = sizeof(switch_stun_servers) / sizeof(switch_stun_servers[0]);
++    for(size_t i = 0; i < sizeof(switch_stun_servers) / sizeof(switch_stun_servers[0]); i++)
++    {
++        if(strcmp(switch_stun_servers[i].host, session->preferred_stun_host) == 0 &&
++            switch_stun_servers[i].port == session->preferred_stun_port)
++        {
++            preferred_index = i;
++            break;
++        }
++    }
++
+     session->num_stun_servers = 0;
+     session->num_stun_servers_ipv6 = 0;
+-    for(size_t i = 0; i < sizeof(switch_stun_servers) / sizeof(switch_stun_servers[0]); i++)
++    for(size_t position = 0; position < sizeof(switch_stun_servers) / sizeof(switch_stun_servers[0]); position++)
+     {
++        size_t i = position;
++        if(preferred_index < sizeof(switch_stun_servers) / sizeof(switch_stun_servers[0]))
++        {
++            if(position == 0)
++                i = preferred_index;
++            else if(position <= preferred_index)
++                i = position - 1;
++        }
+         const char *host = switch_stun_servers[i].host;
+-        session->stun_server_list[i].host = malloc(strlen(host) + 1);
+-        if(!session->stun_server_list[i].host)
++        session->stun_server_list[position].host = malloc(strlen(host) + 1);
++        if(!session->stun_server_list[position].host)
+             return CHIAKI_ERR_MEMORY;
+-        strcpy(session->stun_server_list[i].host, host);
+-        session->stun_server_list[i].port = switch_stun_servers[i].port;
++        strcpy(session->stun_server_list[position].host, host);
++        session->stun_server_list[position].port = switch_stun_servers[i].port;
+         session->num_stun_servers++;
+     }
+     CHIAKI_LOGI(session->log, "Using %zu ordered LunarNX Switch STUN servers",
+diff --git a/lib/src/remote/stun.h b/lib/src/remote/stun.h
+index 81e6d7a0..fda33f84 100644
+--- a/lib/src/remote/stun.h
++++ b/lib/src/remote/stun.h
+@@ -122,8 +122,10 @@ static bool stun_get_external_address(ChiakiLog *log, char *address, uint16_t *p
+  * @param[out] port Buffer to store port in
+  * @return true if successful, false otherwise
+  */
+-CHIAKI_EXPORT bool stun_port_allocation_test(ChiakiLog *log, char *address, uint16_t *port, int32_t *allocation_increment, bool *random_allocation, StunServer *passed_servers, size_t num_passed_servers, chiaki_socket_t *sock)
++CHIAKI_EXPORT bool stun_port_allocation_test(ChiakiLog *log, char *address, uint16_t *port, int32_t *allocation_increment, bool *random_allocation, StunServer *passed_servers, size_t num_passed_servers, chiaki_socket_t *sock, StunServer **successful_server)
+ {
++    if(successful_server)
++        *successful_server = NULL;
+     // skip testing if outgoing port changes with same internal ip and port if send to same ip and different port bc that doesn't apply in our case (we will be using a different address anyway)
+     uint16_t port1 = 0;
+     uint16_t port2 = 0;
+@@ -146,7 +148,11 @@ CHIAKI_EXPORT bool stun_port_allocation_test(ChiakiLog *log, char *address, uint
+                 if (!stun_get_external_address_from_server(log, &passed_servers[i], addr1, &port1, sock, true))
+                     CHIAKI_LOGW(log, "Failed to get external address from %s:%d, retrying with another STUN server...", passed_servers[i].host, passed_servers[i].port);
+                 else
++                {
++                    if(successful_server)
++                        *successful_server = &passed_servers[i];
+                     CHIAKI_LOGV(log, "Got response from STUN server %s:%d", passed_servers[i].host, passed_servers[i].port);
++                }
+             }
+             else if(port2 == 0)
+             {
+@@ -200,7 +206,11 @@ CHIAKI_EXPORT bool stun_port_allocation_test(ChiakiLog *log, char *address, uint
+                 if (!stun_get_external_address_from_server(log, &STUN_SERVERS[i], addr1, &port1, sock, true))
+                     CHIAKI_LOGW(log, "Failed to get external address from %s:%d, retrying with another STUN server...", STUN_SERVERS[i].host, STUN_SERVERS[i].port);
+                 else
++                {
++                    if(successful_server)
++                        *successful_server = &STUN_SERVERS[i];
+                     CHIAKI_LOGV(log, "Got response from STUN server %s:%d", STUN_SERVERS[i].host, STUN_SERVERS[i].port);
++                }
+             }
+             else if(port2 == 0)
+             {
+

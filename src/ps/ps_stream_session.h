@@ -4,6 +4,7 @@
 
 #include "ps_media_bridge.h"
 #include "ps_remote_connector.h"
+#include "ps_route_preferences.h"
 #include "ps_connection_trace.h"
 #include <netinet/in.h>
 #include <chiaki/session.h>
@@ -72,6 +73,7 @@ public:
     void setControllerState(ChiakiControllerState& state);
     void requestIDR();
     PsTransportStats transportStats() const;
+    PsRoutePreference successfulRemoteRoute() const;
 
 private:
     void configureConnectInfo();
@@ -97,6 +99,7 @@ private:
     // Remote mode
     bool remote_mode_ = false;
     PsRemoteResult remote_result_;
+    PsRoutePreference successful_remote_route_;
 
     ChiakiLog log_{};
     ChiakiSession session_{};

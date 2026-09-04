@@ -1,6 +1,7 @@
 #ifdef __SWITCH__
 
 #include "ps_remote_connector.h"
+#include "ps_route_preferences.h"
 #include "ps_remote_retry_policy.h"
 #include "../common.h"
 #include "../diagnostics.h"
@@ -186,6 +187,20 @@ bool PsRemoteConnector::connect(const PsConnectionPlan& plan,
         network.fast_port_guessing_sockets,
         network.compatibility_port_guessing_sockets);
     bool auth_refresh_attempted = false;
+    const std::string console_key = plan.has_console_uid
+        ? psRoutePreferenceKey(plan.console_uid.data(), plan.console_uid.size())
+        : std::string{};
+    const PsRoutePreference route_preference =
+        PsRoutePreferenceStore().load(console_key);
+    diagnosticLog(
+        "ps-remote", "route preference loaded stun=%s:%d remote=%s:%d",
+        route_preference.preferred_stun_host.empty()
+            ? "none" : route_preference.preferred_stun_host.c_str(),
+        route_preference.preferred_stun_port,
+        route_preference.remote_address.empty()
+            ? "none" : route_preference.remote_address.c_str(),
+        route_preference.remote_port);
+
     for (int attempt = 1; attempt <= kRemoteMaxAttempts; ++attempt) {
         result.attempts = attempt;
         if (on_status) {
@@ -212,6 +227,16 @@ bool PsRemoteConnector::connect(const PsConnectionPlan& plan,
             result.failed_phase = "initialization";
             result.error = CHIAKI_ERR_MEMORY;
             return false;
+        }
+        if (route_preference.hasPreferredStun()) {
+            chiaki_holepunch_session_set_preferred_stun_server(
+                session, route_preference.preferred_stun_host.c_str(),
+                static_cast<uint16_t>(route_preference.preferred_stun_port));
+        }
+        if (route_preference.hasRemoteRoute()) {
+            chiaki_holepunch_session_set_preferred_remote_candidate(
+                session, route_preference.remote_address.c_str(),
+                static_cast<uint16_t>(route_preference.remote_port));
         }
         if (trace_) trace_->record(
             "holepunch-init", "ok", "attempt=%d elapsed_ms=%lld",

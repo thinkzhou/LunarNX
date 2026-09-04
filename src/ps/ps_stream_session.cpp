@@ -244,9 +244,14 @@ bool PsStreamSession::start(PsSessionCallbacks callbacks) {
 
 bool PsStreamSession::startRemote(PsRemoteResult&& remote, PsSessionCallbacks callbacks) {
     remote_mode_ = true;
+    successful_remote_route_ = {};
     remote_result_ = std::move(remote);
     remote = {};
     return doStart(std::move(callbacks));
+}
+
+PsRoutePreference PsStreamSession::successfulRemoteRoute() const {
+    return successful_remote_route_;
 }
 
 void PsStreamSession::stop() {
@@ -344,6 +349,24 @@ void PsStreamSession::handleEvent(ChiakiEvent* event) {
     diagnosticLog("ps-event", "type=%d", static_cast<int>(event->type));
     switch (event->type) {
         case CHIAKI_EVENT_CONNECTED: {
+            if (remote_mode_ && session_.holepunch_session) {
+                char stun_host[254] = {};
+                uint16_t stun_port = 0;
+                if (chiaki_holepunch_session_get_successful_stun_server(
+                        session_.holepunch_session, stun_host, sizeof(stun_host),
+                        &stun_port)) {
+                    successful_remote_route_.preferred_stun_host = stun_host;
+                    successful_remote_route_.preferred_stun_port = stun_port;
+                }
+                char remote_address[INET6_ADDRSTRLEN] = {};
+                uint16_t remote_port = 0;
+                if (chiaki_holepunch_session_get_selected_remote_candidate(
+                        session_.holepunch_session, remote_address,
+                        sizeof(remote_address), &remote_port)) {
+                    successful_remote_route_.remote_address = remote_address;
+                    successful_remote_route_.remote_port = remote_port;
+                }
+            }
             diagnosticLog("ps-session", "Connected");
             if (trace_) trace_->record(
                 "connected", "ok",

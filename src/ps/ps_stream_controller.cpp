@@ -3,6 +3,7 @@
 #include "ps_stream_controller.h"
 #include "ps_media_bridge.h"
 #include "psn_auth_utils.h"
+#include "ps_route_preferences.h"
 #include "chiaki_log_adapter.h"
 #include "../diagnostics.h"
 #include "../platform/network_worker.h"
@@ -340,6 +341,25 @@ bool PsStreamController::startStream() {
     };
     callbacks.on_streaming = [this]() {
         stream_transport_connected_ = true;
+        if (plan_.isRemote() && plan_.has_console_uid && session_) {
+            const PsRoutePreference route = session_->successfulRemoteRoute();
+            const std::string console_key = psRoutePreferenceKey(
+                plan_.console_uid.data(), plan_.console_uid.size());
+            if ((route.hasPreferredStun() || route.hasRemoteRoute()) &&
+                !console_key.empty()) {
+                const bool saved = PsRoutePreferenceStore().save(console_key, route);
+                diagnosticLog(
+                    "ps-controller",
+                    "remote route preference save result=%s stun=%s:%d remote=%s:%d",
+                    saved ? "true" : "false",
+                    route.preferred_stun_host.empty()
+                        ? "none" : route.preferred_stun_host.c_str(),
+                    route.preferred_stun_port,
+                    route.remote_address.empty()
+                        ? "none" : route.remote_address.c_str(),
+                    route.remote_port);
+            }
+        }
         setState(app::StreamState::Connecting, "Connected. Waiting for video...");
         // The media pipeline may have been ready long before PSN DATA setup
         // completed. Request again at the first point StreamConnection can
