@@ -74,7 +74,7 @@ Xbox Cloud Gaming availability depends on account entitlement and region. PlaySt
    sdmc:/switch/LunarNX/LunarNX.nro
    ```
 
-   The ZIP already contains `LunarNX/LunarNX.nro`; extract that directory at the SD card root. For a standalone NRO, copy it to the path above.
+   The ZIP already contains `LunarNX/LunarNX.nro`; extract that directory into the SD card's `switch/` directory. For a standalone NRO, copy it to the path above.
 
 3. Open Homebrew Menu using title override/full-memory mode, then launch LunarNX.
 

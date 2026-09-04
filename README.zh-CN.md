@@ -79,7 +79,7 @@ Xbox Cloud Gaming 的可用性取决于账号权限和地区。PlayStation 远�
    sdmc:/switch/LunarNX/LunarNX.nro
    ```
 
-   ZIP 内已经包含 `LunarNX/LunarNX.nro`，直接将其中的 `LunarNX` 目录解压到 SD 卡根目录即可。如果单独下载 NRO，请将其复制到上述路径。
+   ZIP 内已经包含 `LunarNX/LunarNX.nro`，将其中的 `LunarNX` 目录解压到 SD 卡的 `switch/` 目录即可。如果单独下载 NRO，请将其复制到上述路径。
 
 3. 使用 Title Override / 完整内存模式打开 Homebrew Menu，然后启动 LunarNX。
 
