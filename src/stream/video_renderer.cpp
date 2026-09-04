@@ -795,6 +795,11 @@ uint64_t renderNowMs() {
           RenderClock::now().time_since_epoch()).count());
 }
 
+long long renderElapsedMs(RenderClock::time_point started) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+      RenderClock::now() - started).count();
+}
+
 void resetRenderTarget(RenderTarget& target) {
   target.handle.destroy();
   target.layout = dk::ImageLayout{};
@@ -2167,6 +2172,8 @@ bool VideoRenderer::prepareDecoderReset(){
 bool VideoRenderer::pollEvents(){return true;}
 
 void VideoRenderer::shutdown(){
+  const auto shutdown_started=RenderClock::now();
+  lunar::persistentEventLog("video-render","shutdown begin");
   {
     std::lock_guard<std::mutex> lock(software_mutex_);
     if(software_sws_){
@@ -2177,7 +2184,13 @@ void VideoRenderer::shutdown(){
     software_rgba_.clear();
   }
   SoftwareVideoFrameSink::instance().clear();
-  auto* s=static_cast<Deko3DRenderContext*>(ctx_);if(!s)return;
+  auto* s=static_cast<Deko3DRenderContext*>(ctx_);
+  if(!s){
+    lunar::persistentEventLog(
+        "video-render","shutdown complete total_ms=%lld backend=software-or-empty",
+        renderElapsedMs(shutdown_started));
+    return;
+  }
   if(gpu_quarantine_required_.exchange(false,std::memory_order_acq_rel)){
     // A timed-out command fence means the queue may never become idle.  Do not
     // block the cleanup worker and do not destroy resources still referenced
@@ -2194,19 +2207,48 @@ void VideoRenderer::shutdown(){
         s->target_w, s->target_h, s->next_submitted_frame);
     setRenderStage(VideoRenderStage::Shutdown);
     ctx_=nullptr;
+    lunar::persistentEventLog(
+        "video-render","shutdown complete total_ms=%lld action=gpu-quarantine",
+        renderElapsedMs(shutdown_started));
     return;
   }
   setRenderStage(VideoRenderStage::Shutdown);
   std::unique_lock<std::recursive_mutex> gpu_lock;
+  auto phase_started=RenderClock::now();
+  lunar::persistentEventLog(
+      "video-render","shutdown phase=gpu-lock begin present=%d",s->vctx?1:0);
   if(s->vctx)gpu_lock=std::unique_lock<std::recursive_mutex>(s->vctx->getGpuMutex());
-  std::lock_guard<std::mutex> render_lock(s->render_mutex);
+  lunar::persistentEventLog(
+      "video-render","shutdown phase=gpu-lock done elapsed_ms=%lld",
+      renderElapsedMs(phase_started));
+
+  phase_started=RenderClock::now();
+  lunar::persistentEventLog("video-render","shutdown phase=render-lock begin");
+  std::unique_lock<std::mutex> render_lock(s->render_mutex);
+  lunar::persistentEventLog(
+      "video-render","shutdown phase=render-lock done elapsed_ms=%lld",
+      renderElapsedMs(phase_started));
   s->decoder_reset_requested=false;
   s->decoder_reset_ready=false;
   s->decoder_reset_drain_steps=0;
   s->resolution_transition_drain_steps=0;
   s->decoder_reset_cv.notify_all();
-  if(!s->ok && !s->vctx && !s->pc && !s->pd && !s->pi)return;
+  if(!s->ok && !s->vctx && !s->pc && !s->pd && !s->pi){
+    lunar::persistentEventLog(
+        "video-render","shutdown complete total_ms=%lld resources=empty",
+        renderElapsedMs(shutdown_started));
+    return;
+  }
+  phase_started=RenderClock::now();
+  lunar::persistentEventLog(
+      "video-render","shutdown phase=queue-idle begin present=%d",s->q?1:0);
   if(s->q)s->q.waitIdle();
+  lunar::persistentEventLog(
+      "video-render","shutdown phase=queue-idle done elapsed_ms=%lld",
+      renderElapsedMs(phase_started));
+
+  phase_started=RenderClock::now();
+  lunar::persistentEventLog("video-render","shutdown phase=resource-release begin");
   s->present_slice_active=false;
   s->fms.clear();
   releaseRetainedFrames(*s);
@@ -2241,6 +2283,12 @@ void VideoRenderer::shutdown(){
   s->static_state_dirty=true;
   s->ok=false;
   s->pending_render_fault=nullptr;
+  lunar::persistentEventLog(
+      "video-render","shutdown phase=resource-release done elapsed_ms=%lld",
+      renderElapsedMs(phase_started));
+  lunar::persistentEventLog(
+      "video-render","shutdown complete total_ms=%lld",
+      renderElapsedMs(shutdown_started));
 }
 
 }

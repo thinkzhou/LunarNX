@@ -6,6 +6,7 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 borealis_dir="$project_root/lib/borealis"
 libpeer_dir="$project_root/lib/libpeer"
 borealis_patch="$project_root/tools/borealis_switch/lunarnx-borealis-gpu-lifecycle.patch"
+borealis_command_buffer_patch="$project_root/tools/borealis_switch/lunarnx-borealis-command-buffer.patch"
 libpeer_patch_dir="$project_root/tools/libpeer_legacy"
 libpeer_nested_patch_dir="$libpeer_patch_dir/nested"
 
@@ -51,6 +52,17 @@ elif git -C "$borealis_dir" apply --check "$borealis_patch" >/dev/null 2>&1; the
     printf 'Applied LunarNX Borealis GPU lifecycle patch.\n'
 else
     printf 'Borealis GPU lifecycle patch conflicts with the local checkout: %s\n' \
+        "$borealis_dir" >&2
+    exit 2
+fi
+
+if git -C "$borealis_dir" apply --reverse --check "$borealis_command_buffer_patch" >/dev/null 2>&1; then
+    printf 'LunarNX Borealis command-buffer patch is already applied.\n'
+elif git -C "$borealis_dir" apply --check "$borealis_command_buffer_patch" >/dev/null 2>&1; then
+    git -C "$borealis_dir" apply "$borealis_command_buffer_patch"
+    printf 'Applied LunarNX Borealis command-buffer patch.\n'
+else
+    printf 'Borealis command-buffer patch conflicts with the local checkout: %s\n' \
         "$borealis_dir" >&2
     exit 2
 fi

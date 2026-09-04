@@ -37,7 +37,7 @@ def main() -> None:
             "Decoded frames must not enqueue an independent Borealis presentation")
     require("AVFrame* current_frame=nullptr" in renderer,
             "The renderer should retain the latest frame for repeated UI draws")
-    require("s->present_ring->begin(s->present_cb)" in renderer and
+    require("s->present_ring->begin(s->present_cb," in renderer and
             "recordPresentPipeline(*s,fb,db,perf_)" in renderer,
             "Every Borealis draw must use the command ring and current framebuffer")
     present_start = renderer.index("void VideoRenderer::present()")

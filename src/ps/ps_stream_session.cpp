@@ -256,23 +256,55 @@ PsRoutePreference PsStreamSession::successfulRemoteRoute() const {
 
 void PsStreamSession::stop() {
     if (state_.load() == PsSessionState::Stopping) return;
+    const auto stop_started = std::chrono::steady_clock::now();
     state_.store(PsSessionState::Stopping);
+    lunar::persistentEventLog(
+        "ps-session-stop", "stop begin started=%d initialized=%d",
+        started_ ? 1 : 0, initialized_ ? 1 : 0);
     if (trace_ && !trace_->finished()) trace_->record(
         "session-stop", "begin", "started=%d initialized=%d",
         started_ ? 1 : 0, initialized_ ? 1 : 0);
 
+    auto phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog(
+        "ps-session-stop", "phase=chiaki-stop begin active=%d",
+        started_ ? 1 : 0);
     if (started_) {
         chiaki_session_stop(&session_);
+    }
+    lunar::persistentEventLog(
+        "ps-session-stop", "phase=chiaki-stop done elapsed_ms=%lld",
+        elapsedMs(phase_started));
+
+    phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog(
+        "ps-session-stop", "phase=chiaki-join begin active=%d",
+        started_ ? 1 : 0);
+    if (started_) {
         chiaki_session_join(&session_);
         started_ = false;
     }
+    lunar::persistentEventLog(
+        "ps-session-stop", "phase=chiaki-join done elapsed_ms=%lld",
+        elapsedMs(phase_started));
+
+    phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog(
+        "ps-session-stop", "phase=chiaki-fini begin active=%d",
+        initialized_ ? 1 : 0);
     if (initialized_) {
         chiaki_session_fini(&session_);
         initialized_ = false;
     }
+    lunar::persistentEventLog(
+        "ps-session-stop", "phase=chiaki-fini done elapsed_ms=%lld",
+        elapsedMs(phase_started));
 
     remote_mode_ = false;
     state_.store(PsSessionState::Idle);
+    lunar::persistentEventLog(
+        "ps-session-stop", "stop complete total_ms=%lld",
+        elapsedMs(stop_started));
 }
 
 // ... rest (setLoginPin, setControllerState, requestIDR, event handling) unchanged ...

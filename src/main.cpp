@@ -83,6 +83,10 @@ int main(int argc, char* argv[]) {
     lunar::ui::installLunarTheme();
     lunar::diagnosticLog("main", "createWindow begin");
     brls::Application::createWindow("LunarNX");
+    // Keep Activity replacement to a single rendered UI tree. On Switch,
+    // overlapping Borealis show animations can make both Activities submit
+    // Deko3D commands in the same frame and exhaust the dynamic command ring.
+    brls::Application::getStyle().addMetric("brls/animations/show", 0.0f);
     brls::Application::getPlatform()->setThemeVariant(brls::ThemeVariant::DARK);
     brls::Application::setGlobalQuit(false);
     brls::Application::setFPSStatus(false);
