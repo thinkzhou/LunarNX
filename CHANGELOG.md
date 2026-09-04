@@ -2,9 +2,9 @@
 
 Notable LunarNX changes are recorded here by the automated release workflow.
 
-## [0.4.0](https://github.com/thinkzhou/LunarNX/compare/v0.3.0...v0.4.0) (2026-09-04)
+## [0.3.1](https://github.com/thinkzhou/LunarNX/compare/v0.3.0...v0.3.1) (2026-09-04)
 
-LunarNX 0.4.0 focuses on faster reconnection, safer stream teardown, and
+LunarNX 0.3.1 focuses on faster reconnection, safer stream teardown, and
 predictable release packaging. It reuses successful Xbox and PlayStation
 network routes, improves cancellation and UI lifecycle handling, and publishes
 stable assets for Sphaira installation.
