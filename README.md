@@ -67,7 +67,7 @@ Xbox Cloud Gaming availability depends on account entitlement and region. PlaySt
 
 ## Installation
 
-1. Download the latest ZIP or NRO asset from the [Releases page](https://github.com/thinkzhou/LunarNX/releases). Release tags identify versions; current assets use stable filenames.
+1. Download the latest ZIP or NRO asset from the [Releases page](https://github.com/thinkzhou/LunarNX/releases). Release tags identify versions; new releases use stable filenames (older releases may retain versioned assets).
 2. Install it at the following path:
 
    ```text

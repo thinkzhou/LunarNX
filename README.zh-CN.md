@@ -72,7 +72,7 @@ Xbox Cloud Gaming 的可用性取决于账号权限和地区。PlayStation 远�
 
 ## 安装
 
-1. 从 [Releases 页面](https://github.com/thinkzhou/LunarNX/releases) 下载最新 ZIP 或 NRO；版本由 Release 标签区分，当前发布包使用固定文件名。
+1. 从 [Releases 页面](https://github.com/thinkzhou/LunarNX/releases) 下载最新 ZIP 或 NRO；版本由 Release 标签区分，新发布包使用固定文件名（旧版本可能仍保留带版本号的文件名）。
 2. 将应用安装到以下路径：
 
    ```text
