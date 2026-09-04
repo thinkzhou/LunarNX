@@ -4,6 +4,7 @@
 #include <borealis.hpp>
 
 #include "../app/stream_controller.h"
+#include "connection_cancel_state.h"
 
 #include <atomic>
 #include <functional>
@@ -48,19 +49,15 @@ public:
     void onContentAvailable() override;
 
 private:
+    struct CancelContext;
+
     std::shared_ptr<app::StreamController> ctrl_;
     StreamLaunchRequest request_;
-    CompletionCallback completion_;
-    std::shared_ptr<std::atomic<bool>> alive_ =
-        std::make_shared<std::atomic<bool>>(true);
     std::shared_ptr<std::atomic<bool>> started_ =
-        std::make_shared<std::atomic<bool>>(false);
-    std::shared_ptr<std::atomic<bool>> cancelling_ =
-        std::make_shared<std::atomic<bool>>(false);
-    std::shared_ptr<std::atomic<bool>> finished_ =
         std::make_shared<std::atomic<bool>>(false);
     std::shared_ptr<std::atomic<bool>> failure_pending_ =
         std::make_shared<std::atomic<bool>>(false);
+    std::shared_ptr<CancelContext> cancel_context_;
     brls::Box* loading_card_ = nullptr;
     brls::Box* error_card_ = nullptr;
     brls::Label* status_ = nullptr;
@@ -71,6 +68,12 @@ private:
 
     void startConnection();
     void requestCancel();
+    static void runCancelCleanup(
+        const std::shared_ptr<CancelContext>& context,
+        const std::shared_ptr<app::StreamController>& ctrl) noexcept;
+    static bool scheduleCancelCleanup(
+        const std::shared_ptr<CancelContext>& context,
+        const std::shared_ptr<app::StreamController>& ctrl);
     void handleConnectionResult(bool ok, const std::string& error);
     void showFailure(const std::string& detail);
     void acknowledgeFailure();

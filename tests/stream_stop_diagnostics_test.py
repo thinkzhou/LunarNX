@@ -5,6 +5,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 CONTROLLER = (ROOT / "src/app/stream_controller.cpp").read_text()
 SESSION = (ROOT / "src/app/xbox_stream_session.cpp").read_text()
+PS_CONTROLLER = (ROOT / "src/ps/ps_stream_controller.cpp").read_text()
+PS_SESSION = (ROOT / "src/ps/ps_stream_session.cpp").read_text()
+RENDERER = (ROOT / "src/stream/video_renderer.cpp").read_text()
 
 
 def require(condition: bool, message: str) -> None:
@@ -57,6 +60,59 @@ for phase in (
 require(
     "cleanup complete total_ms=%lld slow=%s" in cleanup_body,
     "Xbox cleanup must report its total duration",
+)
+
+ps_controller_start = PS_CONTROLLER.index("void PsStreamController::stopStream(bool")
+ps_controller_end = PS_CONTROLLER.index(
+    "bool PsStreamController::resumeAfterForeground", ps_controller_start)
+ps_controller_body = PS_CONTROLLER[ps_controller_start:ps_controller_end]
+for phase in (
+    "input-loop",
+    "video-monitor",
+    "operation-lock",
+    "chiaki-session",
+    "remote-connector",
+    "pending-holepunch",
+    "media",
+    "rumble-input",
+):
+    require(
+        f"phase={phase} begin" in ps_controller_body and
+        f"phase={phase} done" in ps_controller_body,
+        f"PS controller stop must persist the {phase} phase boundaries",
+    )
+require(
+    "stop stream complete total_ms=%lld" in ps_controller_body,
+    "PS controller stop must persist total duration",
+)
+
+ps_session_start = PS_SESSION.index("void PsStreamSession::stop()")
+ps_session_end = PS_SESSION.index(
+    "void PsStreamSession::setLoginPin", ps_session_start)
+ps_session_body = PS_SESSION[ps_session_start:ps_session_end]
+for phase in ("chiaki-stop", "chiaki-join", "chiaki-fini"):
+    require(
+        f"phase={phase} begin" in ps_session_body and
+        f"phase={phase} done" in ps_session_body,
+        f"PS session stop must persist the {phase} phase boundaries",
+    )
+require(
+    "stop complete total_ms=%lld" in ps_session_body,
+    "PS session stop must persist total duration",
+)
+
+renderer_start = RENDERER.index("void VideoRenderer::shutdown()")
+renderer_end = RENDERER.index("#else", renderer_start)
+renderer_body = RENDERER[renderer_start:renderer_end]
+for phase in ("gpu-lock", "render-lock", "queue-idle", "resource-release"):
+    require(
+        f"phase={phase} begin" in renderer_body and
+        f"phase={phase} done" in renderer_body,
+        f"video renderer shutdown must persist the {phase} phase boundaries",
+    )
+require(
+    "shutdown complete total_ms=%lld" in renderer_body,
+    "video renderer shutdown must persist total duration",
 )
 
 print("stream stop diagnostics test passed")

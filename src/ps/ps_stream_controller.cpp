@@ -35,6 +35,11 @@ const char* streamStateName(app::StreamState state) {
     }
     return "unknown";
 }
+
+long long stopElapsedMs(std::chrono::steady_clock::time_point started) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started).count();
+}
 }
 
 void PsStreamController::releasePendingRemoteResult() {
@@ -628,24 +633,57 @@ void PsStreamController::stopStream(bool set_disconnected) {
         diagnosticLog("ps-controller", "stop stream skipped: already stopped");
         return;
     }
+    const auto stop_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog(
+        "ps-stop", "stop stream begin state=%s set_disconnected=%d",
+        streamStateName(state_.load()), set_disconnected ? 1 : 0);
     diagnosticLog("ps-controller", "stop stream begin state=%d",
                   static_cast<int>(state_.load()));
+
+    auto phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("ps-stop", "phase=input-loop begin");
     stopInputLoop();
+    lunar::persistentEventLog(
+        "ps-stop", "phase=input-loop done elapsed_ms=%lld",
+        stopElapsedMs(phase_started));
     diagnosticLog("ps-controller", "input loop stopped");
+
+    phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("ps-stop", "phase=video-monitor begin");
     stopVideoMonitor();
+    lunar::persistentEventLog(
+        "ps-stop", "phase=video-monitor done elapsed_ms=%lld",
+        stopElapsedMs(phase_started));
     diagnosticLog("ps-controller", "video monitor stopped");
+
+    phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("ps-stop", "phase=operation-lock begin");
     std::unique_lock<std::shared_mutex> operation_lock(stream_operation_mutex_);
+    lunar::persistentEventLog(
+        "ps-stop", "phase=operation-lock done elapsed_ms=%lld",
+        stopElapsedMs(phase_started));
     cancel_requested_ = true;
     if (mock_session_) {
         mock_session_->stop();
         mock_session_.reset();
         diagnosticLog("ps-controller", "mock session stopped");
     }
+
+    phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog(
+        "ps-stop", "phase=chiaki-session begin present=%d",
+        session_ ? 1 : 0);
     if (session_) {
         session_->stop();
         session_.reset();
         diagnosticLog("ps-controller", "chiaki session stopped and finalized");
     }
+    lunar::persistentEventLog(
+        "ps-stop", "phase=chiaki-session done elapsed_ms=%lld",
+        stopElapsedMs(phase_started));
+
+    phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("ps-stop", "phase=remote-connector begin");
     {
         std::lock_guard<std::mutex> remote_lock(remote_connector_mutex_);
         if (remote_connector_) {
@@ -654,14 +692,39 @@ void PsStreamController::stopStream(bool set_disconnected) {
             diagnosticLog("ps-controller", "remote connector released");
         }
     }
+    lunar::persistentEventLog(
+        "ps-stop", "phase=remote-connector done elapsed_ms=%lld",
+        stopElapsedMs(phase_started));
+
+    phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("ps-stop", "phase=pending-holepunch begin");
     releasePendingRemoteResult();
+    lunar::persistentEventLog(
+        "ps-stop", "phase=pending-holepunch done elapsed_ms=%lld",
+        stopElapsedMs(phase_started));
     diagnosticLog("ps-controller", "pending holepunch released");
+
+    phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("ps-stop", "phase=media-bridge begin");
     bridge_.reset();
+    lunar::persistentEventLog(
+        "ps-stop", "phase=media-bridge done elapsed_ms=%lld",
+        stopElapsedMs(phase_started));
+
+    phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog(
+        "ps-stop", "phase=media begin present=%d", media_ ? 1 : 0);
     if (media_) {
         media_->setVideoReadyCallback({});
         media_->shutdown();
         diagnosticLog("ps-controller", "media pipeline stopped");
     }
+    lunar::persistentEventLog(
+        "ps-stop", "phase=media done elapsed_ms=%lld",
+        stopElapsedMs(phase_started));
+
+    phase_started = std::chrono::steady_clock::now();
+    lunar::persistentEventLog("ps-stop", "phase=rumble-input begin");
     if (rumble_) rumble_->stop();
     rumble_input_suppressed_ = false;
     if (gamepad_) gamepad_->releaseCaptureButton();
@@ -680,6 +743,12 @@ void PsStreamController::stopStream(bool set_disconnected) {
     }
     if (input_mapper_) input_mapper_->reset();
     if (set_disconnected) setState(app::StreamState::Disconnected, "Stopped");
+    lunar::persistentEventLog(
+        "ps-stop", "phase=rumble-input done elapsed_ms=%lld",
+        stopElapsedMs(phase_started));
+    lunar::persistentEventLog(
+        "ps-stop", "stop stream complete total_ms=%lld state=%s",
+        stopElapsedMs(stop_started), streamStateName(state_.load()));
     diagnosticLog("ps-controller", "stop stream complete");
 }
 

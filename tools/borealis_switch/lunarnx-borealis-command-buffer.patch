@@ -1,0 +1,11 @@
+diff --git a/library/include/borealis/extern/nanovg/dk_renderer.hpp b/library/include/borealis/extern/nanovg/dk_renderer.hpp
+--- a/library/include/borealis/extern/nanovg/dk_renderer.hpp
++++ b/library/include/borealis/extern/nanovg/dk_renderer.hpp
+@@ -156,6 +156,6 @@ namespace nvg
+             };
+         private:
+-            static constexpr size_t DynamicCmdSize = 0x20000;
++            static constexpr size_t DynamicCmdSize = 0x40000;
+             static constexpr size_t FragmentUniformSize = sizeof(DKNVGfragUniforms) + 4 - sizeof(DKNVGfragUniforms) % 4;
+             static constexpr size_t MaxImages = 0x1000;
+ 

@@ -6,6 +6,7 @@
 #include "../diagnostics.h"
 #include "../platform/network_worker.h"
 
+#include <exception>
 #include <utility>
 
 namespace lunar::ui {
@@ -34,16 +35,30 @@ std::string stateText(app::StreamState state, const std::string& info) {
 
 } // namespace
 
+struct StreamLoadingActivity::CancelContext {
+    ConnectionCancelState state;
+    std::atomic<bool> alive{true};
+    std::atomic<bool> finished{false};
+    CompletionCallback completion;
+    std::string cancel_detail;
+    std::string target_id;
+};
+
 StreamLoadingActivity::StreamLoadingActivity(
     std::shared_ptr<app::StreamController> ctrl,
     StreamLaunchRequest request,
     CompletionCallback completion)
     : ctrl_(std::move(ctrl)),
       request_(std::move(request)),
-      completion_(std::move(completion)) {}
+      cancel_context_(std::make_shared<CancelContext>()) {
+    cancel_context_->completion = std::move(completion);
+    cancel_context_->cancel_detail =
+        brls::getStr("lunarnx/main/startup_cancelled");
+    cancel_context_->target_id = request_.target_id;
+}
 
 StreamLoadingActivity::~StreamLoadingActivity() {
-    alive_->store(false);
+    cancel_context_->alive = false;
 }
 
 brls::View* StreamLoadingActivity::createContentView() {
@@ -277,14 +292,14 @@ brls::View* StreamLoadingActivity::createContentView() {
 }
 
 void StreamLoadingActivity::onContentAvailable() {
-    auto alive = alive_;
+    auto context = cancel_context_;
     auto* self = this;
-    ctrl_->setStateCallback([alive, self](app::StreamState state,
-                                          const std::string& info) {
+    ctrl_->setStateCallback([context, self](app::StreamState state,
+                                            const std::string& info) {
         std::string text = stateText(state, info);
-        brls::sync([alive, self, state, text = std::move(text)]() {
-            if (!alive->load()) return;
-            if (self->status_ && !self->cancelling_->load()) {
+        brls::sync([context, self, state, text = std::move(text)]() {
+            if (!context->alive.load()) return;
+            if (self->status_ && !context->state.cancelRequested()) {
                 self->status_->setText(text);
             }
             if (self->detail_ && state == app::StreamState::Streaming) {
@@ -295,14 +310,16 @@ void StreamLoadingActivity::onContentAvailable() {
 
     // Match page-first navigation used by streaming clients: queue connection
     // startup only after Borealis has created the destination page.
-    brls::sync([alive, self]() {
-        if (!alive->load()) return;
+    brls::sync([context, self]() {
+        if (!context->alive.load()) return;
         self->startConnection();
     });
 }
 
 void StreamLoadingActivity::startConnection() {
-    if (started_->exchange(true) || cancelling_->load() || finished_->load()) {
+    auto context = cancel_context_;
+    if (started_->exchange(true) || context->state.cancelRequested() ||
+        context->finished.load()) {
         return;
     }
 
@@ -310,27 +327,50 @@ void StreamLoadingActivity::startConnection() {
     lunar::diagnosticLog("ui-stream-start", "worker schedule type=%s target=%s",
                          cloud ? "cloud" : "home", request_.target_id.c_str());
 
-    auto alive = alive_;
     auto ctrl = ctrl_;
     auto request = request_;
     auto* self = this;
+    context->state.markWorkerStarted();
     bool worker_started = lunar::platform::startNetworkWorker(
         cloud ? "connect-xcloud" : "connect-stream",
-        [alive, ctrl, request = std::move(request), self]() {
+        [context, ctrl, request = std::move(request), self]() {
             const bool is_cloud = request.target == StreamLaunchTarget::CloudTitle;
-            bool ok = is_cloud
-                ? ctrl->startCloudStream(request.target_id,
-                                         request.width,
-                                         request.height,
-                                         request.options,
-                                         request.bitrate_kbps)
-                : ctrl->startStream(request.target_id,
-                                    request.width,
-                                    request.height,
-                                    request.options,
-                                    request.bitrate_kbps);
-            std::string error = ok ? std::string() : ctrl->getLastStreamError();
-            if (!alive->load()) {
+            bool ok = false;
+            std::string error;
+            try {
+                ok = is_cloud
+                    ? ctrl->startCloudStream(request.target_id,
+                                             request.width,
+                                             request.height,
+                                             request.options,
+                                             request.bitrate_kbps)
+                    : ctrl->startStream(request.target_id,
+                                        request.width,
+                                        request.height,
+                                        request.options,
+                                        request.bitrate_kbps);
+            } catch (const std::exception& e) {
+                error = std::string("Unexpected connection failure: ") + e.what();
+                lunar::persistentEventLog(
+                    "ui-stream-start", "worker exception target=%s detail=%s",
+                    request.target_id.c_str(), e.what());
+            } catch (...) {
+                error = "Unexpected connection failure";
+                lunar::persistentEventLog(
+                    "ui-stream-start", "worker unknown exception target=%s",
+                    request.target_id.c_str());
+            }
+            if (!ok && error.empty()) error = ctrl->getLastStreamError();
+            context->state.markWorkerDone();
+
+            if (context->state.cancelRequested()) {
+                if (context->state.tryClaimCleanup()) {
+                    runCancelCleanup(context, ctrl);
+                }
+                return;
+            }
+
+            if (!context->alive.load()) {
                 if (ok) {
                     lunar::platform::startNetworkWorker("stop-orphan-stream", [ctrl]() {
                         ctrl->stopStream(false);
@@ -338,16 +378,71 @@ void StreamLoadingActivity::startConnection() {
                 }
                 return;
             }
-            brls::sync([alive, self, ok, error = std::move(error)]() {
-                if (!alive->load()) return;
+            brls::sync([context, ctrl, self, ok, error = std::move(error)]() {
+                if (!context->alive.load()) return;
+                if (context->state.cancelRequested()) {
+                    scheduleCancelCleanup(context, ctrl);
+                    return;
+                }
                 self->handleConnectionResult(ok, error);
             });
         },
         kConnectStreamStackSize);
 
     if (!worker_started) {
+        context->state.markWorkerStartFailed();
         handleConnectionResult(false, brls::getStr("lunarnx/loading/worker_failed"));
     }
+}
+
+void StreamLoadingActivity::runCancelCleanup(
+    const std::shared_ptr<CancelContext>& context,
+    const std::shared_ptr<app::StreamController>& ctrl) noexcept {
+    lunar::persistentEventLog(
+        "ui-stream-start", "cancel cleanup begin target=%s",
+        context->target_id.c_str());
+    try {
+        ctrl->stopStream(false);
+    } catch (const std::exception& e) {
+        lunar::persistentEventLog(
+            "ui-stream-start", "cancel cleanup exception target=%s detail=%s",
+            context->target_id.c_str(), e.what());
+    } catch (...) {
+        lunar::persistentEventLog(
+            "ui-stream-start", "cancel cleanup unknown exception target=%s",
+            context->target_id.c_str());
+    }
+
+    brls::sync([context]() {
+        if (!context->alive.load() || context->finished.exchange(true)) return;
+        lunar::persistentEventLog(
+            "ui-stream-start", "cancel cleanup pop target=%s",
+            context->target_id.c_str());
+        if (context->completion) {
+            context->completion(StreamLaunchResult::Cancelled,
+                                context->cancel_detail);
+        }
+        brls::Application::popActivity(brls::TransitionAnimation::NONE);
+    });
+}
+
+bool StreamLoadingActivity::scheduleCancelCleanup(
+    const std::shared_ptr<CancelContext>& context,
+    const std::shared_ptr<app::StreamController>& ctrl) {
+    if (!context->state.tryClaimCleanup()) return true;
+
+    const bool started = lunar::platform::startNetworkWorker(
+        "cancel-connect", [context, ctrl]() {
+            runCancelCleanup(context, ctrl);
+        });
+    if (!started) {
+        context->state.releaseCleanupClaim();
+        lunar::persistentEventLog(
+            "ui-stream-start", "cancel cleanup worker failed target=%s",
+            context->target_id.c_str());
+        return false;
+    }
+    return true;
 }
 
 void StreamLoadingActivity::requestCancel() {
@@ -355,44 +450,44 @@ void StreamLoadingActivity::requestCancel() {
         acknowledgeFailure();
         return;
     }
-    if (finished_->load() || cancelling_->exchange(true)) return;
+    auto context = cancel_context_;
+    if (context->finished.load()) return;
+
+    if (!context->state.requestCancel()) {
+        lunar::diagnosticLog(
+            "ui-stream-start", "cancel repeated worker_done=%s cleanup=%s target=%s",
+            context->state.workerDone() ? "true" : "false",
+            context->state.cleanupClaimed() ? "true" : "false",
+            request_.target_id.c_str());
+        if (!scheduleCancelCleanup(context, ctrl_) && status_) {
+            status_->setText(brls::getStr("lunarnx/loading/cancel_failed"));
+        }
+        return;
+    }
 
     lunar::diagnosticLog("ui-stream-start", "cancel requested target=%s",
                          request_.target_id.c_str());
     if (status_) status_->setText(brls::getStr("lunarnx/loading/cancelling"));
     if (detail_) detail_->setText(brls::getStr("lunarnx/loading/stopping"));
 
-    auto alive = alive_;
-    auto ctrl = ctrl_;
-    auto* self = this;
-    bool worker_started = lunar::platform::startNetworkWorker(
-        "cancel-connect",
-        [alive, ctrl, self]() {
-            ctrl->stopStream(false);
-            brls::sync([alive, self]() {
-                if (!alive->load()) return;
-                self->finish(StreamLaunchResult::Cancelled,
-                             brls::getStr("lunarnx/main/startup_cancelled"));
-                self->returnToMain();
-            });
-        });
+    ctrl_->requestStop();
+    if (!context->state.workerStarted()) {
+        finish(StreamLaunchResult::Cancelled, context->cancel_detail);
+        returnToMain();
+        return;
+    }
 
-    if (!worker_started) {
-        cancelling_->store(false);
+    if (!scheduleCancelCleanup(context, ctrl_)) {
         if (status_) status_->setText(brls::getStr("lunarnx/loading/cancel_failed"));
     }
 }
 
 void StreamLoadingActivity::handleConnectionResult(
     bool ok, const std::string& error) {
-    if (finished_->load()) return;
-    if (cancelling_->load()) {
-        if (ok) {
-            auto ctrl = ctrl_;
-            lunar::platform::startNetworkWorker("stop-cancelled-stream", [ctrl]() {
-                ctrl->stopStream(false);
-            });
-        }
+    auto context = cancel_context_;
+    if (context->finished.load()) return;
+    if (context->state.cancelRequested()) {
+        scheduleCancelCleanup(context, ctrl_);
         return;
     }
 
@@ -442,8 +537,8 @@ void StreamLoadingActivity::acknowledgeFailure() {
 
 void StreamLoadingActivity::finish(StreamLaunchResult result,
                                    const std::string& detail) {
-    if (finished_->exchange(true)) return;
-    if (completion_) completion_(result, detail);
+    if (cancel_context_->finished.exchange(true)) return;
+    if (cancel_context_->completion) cancel_context_->completion(result, detail);
 }
 
 void StreamLoadingActivity::returnToMain() {

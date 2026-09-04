@@ -69,6 +69,8 @@ esac
 echo "Building Borealis"
 git -C "$project_root/lib/borealis" apply --reverse --check \
     "$project_root/tools/borealis_switch/lunarnx-borealis-gpu-lifecycle.patch"
+git -C "$project_root/lib/borealis" apply --reverse --check \
+    "$project_root/tools/borealis_switch/lunarnx-borealis-command-buffer.patch"
 rm -rf "$project_root/lib/borealis/build_switch"
 cmake -S "$project_root/lib/borealis" \
     -B "$project_root/lib/borealis/build_switch" \
