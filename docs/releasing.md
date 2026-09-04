@@ -27,6 +27,14 @@ the project identity is compiled from `version.txt` by `Makefile.switch` as
 runtime. When cutting a release, add the new `release_<version>_*` entries to
 all three locale catalogs and place the newest card first.
 
+For the Sphaira/ForTheUsers package, keep the installed binary path stable at
+`/switch/LunarNX/LunarNX.nro`. The release asset filename may contain the
+version, but the package mapping must not. Use the release ZIP as the single
+package asset and map a versioned archive directory (for example,
+`/LunarNX-0.3.0/**/*`) into `/switch/LunarNX`; including both the standalone NRO
+and ZIP assets packages duplicate payloads. Changes to a pending store
+submission should be made on that submission's PR before it is merged.
+
 Release Please chooses the version from Conventional Commit prefixes:
 
 - `fix:` creates a patch release.
