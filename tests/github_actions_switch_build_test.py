@@ -22,9 +22,16 @@ require(workflow, 'safe.directory "$GITHUB_WORKSPACE"', "workflow")
 require(workflow, "actions/upload-artifact@v7", "workflow")
 require(workflow, "actions/download-artifact@v8", "workflow")
 require(workflow, "scripts/resolve_app_version.sh", "workflow")
+require(workflow, "tests/changelog_resource_test.py", "workflow")
 require(workflow, 'gh release upload "$RELEASE_TAG"', "workflow")
-require(workflow, "LunarNX-$APP_VERSION.zip", "workflow")
+require(workflow, 'artifact_dir="$RUNNER_TEMP/LunarNX"', "workflow")
+require(workflow, "path: ${{ runner.temp }}/LunarNX", "workflow")
+require(workflow, 'package_dir="$release_root/LunarNX"', "workflow")
+require(workflow, '"LunarNX.nro"', "workflow")
+require(workflow, '"LunarNX.zip"', "workflow")
 require(workflow, "SHA256SUMS", "workflow")
+assert 'LunarNX-$APP_VERSION.nro' not in workflow
+assert 'LunarNX-$APP_VERSION.zip' not in workflow
 assert "actions/create-release" not in workflow
 assert "softprops/action-gh-release" not in workflow
 

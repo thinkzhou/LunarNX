@@ -67,14 +67,14 @@ Xbox Cloud Gaming availability depends on account entitlement and region. PlaySt
 
 ## Installation
 
-1. Download the latest ZIP or NRO asset from the [Releases page](https://github.com/thinkzhou/LunarNX/releases). Release filenames may include the version number.
+1. Download the latest ZIP or NRO asset from the [Releases page](https://github.com/thinkzhou/LunarNX/releases). Release tags identify versions; new releases use stable filenames (older releases may retain versioned assets).
 2. Install it at the following path:
 
    ```text
    sdmc:/switch/LunarNX/LunarNX.nro
    ```
 
-   For a ZIP release, extract the packaged LunarNX directory and rename the directory to `LunarNX` if it contains a version suffix. For a standalone NRO, copy or rename the downloaded file to `LunarNX.nro` at the path above.
+   The ZIP already contains `LunarNX/LunarNX.nro`; extract that directory into the SD card's `switch/` directory. For a standalone NRO, copy it to the path above.
 
 3. Open Homebrew Menu using title override/full-memory mode, then launch LunarNX.
 

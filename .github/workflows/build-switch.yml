@@ -129,6 +129,7 @@ jobs:
           python3 tests/switch_nro_bss_test.py
           python3 tests/github_actions_switch_build_test.py
           python3 tests/bounded_video_queue_policy_test.py
+          python3 tests/changelog_resource_test.py
           python3 tests/chiaki_pmull_runtime_test.py
           python3 tests/media_pipeline_async_test.py
           python3 tests/media_pipeline_scheduling_test.py
@@ -141,7 +142,7 @@ jobs:
       - name: Package build artifact
         shell: bash
         run: |
-          artifact_dir="$RUNNER_TEMP/LunarNX-$APP_VERSION"
+          artifact_dir="$RUNNER_TEMP/LunarNX"
           mkdir -p "$artifact_dir/licenses"
           cp build/switch/LunarNX.nro "$artifact_dir/"
           cp LICENSE THIRD_PARTY_NOTICES.md "$artifact_dir/"
@@ -153,7 +154,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.version.outputs.artifact_name }}
-          path: ${{ runner.temp }}/LunarNX-${{ env.APP_VERSION }}
+          path: ${{ runner.temp }}/LunarNX
           if-no-files-found: error
           retention-days: 30
 
@@ -170,35 +171,32 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build-switch.outputs.artifact_name }}
-          path: ${{ runner.temp }}/release/LunarNX-${{ needs.build-switch.outputs.app_version }}
+          path: ${{ runner.temp }}/release/LunarNX
 
       - name: Prepare release assets
         shell: bash
-        env:
-          APP_VERSION: ${{ needs.build-switch.outputs.app_version }}
         run: |
           set -euo pipefail
 
           release_root="$RUNNER_TEMP/release"
-          package_dir="$release_root/LunarNX-$APP_VERSION"
+          package_dir="$release_root/LunarNX"
           test -f "$package_dir/LunarNX.nro"
           test -f "$package_dir/LICENSE"
           test -f "$package_dir/THIRD_PARTY_NOTICES.md"
           test -f "$package_dir/licenses/AGPL-3.0.txt"
 
-          cp "$package_dir/LunarNX.nro" "$release_root/LunarNX-$APP_VERSION.nro"
+          cp "$package_dir/LunarNX.nro" "$release_root/LunarNX.nro"
           (
             cd "$release_root"
-            zip -qr "LunarNX-$APP_VERSION.zip" "LunarNX-$APP_VERSION"
+            zip -qr "LunarNX.zip" "LunarNX"
             sha256sum \
-              "LunarNX-$APP_VERSION.nro" \
-              "LunarNX-$APP_VERSION.zip" > SHA256SUMS
+              "LunarNX.nro" \
+              "LunarNX.zip" > SHA256SUMS
           )
 
       - name: Create or update GitHub Release
         shell: bash
         env:
-          APP_VERSION: ${{ needs.build-switch.outputs.app_version }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.build-switch.outputs.release_tag }}
@@ -213,7 +211,7 @@ jobs:
           fi
 
           gh release upload "$RELEASE_TAG" \
-            "$RUNNER_TEMP/release/LunarNX-$APP_VERSION.nro" \
-            "$RUNNER_TEMP/release/LunarNX-$APP_VERSION.zip" \
+            "$RUNNER_TEMP/release/LunarNX.nro" \
+            "$RUNNER_TEMP/release/LunarNX.zip" \
             "$RUNNER_TEMP/release/SHA256SUMS" \
             --clobber

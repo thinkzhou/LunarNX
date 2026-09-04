@@ -72,14 +72,14 @@ Xbox Cloud Gaming 的可用性取决于账号权限和地区。PlayStation 远�
 
 ## 安装
 
-1. 从 [Releases 页面](https://github.com/thinkzhou/LunarNX/releases) 下载最新 ZIP 或 NRO；正式版文件名可能包含版本号。
+1. 从 [Releases 页面](https://github.com/thinkzhou/LunarNX/releases) 下载最新 ZIP 或 NRO；版本由 Release 标签区分，新发布包使用固定文件名（旧版本可能仍保留带版本号的文件名）。
 2. 将应用安装到以下路径：
 
    ```text
    sdmc:/switch/LunarNX/LunarNX.nro
    ```
 
-   如果下载 ZIP，请解压其中的 LunarNX 目录；目录名带版本号时，将其重命名为 `LunarNX`。如果单独下载 NRO，请将文件复制或重命名为上述路径中的 `LunarNX.nro`。
+   ZIP 内已经包含 `LunarNX/LunarNX.nro`，将其中的 `LunarNX` 目录解压到 SD 卡的 `switch/` 目录即可。如果单独下载 NRO，请将其复制到上述路径。
 
 3. 使用 Title Override / 完整内存模式打开 Homebrew Menu，然后启动 LunarNX。
 

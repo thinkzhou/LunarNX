@@ -5,8 +5,13 @@
 #include "qr_code_view.h"
 #include "ui_style.h"
 
+#include <cJSON.h>
+
 #include <cstdio>
+#include <cstring>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 #ifndef LUNARNX_GIT_COMMIT
 #define LUNARNX_GIT_COMMIT "unknown"
@@ -20,6 +25,95 @@ constexpr const char* kReleasesUrl =
     "https://github.com/thinkzhou/LunarNX/releases";
 constexpr const char* kDiscordInviteUrl = "https://discord.gg/cFZj8mpg2K";
 constexpr const char* kDiscordInviteDisplay = "discord.gg/cFZj8mpg2K";
+constexpr const char* kChangelogResource = "romfs:/changelog.json";
+constexpr size_t kMaxChangelogBytes = 64 * 1024;
+
+struct ReleaseEntry {
+    std::string version;
+    std::string date;
+    std::string notes;
+};
+
+std::vector<ReleaseEntry> loadGeneratedReleases() {
+    FILE* input = std::fopen(kChangelogResource, "rb");
+    if (!input) return {};
+
+    if (std::fseek(input, 0, SEEK_END) != 0) {
+        std::fclose(input);
+        return {};
+    }
+    const long length = std::ftell(input);
+    if (length <= 0 || static_cast<size_t>(length) > kMaxChangelogBytes) {
+        std::fclose(input);
+        return {};
+    }
+    std::rewind(input);
+
+    std::string data(static_cast<size_t>(length), '\0');
+    const bool read_ok =
+        std::fread(data.data(), 1, data.size(), input) == data.size();
+    std::fclose(input);
+    if (!read_ok) return {};
+
+    cJSON* root = cJSON_Parse(data.c_str());
+    const cJSON* releases = root
+                                ? cJSON_GetObjectItemCaseSensitive(root, "releases")
+                                : nullptr;
+    if (!cJSON_IsArray(releases)) {
+        cJSON_Delete(root);
+        return {};
+    }
+
+    std::vector<ReleaseEntry> result;
+    const int count = cJSON_GetArraySize(releases);
+    result.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        const cJSON* item = cJSON_GetArrayItem(releases, i);
+        const cJSON* version = item
+                                   ? cJSON_GetObjectItemCaseSensitive(item, "version")
+                                   : nullptr;
+        const cJSON* date = item
+                                ? cJSON_GetObjectItemCaseSensitive(item, "date")
+                                : nullptr;
+        const cJSON* notes = item
+                                 ? cJSON_GetObjectItemCaseSensitive(item, "notes")
+                                 : nullptr;
+        if (!cJSON_IsObject(item) || !cJSON_IsString(version) ||
+            !cJSON_IsString(date) || !cJSON_IsString(notes) ||
+            !version->valuestring || !date->valuestring || !notes->valuestring ||
+            std::strlen(version->valuestring) == 0 ||
+            std::strlen(date->valuestring) == 0 ||
+            std::strlen(notes->valuestring) == 0) {
+            continue;
+        }
+        result.push_back({version->valuestring, date->valuestring,
+                          notes->valuestring});
+    }
+    cJSON_Delete(root);
+    return result;
+}
+
+std::string localizedReleaseTitle(const std::string& version,
+                                  const std::string& fallback) {
+    if (version == "0.3.0")
+        return brls::getStr("lunarnx/about/release_030_title");
+    if (version == "0.2.0")
+        return brls::getStr("lunarnx/about/release_020_title");
+    if (version == "0.1.0")
+        return brls::getStr("lunarnx/about/release_010_title");
+    return fallback;
+}
+
+std::string localizedReleaseNotes(const std::string& version,
+                                  const std::string& fallback) {
+    if (version == "0.3.0")
+        return brls::getStr("lunarnx/about/release_030_notes");
+    if (version == "0.2.0")
+        return brls::getStr("lunarnx/about/release_020_notes");
+    if (version == "0.1.0")
+        return brls::getStr("lunarnx/about/release_010_notes");
+    return fallback;
+}
 
 brls::Label* makeLabel(const std::string& text, float size, NVGcolor color,
                        bool wrapping = false) {
@@ -598,17 +692,35 @@ brls::View* AboutActivity::makeChangelogTab() {
     intro->addView(releases);
     root->addView(intro);
 
-    auto* current = makeReleaseCard(
-        brls::getStr("lunarnx/about/release_020_title"),
-        brls::getStr("lunarnx/about/release_020_date"),
-        brls::getStr("lunarnx/about/release_020_notes"));
-    root->addView(current);
-    auto* first = makeReleaseCard(
-        brls::getStr("lunarnx/about/release_010_title"),
-        brls::getStr("lunarnx/about/release_010_date"),
-        brls::getStr("lunarnx/about/release_010_notes"));
-    first->setMarginTop(10);
-    root->addView(first);
+    bool has_release = false;
+    std::unordered_set<std::string> rendered_versions;
+    const auto add_release = [&](const ReleaseEntry& release) {
+        if (release.version.empty() ||
+            !rendered_versions.insert(release.version).second) {
+            return;
+        }
+
+        const std::string fallback_title = "v" + release.version;
+        auto* card = makeReleaseCard(
+            localizedReleaseTitle(release.version, fallback_title),
+            release.date,
+            localizedReleaseNotes(release.version, release.notes));
+        if (has_release) card->setMarginTop(10);
+        root->addView(card);
+        has_release = true;
+    };
+
+    for (const auto& release : loadGeneratedReleases()) add_release(release);
+
+    // Keep older binaries usable if they predate the generated resource.
+    if (!has_release) {
+        add_release({"0.3.0", brls::getStr("lunarnx/about/release_030_date"),
+                     brls::getStr("lunarnx/about/release_030_notes")});
+        add_release({"0.2.0", brls::getStr("lunarnx/about/release_020_date"),
+                     brls::getStr("lunarnx/about/release_020_notes")});
+    }
+    add_release({"0.1.0", brls::getStr("lunarnx/about/release_010_date"),
+                 brls::getStr("lunarnx/about/release_010_notes")});
     scroll->setContentView(root);
     return scroll;
 }
