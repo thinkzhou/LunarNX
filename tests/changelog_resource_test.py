@@ -59,5 +59,7 @@ release_please = generate(
 """
 )
 assert "Future release feature" in release_please[0]["notes"]
+assert "**" not in release_please[0]["notes"]
+assert "https://" not in release_please[0]["notes"]
 
 print("Changelog resource generation tests passed")

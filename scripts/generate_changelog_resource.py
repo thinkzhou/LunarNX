@@ -19,6 +19,16 @@ HEADING = re.compile(
     r"^##\s+\[?(?P<version>\d+\.\d+\.\d+)\]?"
     r"(?:\([^)]*\))?\s+\((?P<date>\d{4}-\d{2}-\d{2})\)\s*$"
 )
+MARKDOWN_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+
+
+def clean_markdown(text: str) -> str:
+    """Keep release summaries readable in Borealis' plain-text labels."""
+
+    text = MARKDOWN_LINK.sub(r"\1", text)
+    text = text.replace("**", "").replace("__", "")
+    text = text.replace("`", "")
+    return text.strip()
 
 
 def parse_releases(markdown: str) -> list[dict[str, str]]:
@@ -52,12 +62,11 @@ def parse_releases(markdown: str) -> list[dict[str, str]]:
         if stripped.startswith(("- ", "* ")):
             bullets = current["bullets"]
             assert isinstance(bullets, list)
-            if len(bullets) < 3:
-                bullets.append(stripped[2:].strip())
+            bullets.append(clean_markdown(stripped[2:]))
         elif not current["in_sections"]:
             description = current["description"]
             assert isinstance(description, list)
-            description.append(stripped)
+            description.append(clean_markdown(stripped))
 
     result: list[dict[str, str]] = []
     for release in releases:
