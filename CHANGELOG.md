@@ -4,6 +4,10 @@ Notable LunarNX changes are recorded here by the automated release workflow.
 
 ## [0.4.0](https://github.com/thinkzhou/LunarNX/compare/v0.3.0...v0.4.0) (2026-09-04)
 
+LunarNX 0.4.0 focuses on faster reconnection, safer stream teardown, and
+predictable release packaging. It reuses successful Xbox and PlayStation
+network routes, improves cancellation and UI lifecycle handling, and publishes
+stable assets for Sphaira installation.
 
 ### Features
 
@@ -17,9 +21,7 @@ Notable LunarNX changes are recorded here by the automated release workflow.
 * **ps:** restore remote connection reliability ([5673b42](https://github.com/thinkzhou/LunarNX/commit/5673b4290be0d3acd5b06415d852caa785ec0690))
 * **ps:** restore remote reliability and reuse successful routes ([845e8d5](https://github.com/thinkzhou/LunarNX/commit/845e8d51572c26b47ae465ab30b4280e0ce343cc))
 * **release:** make versions and packages future-proof ([9ccaef7](https://github.com/thinkzhou/LunarNX/commit/9ccaef75321e7d4cc79cc01fb41aeccc7581c692))
-* **release:** make versions and packages future-proof ([6431b64](https://github.com/thinkzhou/LunarNX/commit/6431b6487814ed4493841950aa907843cfba3a57))
 * **ui:** coordinate async teardown with view lifecycle ([e3268a1](https://github.com/thinkzhou/LunarNX/commit/e3268a13408c26579d841132c80b71d3aee76685))
-* **ui:** coordinate async teardown with view lifecycle ([e203d1a](https://github.com/thinkzhou/LunarNX/commit/e203d1a857fc2d949392463905edd859f601ac30))
 * **ui:** harden stream exit and connection cancellation ([52d203f](https://github.com/thinkzhou/LunarNX/commit/52d203fe971b9390669b46386b2822e5fce3f71e))
 * **ui:** harden stream exit rendering ([9f7a012](https://github.com/thinkzhou/LunarNX/commit/9f7a01280db1fca5a5069da487e45c022bbf071b))
 * **ui:** preserve Borealis dialog animations ([7223402](https://github.com/thinkzhou/LunarNX/commit/7223402ba93a3d9104b3e141a5d2767542559a7c))
