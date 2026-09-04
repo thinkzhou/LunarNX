@@ -50,7 +50,8 @@ for patch in \
     lunarnx-chiaki-recvbuf.patch \
     lunarnx-chiaki-packetstats-wrap.patch \
     lunarnx-chiaki-transport-diagnostics.patch \
-    lunarnx-chiaki-key-position-diagnostics.patch
+    lunarnx-chiaki-key-position-diagnostics.patch \
+    lunarnx-chiaki-route-preference.patch
 do
     case "$patch" in
         lunarnx-chiaki-transport-diagnostics.patch|\

@@ -63,6 +63,7 @@ set(LUNARNX_SOURCES
     # PlayStation
     src/ps/chiaki_log_adapter.cpp
     src/ps/ps_credentials.cpp
+    src/ps/ps_route_preferences.cpp
     src/ps/ps_discovery.cpp
     src/ps/ps_registration.cpp
     src/ps/ps_manager.cpp

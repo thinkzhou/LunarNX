@@ -43,6 +43,8 @@ xcloud_library_cache.json
 xbox_console_cache.json
 xbox_ice_preferences.json
 ps_console_cache.json
+ps_route_preferences.json
+ps_route_preferences.json.tmp
 ps_credentials.json
 ps_token.json
 ps_registration.json

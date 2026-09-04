@@ -17,6 +17,7 @@ def main():
     container_build_script = Path(
         "tools/chiaki_switch/build_in_container.sh").read_text()
     stun_patch = Path("tools/chiaki_switch/lunarnx-chiaki-stun-order.patch").read_text()
+    route_patch = Path("tools/chiaki_switch/lunarnx-chiaki-route-preference.patch").read_text()
     reliability_patch = Path("tools/chiaki_switch/lunarnx-chiaki-holepunch-reliability.patch").read_text()
     http_status_patch = Path("tools/chiaki_switch/lunarnx-chiaki-http-status.patch").read_text()
     rtt_patch = Path("tools/chiaki_switch/lunarnx-chiaki-stream-rtt.patch").read_text()
@@ -41,6 +42,7 @@ def main():
             "lunarnx-chiaki-stun-order.patch" in container_build_script and
             "lunarnx-chiaki-holepunch-reliability.patch" in container_build_script and
             "lunarnx-chiaki-http-status.patch" in container_build_script and
+            "lunarnx-chiaki-route-preference.patch" in container_build_script and
             "lunarnx-chiaki-stream-rtt.patch" in container_build_script and
             "git -C \"$src\" apply" in container_build_script,
             "Switch Chiaki build must apply focused reliability patches")
@@ -68,6 +70,10 @@ def main():
     require(all(stun_patch.find(host) < stun_patch.find(stun_order[i + 1])
                 for i, host in enumerate(stun_order[:-1])),
             "focused STUN patch must preserve measured server ordering")
+    require("set_preferred_stun_server" in route_patch and
+            "set_preferred_remote_candidate" in route_patch and
+            "get_selected_remote_candidate" in route_patch,
+            "route preference patch must expose soft preference and result APIs")
     require("chiaki_holepunch_stubs.c" not in cmake,
             "Switch CMake builds must not replace live PSN dependencies with stubs")
     require("CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4" in wrapper,

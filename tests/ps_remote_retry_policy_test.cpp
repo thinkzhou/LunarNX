@@ -25,14 +25,17 @@ int main() {
     assert(profile.port_guessing_sockets == 64);
     assert(profile.port_guesses == 0);
 
-    // A random allocation observed on a successful CTRL offer upgrades the
-    // pending DATA offer without requiring a failed media session first.
+    // A random allocation observed on a successful CTRL offer must not mutate
+    // the pending DATA offer. The v0.2 baseline lets Chiaki use its own
+    // bounded random-allocation handling for that same session.
     PsRemoteRetryPolicy data_policy;
     data_policy.recordStunAllocation(false);
     assert(!data_policy.natCompatibilityEnabled());
     data_policy.recordStunAllocation(true);
     profile = data_policy.attemptProfile();
-    assert(profile.mode == PsNatTraversalMode::Compatibility);
+    assert(profile.mode == PsNatTraversalMode::Fast);
+    assert(profile.port_guessing_sockets == 64);
+    assert(profile.port_guesses == 0);
 
     // A transient PSN/WebSocket failure retries without adding NAT overhead.
     assert(policy.recordFailure("session create", true, true));

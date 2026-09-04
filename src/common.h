@@ -31,6 +31,7 @@ inline const char* get_cover_cache_dir() { return "sdmc:/switch/LunarNX/cache/co
 inline const char* get_ps_credentials_path() { return "sdmc:/switch/LunarNX/ps_credentials.json"; }
 inline const char* get_psn_token_path() { return "sdmc:/switch/LunarNX/psn_token.json"; }
 inline const char* get_ps_console_cache_path() { return "sdmc:/switch/LunarNX/ps_console_cache.json"; }
+inline const char* get_ps_route_preferences_path() { return "sdmc:/switch/LunarNX/ps_route_preferences.json"; }
 inline const char* get_psn_callback_import_path() { return "sdmc:/switch/LunarNX/psn_callback.txt"; }
 inline const char* get_xbox_console_cache_path() { return "sdmc:/switch/LunarNX/xbox_console_cache.json"; }
 inline const char* get_xbox_ice_preferences_path() { return "sdmc:/switch/LunarNX/xbox_ice_preferences.json"; }
@@ -43,6 +44,7 @@ inline const char* get_cover_cache_dir() { return "./cache/covers"; }
 inline const char* get_ps_credentials_path() { return "./ps_credentials.json"; }
 inline const char* get_psn_token_path() { return "./psn_token.json"; }
 inline const char* get_ps_console_cache_path() { return "./ps_console_cache.json"; }
+inline const char* get_ps_route_preferences_path() { return "./ps_route_preferences.json"; }
 inline const char* get_psn_callback_import_path() { return "./psn_callback.txt"; }
 inline const char* get_xbox_console_cache_path() { return "./xbox_console_cache.json"; }
 inline const char* get_xbox_ice_preferences_path() { return "./xbox_ice_preferences.json"; }

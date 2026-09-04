@@ -23,12 +23,12 @@ def main():
             'console.stable_id = "psn:main-ps4"' in repository and
             "PsRemoteEndpointKind::MainPS4" in repository,
             "PS4 remote play must model Sony's account-scoped Main PS4 endpoint")
-    load_start = repository.index("bool PsConsoleRepository::loadPsnCache")
-    file_open = repository.index("std::fopen", load_start)
-    main_ps4_insert = repository.index(
-        "psn_consoles_.push_back(makeMainPs4RemoteConsole())", load_start)
-    require(main_ps4_insert < file_open,
-            "Main PS4 must remain available when the PS5 device cache is absent")
+    require("hasRegisteredPs4(credentials_)" in repository,
+            "Main PS4 must only be exposed when local registration proves the account has a PS4")
+    require("if (!account_id.empty())" not in repository.split(
+                "bool PsConsoleRepository::loadPsnCache", 1)[1].split(
+                "FILE* file", 1)[0],
+            "signing in alone must not synthesize a phantom Main PS4")
     require('cJSON_GetObjectItemCaseSensitive(root, "account_id")' in repository and
             "account_id != account->valuestring" in repository,
             "PS cache must be scoped to the signed-in PSN account")

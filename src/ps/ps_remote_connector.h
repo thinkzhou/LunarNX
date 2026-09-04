@@ -4,6 +4,7 @@
 
 #include "ps_connection_plan.h"
 #include "ps_connection_trace.h"
+#include "ps_route_preferences.h"
 #include <netinet/in.h>
 #include <chiaki/remote/holepunch.h>
 #include <chiaki/log.h>

@@ -37,13 +37,17 @@ PsConsoleRepository::~PsConsoleRepository() {
 bool PsConsoleRepository::loadPsnCache(const std::string& account_id) {
     constexpr long kMaxCacheBytes = 1024 * 1024;
     std::lock_guard<std::mutex> file_lock(file_mutex_);
+    bool expose_main_ps4 = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         psn_consoles_.clear();
-        if (!account_id.empty()) {
+        expose_main_ps4 = hasRegisteredPs4(credentials_);
+        if (!account_id.empty() && expose_main_ps4) {
             // Sony exposes the primary PS4 as an account-scoped endpoint. It
             // does not come from the PS5 device list and remains usable even
-            // when that cache is absent or cannot be parsed.
+            // when that cache is absent or cannot be parsed. Only expose it
+            // after local registration proves this installation has a PS4;
+            // otherwise every PSN account sees a phantom console.
             psn_consoles_.push_back(makeMainPs4RemoteConsole());
         }
     }
@@ -87,7 +91,7 @@ bool PsConsoleRepository::loadPsnCache(const std::string& account_id) {
         cached.push_back(std::move(console));
     }
     cJSON_Delete(root);
-    cached.push_back(makeMainPs4RemoteConsole());
+    if (expose_main_ps4) cached.push_back(makeMainPs4RemoteConsole());
     const size_t cached_count = cached.size();
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -290,9 +294,14 @@ bool PsConsoleRepository::fetchPsnDevices(const std::string& access_token,
     cJSON_Delete(root);
     if (cancel && cancel()) return false;
     // PS4 Remote Play addresses the account's Main PS4. Sony does not expose
-    // it through the PS5 DUID list; Chiaki learns its DUID from the PSN
-    // session notification after wake-up.
-    fetched.push_back(makeMainPs4RemoteConsole());
+    // it through the PS5 DUID list, so only offer that synthetic route when a
+    // local registration proves this installation actually uses a PS4.
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (hasRegisteredPs4(credentials_)) {
+            fetched.push_back(makeMainPs4RemoteConsole());
+        }
+    }
     const size_t fetched_count = fetched.size();
 
     {

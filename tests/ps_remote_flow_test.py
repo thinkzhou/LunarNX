@@ -61,9 +61,15 @@ def main():
             'phase == "control punch"' in retry_policy,
             "CTRL candidate failure must enable a bounded wider NAT fallback")
     require("chiaki_holepunch_session_get_stun_allocation" in connector and
-            "retry_policy.recordStunAllocation(random_allocation)" in connector and
-            'on_status("Preparing media channel for restrictive NAT...")' in connector,
-            "random CTRL STUN allocation must upgrade the later DATA holepunch")
+            "retry_policy.recordStunAllocation(random_allocation)" in connector,
+            "remote diagnostics must retain the observed CTRL STUN allocation")
+    require("PsRoutePreferenceStore().load" in connector and
+            "chiaki_holepunch_session_set_preferred_stun_server" in connector and
+            "chiaki_holepunch_session_set_preferred_remote_candidate" in connector,
+            "PS remote startup must apply soft route preferences")
+    require('on_status("Preparing media channel for restrictive NAT...")' not in connector and
+            '"data-nat-policy", "upgraded"' not in connector,
+            "a successful CTRL offer must retain the v0.2 DATA holepunch parameters")
     require("Ryubing UDP relay is unavailable with Akira Chiaki" in connector,
             "Ryubing profile must fail visibly when using unpatched Akira Chiaki")
     require("kRemoteMaxAttempts = 3" in connector and
