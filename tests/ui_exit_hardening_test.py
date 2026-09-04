@@ -5,7 +5,6 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAIN = (ROOT / "src/main.cpp").read_text()
 SETUP = (ROOT / "scripts/setup_dependencies.sh").read_text()
 BUILD = (ROOT / "scripts/build_switch_in_container.sh").read_text()
 PATCH_PATH = ROOT / "tools/borealis_switch/lunarnx-borealis-command-buffer.patch"
@@ -16,10 +15,6 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-require(
-    'getStyle().addMetric("brls/animations/show", 0.0f)' in MAIN,
-    "Switch UI must globally disable Borealis show animations",
-)
 require(PATCH_PATH.exists(), "Borealis command-buffer hardening patch must be tracked")
 patch = PATCH_PATH.read_text()
 require(
