@@ -535,6 +535,8 @@ brls::View* AboutActivity::makeProjectTab() {
     project->addView(makeDependencyRow(
         "XStreaming", "github.com/Geocld/XStreaming"));
     project->addView(makeDependencyRow(
+        "PeaSyo", "github.com/Geocld/PeaSyo"));
+    project->addView(makeDependencyRow(
         "Moonlight-Switch", "github.com/XITRIX/Moonlight-Switch"));
     project->addView(makeDependencyRow(
         "chiaki-ng", "github.com/chiaki-ng/chiaki-ng"));

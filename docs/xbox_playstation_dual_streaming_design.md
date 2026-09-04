@@ -1,8 +1,14 @@
 # LunarNX Xbox + PlayStation 双平台串流技术方案
 
-状态：设计草案  
+状态：已实现；本文保留原始设计与分阶段计划作为架构记录
 日期：2026-07-30  
 目标版本：v0.2+  
+
+> 当前状态（2026-09）：Xbox 主机 Remote Play、Xbox Cloud Gaming、PS4/PS5
+> 局域网发现/配对/唤醒/串流，以及 PS5 通过 PSN 的远程串流均已在真实
+> Nintendo Switch 硬件上完成端到端测试。当前实现状态以
+> [TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) 和项目 README 为准；下方 Phase
+> 列表记录的是实施过程，不再代表待办清单。
 
 ## 1. 目标与约束
 
