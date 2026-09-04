@@ -29,6 +29,11 @@ assert root_package["release-type"] == "simple"
 assert root_package["include-component-in-tag"] is False
 assert root_package["package-name"] == "LunarNX"
 
+cmake = (ROOT / "CMakeLists.txt").read_text()
+require(cmake, 'file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version.txt"', "CMake")
+require(cmake, "project(LunarNX VERSION ${LUNARNX_PROJECT_VERSION}", "CMake")
+assert "project(LunarNX VERSION 0." not in cmake
+
 release_workflow = (ROOT / ".github/workflows/release-please.yml").read_text()
 require(
     release_workflow,

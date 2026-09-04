@@ -49,6 +49,7 @@ APP_TITLE ?= LunarNX
 DEV_BRIDGE_UPLOAD_TOKEN ?=
 GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 EXTRA_DFLAGS ?=
+CHANGELOG_RESOURCE = $(BUILD)/generated/changelog.json
 
 ifeq ($(IPV6),0)
 IPV6_DFLAG = -DCONFIG_IPV6=0
@@ -213,7 +214,7 @@ DEPFILES = $(sort $(ALL_OBJS:.o=.d) $(RHO_CXX_OBJS:.o=.d) $(RHO_C_OBJS:.o=.d))
 
 -include $(DEPFILES)
 
-$(ALL_OBJS) $(RHO_CXX_OBJS) $(RHO_C_OBJS): Makefile.switch
+$(ALL_OBJS) $(RHO_CXX_OBJS) $(RHO_C_OBJS): Makefile.switch version.txt
 
 RHO_LIBS = -Wl,--start-group -lborealis -lfmt -lyogacore -ltinyxml2 -ldeko3d \
     -lz -lzstd -lbz2 -lopus \
@@ -230,13 +231,18 @@ $(TARGET): $(BUILD)/LunarNX.elf $(ROMFS_STAGE_STAMP)
 	$(NACP) --create "$(APP_TITLE)" "thinkzhou" $(APP_VERSION) $(BUILD)/nacp.tmp
 	$(ELF2NRO) $< $@ --icon=res/icon.jpg --nacp=$(BUILD)/nacp.tmp --romfsdir=$(ROMFS_STAGE)
 
-$(ROMFS_STAGE_STAMP): $(ROMFS_SHADERS) $(BOREALIS_RESOURCES) $(APP_ROMFS_FILES) $(XCLOUD_TITLES_RESOURCE)
+$(ROMFS_STAGE_STAMP): $(ROMFS_SHADERS) $(BOREALIS_RESOURCES) $(APP_ROMFS_FILES) $(XCLOUD_TITLES_RESOURCE) $(CHANGELOG_RESOURCE)
 	rm -rf $(ROMFS_STAGE)
 	mkdir -p $(ROMFS_STAGE)
 	cp -R lib/borealis/resources/. $(ROMFS_STAGE)/
 	cp -R romfs/. $(ROMFS_STAGE)/
 	cp $(XCLOUD_TITLES_RESOURCE) $(ROMFS_STAGE)/xcloud_titles.json
+	cp $(CHANGELOG_RESOURCE) $(ROMFS_STAGE)/changelog.json
 	touch $@
+
+$(CHANGELOG_RESOURCE): CHANGELOG.md scripts/generate_changelog_resource.py
+	@mkdir -p $(dir $@)
+	python3 scripts/generate_changelog_resource.py CHANGELOG.md $@
 
 romfs/shaders/basic_vsh.dksh: shaders/basic_vsh.glsl
 	@mkdir -p $(dir $@)

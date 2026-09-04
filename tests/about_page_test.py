@@ -43,7 +43,8 @@ require("makeDependencyTile" not in ABOUT and
         '"libnx"' in ABOUT and '"deko3d"' in ABOUT and
         '"wiliwili"' in ABOUT,
         "About project acknowledgements must use one expanded single-column list")
-require("makeReleaseCard" in ABOUT and "release_030_notes" in ABOUT and
+require("makeReleaseCard" in ABOUT and "loadGeneratedReleases" in ABOUT and
+        "changelog.json" in ABOUT and "release_030_notes" in ABOUT and
         "release_020_notes" in ABOUT and
         "release_010_notes" in ABOUT and "kReleasesUrl" in ABOUT,
         "About changelog tab must expose versioned notes and the release URL")
