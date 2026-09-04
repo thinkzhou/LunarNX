@@ -173,8 +173,6 @@ jobs:
 
       - name: Prepare release assets
         shell: bash
-        env:
-          APP_VERSION: ${{ needs.build-switch.outputs.app_version }}
         run: |
           set -euo pipefail
 
@@ -197,7 +195,6 @@ jobs:
       - name: Create or update GitHub Release
         shell: bash
         env:
-          APP_VERSION: ${{ needs.build-switch.outputs.app_version }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.build-switch.outputs.release_tag }}
