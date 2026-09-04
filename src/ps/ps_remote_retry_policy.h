@@ -64,11 +64,12 @@ public:
         return true;
     }
 
-    // A successful CTRL punch can still reveal random external port
-    // allocation. Promote before Chiaki creates its DATA offer so that media
-    // does not fail after an apparently successful control bootstrap.
+    // Keep successful CTRL and DATA setup on the same parameters. Chiaki
+    // already handles random allocation with its own bounded candidate set;
+    // widening the same live session here regressed DATA-hole reliability on
+    // Switch. Retain this observation hook for diagnostics and policy tests.
     void recordStunAllocation(bool random_allocation) {
-        if (random_allocation) nat_compatibility_ = true;
+        (void)random_allocation;
     }
 
     bool natCompatibilityEnabled() const { return nat_compatibility_; }

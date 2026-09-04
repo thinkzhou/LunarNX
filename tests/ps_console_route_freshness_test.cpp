@@ -2,10 +2,24 @@
 
 #include <cassert>
 #include <cstring>
+#include <vector>
 
 using namespace lunar::ps;
 
 int main() {
+    std::vector<RegisteredCredential> registered;
+    assert(!hasRegisteredPs4(registered));
+
+    RegisteredCredential known_ps5;
+    known_ps5.target = 1000100;
+    registered.push_back(known_ps5);
+    assert(!hasRegisteredPs4(registered));
+
+    RegisteredCredential known_ps4;
+    known_ps4.target = 1000;
+    registered.push_back(known_ps4);
+    assert(hasRegisteredPs4(registered));
+
     RegisteredCredential ps4_credential;
     ps4_credential.target = 1000;
     std::memcpy(ps4_credential.rp_regist_key, "12345678", 8);

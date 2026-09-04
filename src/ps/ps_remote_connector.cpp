@@ -341,33 +341,6 @@ bool PsRemoteConnector::connect(const PsConnectionPlan& plan,
                 retry_policy.recordStunAllocation(random_allocation);
             }
 
-            if (attempt_profile.mode == PsNatTraversalMode::Fast &&
-                retry_policy.natCompatibilityEnabled()) {
-                // CTRL has already succeeded. Upgrade this same session before
-                // Chiaki creates the DATA offer so audio/video gets a router
-                // candidate and the wider bounded guessing window.
-                const PsRemoteAttemptProfile data_profile =
-                    retry_policy.attemptProfile();
-                chiaki_holepunch_session_set_port_guessing_socks(
-                    session, data_profile.port_guessing_sockets);
-                chiaki_holepunch_session_set_port_guessing_ports(
-                    session, data_profile.port_guesses);
-                if (on_status) {
-                    on_status("Preparing media channel for restrictive NAT...");
-                }
-                // Do not start session-owned UPnP discovery here. It cannot be
-                // interrupted safely inside miniupnpc and can consume the DATA
-                // registration window. Wider bounded guessing remains enabled.
-                diagnosticLog("ps-remote",
-                              "DATA NAT compatibility sockets=%d guesses=%d upnp=deferred",
-                              data_profile.port_guessing_sockets,
-                              data_profile.port_guesses);
-                if (trace_) trace_->record(
-                    "data-nat-policy", "upgraded",
-                    "attempt=%d sockets=%d guesses=%d upnp=0 reason=random-stun",
-                    attempt, data_profile.port_guessing_sockets,
-                    data_profile.port_guesses);
-            }
             if (trace_) trace_->record(
                 "remote-attempt", "control-ready",
                 "attempt=%d elapsed_ms=%lld",

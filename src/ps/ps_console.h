@@ -1,11 +1,13 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace lunar::ps {
 
@@ -93,6 +95,14 @@ struct RegisteredCredential {
     uint8_t rp_key[0x10] = {};
     std::string console_login_pin;
 };
+
+inline bool hasRegisteredPs4(
+    const std::vector<RegisteredCredential>& credentials) {
+    return std::any_of(credentials.begin(), credentials.end(),
+        [](const RegisteredCredential& credential) {
+            return credential.target > 0 && !isPs5Target(credential.target);
+        });
+}
 
 struct PsConsole {
     std::string stable_id;
