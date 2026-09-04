@@ -19,6 +19,14 @@ The ZIP is the preferred distribution because it includes LunarNX's license,
 the third-party notices, and the AGPL-3.0 license required by the combined
 Xbox/PlayStation binary.
 
+The About page uses two separate version mechanisms. The version shown beside
+the project identity is compiled from `version.txt` by `Makefile.switch` as
+`LUNARNX_VERSION`. The in-app release cards are localized strings in
+`romfs/i18n/*/lunarnx.json`, selected explicitly by
+`src/ui/about_activity.cpp`; they are not generated from `CHANGELOG.md` at
+runtime. When cutting a release, add the new `release_<version>_*` entries to
+all three locale catalogs and place the newest card first.
+
 Release Please chooses the version from Conventional Commit prefixes:
 
 - `fix:` creates a patch release.

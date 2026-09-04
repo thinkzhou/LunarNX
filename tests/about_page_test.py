@@ -43,7 +43,8 @@ require("makeDependencyTile" not in ABOUT and
         '"libnx"' in ABOUT and '"deko3d"' in ABOUT and
         '"wiliwili"' in ABOUT,
         "About project acknowledgements must use one expanded single-column list")
-require("makeReleaseCard" in ABOUT and "release_020_notes" in ABOUT and
+require("makeReleaseCard" in ABOUT and "release_030_notes" in ABOUT and
+        "release_020_notes" in ABOUT and
         "release_010_notes" in ABOUT and "kReleasesUrl" in ABOUT,
         "About changelog tab must expose versioned notes and the release URL")
 require('"img/support/wechat.png"' in ABOUT and
@@ -77,7 +78,8 @@ for locale in ("en-US", "zh-Hans", "zh-Hant"):
         "home_entry_title", "tab_project", "tab_changelog", "tab_community",
         "tab_support",
         "author_role", "project_description", "source_code", "releases",
-        "open_source_projects", "release_020_notes", "release_010_notes",
+        "open_source_projects", "release_030_notes", "release_020_notes",
+        "release_010_notes",
         "international_group", "international_hint", "community_qr_missing",
         "community_privacy", "support_message", "wechat_pay", "alipay",
         "payment_qr_missing",

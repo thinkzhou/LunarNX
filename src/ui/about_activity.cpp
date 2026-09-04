@@ -599,10 +599,16 @@ brls::View* AboutActivity::makeChangelogTab() {
     root->addView(intro);
 
     auto* current = makeReleaseCard(
+        brls::getStr("lunarnx/about/release_030_title"),
+        brls::getStr("lunarnx/about/release_030_date"),
+        brls::getStr("lunarnx/about/release_030_notes"));
+    root->addView(current);
+    auto* previous = makeReleaseCard(
         brls::getStr("lunarnx/about/release_020_title"),
         brls::getStr("lunarnx/about/release_020_date"),
         brls::getStr("lunarnx/about/release_020_notes"));
-    root->addView(current);
+    previous->setMarginTop(10);
+    root->addView(previous);
     auto* first = makeReleaseCard(
         brls::getStr("lunarnx/about/release_010_title"),
         brls::getStr("lunarnx/about/release_010_date"),
