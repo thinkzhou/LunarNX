@@ -8,6 +8,7 @@ occurs before it is reached, while shutdown waits for the UI's GPU mutex.
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,9 +121,18 @@ with tempfile.TemporaryDirectory(prefix="lunarnx-presentation-lock-") as temp:
     binary = Path(temp) / "test"
     cpp.write_text(source)
     command = [os.environ.get("CXX", "c++"), "-std=c++17", "-pthread"]
-    libcxx = Path("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1")
-    if libcxx.exists():
-        command += ["-isystem", str(libcxx)]
+    if sys.platform == "darwin":
+        sdk = Path(subprocess.check_output(
+            ["xcrun", "--sdk", "macosx", "--show-sdk-path"], text=True).strip())
+        command += ["-isysroot", str(sdk)]
+        # Prefer the compiler's own libc++. Some Command Line Tools installs
+        # omit its search path; only then use headers from the SAME SDK.
+        probe = subprocess.run(
+            command + ["-x", "c++", "-fsyntax-only", "-"],
+            input="#include <mutex>\n", text=True, capture_output=True)
+        libcxx = sdk / "usr/include/c++/v1"
+        if probe.returncode != 0 and libcxx.exists():
+            command += ["-isystem", str(libcxx)]
     subprocess.run(command + [str(cpp), "-o", str(binary)], check=True)
     try:
         subprocess.run([str(binary)], check=True, timeout=5)
