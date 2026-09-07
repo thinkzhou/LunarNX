@@ -23,9 +23,10 @@ PlayStation 游戏安装到 Switch：它负责把主机或 Xbox 云端的画面�
 1. 从 [GitHub Releases](https://github.com/thinkzhou/LunarNX/releases/latest)
    下载最新版本。
 2. 用 USB、读卡器或你常用的 SD 卡管理工具将 Switch 连接到电脑。
-3. 如果下载的是 ZIP，将其中的 `LunarNX` 文件夹解压到 SD 卡的 `switch/`
-   目录；ZIP 已经包含 `LunarNX/LunarNX.nro`。如果下载的是单独 NRO，则把
-   它复制到 `switch/LunarNX/`。完成后的主要文件路径应为：
+3. 如果下载的是 ZIP，将其中类似 `LunarNX-0.3.1` 的版本目录重命名为
+   `LunarNX`，再解压到 SD 卡的 `switch/` 目录；ZIP 内包含
+   `LunarNX-0.3.1/LunarNX.nro`。如果下载的是单独 NRO，则把它复制到
+   `switch/LunarNX/`。完成后的主要文件路径应为：
 
    ```text
    SD卡:/switch/LunarNX/LunarNX.nro
