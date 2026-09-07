@@ -20,27 +20,6 @@
 namespace lunar::ui {
 namespace {
 
-// Resolution-independent linked-wheel mark for the Steam Remote Play entry.
-class SteamPlatformMark : public brls::View {
-    void draw(NVGcontext* vg, float x, float y, float w, float h,
-              brls::Style, brls::FrameContext*) override {
-        nvgSave(vg);
-        nvgTranslate(vg, x, y);
-        nvgScale(vg, w / 82.0f, h / 82.0f);
-        nvgStrokeColor(vg, uiPalette().text);
-        nvgStrokeWidth(vg, 7);
-        nvgBeginPath(vg);
-        nvgMoveTo(vg, 8, 49); nvgLineTo(vg, 28, 58);
-        nvgMoveTo(vg, 34, 54); nvgLineTo(vg, 57, 29);
-        nvgStroke(vg);
-        nvgBeginPath(vg); nvgCircle(vg, 29, 59, 12); nvgStroke(vg);
-        nvgBeginPath(vg); nvgCircle(vg, 60, 25, 17); nvgStroke(vg);
-        nvgStrokeWidth(vg, 3);
-        nvgBeginPath(vg); nvgCircle(vg, 60, 25, 9); nvgStroke(vg);
-        nvgRestore(vg);
-    }
-};
-
 brls::Button* makePlatformTile(const std::string& title,
                                const std::string& detail,
                                const std::string& account_state,
@@ -67,17 +46,11 @@ brls::Button* makePlatformTile(const std::string& title,
     logo_surface->setJustifyContent(brls::JustifyContent::CENTER);
     logo_surface->setBackgroundColor(p.surface_alt);
     logo_surface->setCornerRadius(8);
-    if (logo_resource.empty()) {
-        auto* logo = new SteamPlatformMark();
-        logo->setWidth(82); logo->setHeight(82);
-        logo_surface->addView(logo);
-    } else {
-        auto* logo = new brls::Image();
-        logo->setWidth(82); logo->setHeight(82);
-        logo->setScalingType(brls::ImageScalingType::FIT);
-        logo->setImageFromRes(logo_resource);
-        logo_surface->addView(logo);
-    }
+    auto* logo = new brls::Image();
+    logo->setWidth(82); logo->setHeight(82);
+    logo->setScalingType(brls::ImageScalingType::FIT);
+    logo->setImageFromRes(logo_resource);
+    logo_surface->addView(logo);
     tile->addView(logo_surface);
 
     auto* copy = new brls::Box(brls::Axis::COLUMN);
@@ -218,7 +191,7 @@ brls::View* PlatformActivity::createContentView() {
     auto* steam_tile = makePlatformTile(
         brls::getStr("lunarnx/platform/steam_title"),
         brls::getStr("lunarnx/platform/steam_desc"),
-        brls::getStr("lunarnx/steam_link/pair"), "",
+        brls::getStr("lunarnx/steam_link/pair"), "img/platform/steam.png",
         [this]() {
             diagnosticLog("ui-platform", "Steam Link Open clicked");
             openSteamLink();
