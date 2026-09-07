@@ -61,8 +61,17 @@ build/steamlink-desktop-stream-probe --pin <remote-play-security-pin> --duration
 ```
 
 `--pin` is the host's Remote Play security PIN and is separate from the
-four-digit pairing code. `--no-display` keeps the probe headless while still
-recording and counting media callbacks. A successful end-to-end run must show
+four-digit pairing code. If the device was paired by an earlier process, use
+`--pair-code <four-digit-pairing-code>` to authorize and stream in one process;
+this is useful for testing clients that do not yet persist Steam's device token:
+
+```sh
+build/steamlink-desktop-stream-probe --pair-code <pairing-code> \
+  --pin <remote-play-security-pin> --duration 60
+```
+
+`--no-display` keeps the probe headless while still recording and counting media
+callbacks. A successful end-to-end run must show
 `streaming request success`, `session connected`, a negotiated `video start`,
 and non-zero video/audio packet summaries. A host with no running game may
 reject the request or require a security PIN; that is a host-state result, not

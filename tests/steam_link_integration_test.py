@@ -34,6 +34,7 @@ def main() -> None:
     assert "video start codec" in desktop_probe
     assert "audio start codec" in desktop_probe
     assert "--pin SECURITY_PIN" in desktop_probe
+    assert "--pair-code PAIRING_CODE" in desktop_probe
     assert "session/channels/video/ch_data_video.c" in desktop_build
 
     print("steam link integration checks passed")

@@ -22,11 +22,13 @@ static const uint8_t secret_key[32] = {
 static const IHS_ClientConfig client_config = {
     .deviceId = 0x4c4e58535445414dULL,
     .secretKey = secret_key,
-    .deviceName = "LunarNX Steam Desktop Probe",
+    .deviceName = "LunarNX Steam Probe",
 };
 
 typedef struct ProbeContext {
     bool requested;
+    bool authorization_requested;
+    bool authorization_succeeded;
     bool succeeded;
     IHS_SocketAddress video_address;
     IHS_SessionInfo session_info;
@@ -41,6 +43,7 @@ typedef struct ProbeContext {
     const char *video_path;
     const char *audio_path;
     const char *stream_pin;
+    const char *pairing_pin;
     bool display;
 } ProbeContext;
 
@@ -55,6 +58,23 @@ static void stop_client(IHS_Client *client) {
     if (client != NULL) IHS_ClientStop(client);
 }
 
+static void request_stream(IHS_Client *client, const IHS_HostInfo *host, ProbeContext *probe) {
+    IHS_StreamingRequest request = {
+        .pin = "",
+        .streamingEnable = {true, true, true},
+        .maxResolution = {1280, 720},
+        .audioChannelCount = 2,
+        .streamingInterface = IHS_StreamInterfaceBigPicture,
+    };
+    if (probe->stream_pin != NULL) {
+        snprintf(request.pin, sizeof(request.pin), "%s", probe->stream_pin);
+    }
+    if (!IHS_ClientStreamingRequest(client, host, &request)) {
+        fprintf(stderr, "streaming request could not be started\n");
+        stop_client(client);
+    }
+}
+
 static void on_discovered(IHS_Client *client, const IHS_HostInfo *host, void *context) {
     ProbeContext *probe = context;
     if (probe->requested) return;
@@ -66,20 +86,45 @@ static void on_discovered(IHS_Client *client, const IHS_HostInfo *host, void *co
            host->address.port, host->gamesRunning ? "true" : "false");
     fflush(stdout);
 
-    IHS_StreamingRequest request = {
-        .pin = "",
-        .streamingEnable = {true, true, true},
-        .maxResolution = {1280, 720},
-        .audioChannelCount = 2,
-        .streamingInterface = IHS_StreamInterfaceDesktop,
-    };
-    if (probe->stream_pin != NULL) {
-        snprintf(request.pin, sizeof(request.pin), "%s", probe->stream_pin);
+    if (probe->pairing_pin != NULL) {
+        probe->authorization_requested = true;
+        printf("authorizing device before streaming\n");
+        fflush(stdout);
+        if (!IHS_ClientAuthorizationRequest(client, host, probe->pairing_pin)) {
+            fprintf(stderr, "authorization request could not be started\n");
+            stop_client(client);
+        }
+        return;
     }
-    if (!IHS_ClientStreamingRequest(client, host, &request)) {
-        fprintf(stderr, "streaming request could not be started\n");
-        stop_client(client);
-    }
+    request_stream(client, host, probe);
+}
+
+static void on_authorization_progress(IHS_Client *client, const IHS_HostInfo *host, void *context) {
+    (void) client;
+    (void) host;
+    (void) context;
+    printf("authorization in progress\n");
+    fflush(stdout);
+}
+
+static void on_authorization_success(IHS_Client *client, const IHS_HostInfo *host,
+                                     uint64_t steam_id, void *context) {
+    (void) steam_id;
+    ProbeContext *probe = context;
+    probe->authorization_succeeded = true;
+    printf("authorization success; requesting stream with the same client identity\n");
+    fflush(stdout);
+    request_stream(client, host, probe);
+}
+
+static void on_authorization_failed(IHS_Client *client, const IHS_HostInfo *host,
+                                    IHS_AuthorizationResult result, void *context) {
+    (void) host;
+    ProbeContext *probe = context;
+    printf("authorization failed result=%d\n", result);
+    fflush(stdout);
+    probe->authorization_succeeded = false;
+    stop_client(client);
 }
 
 static void on_streaming_progress(IHS_Client *client, const IHS_HostInfo *host, void *context) {
@@ -274,8 +319,13 @@ static void on_signal(int signal_number) {
     }
 }
 
-static int request_stream(ProbeContext *probe) {
+static int run_stream_probe(ProbeContext *probe) {
     IHS_ClientDiscoveryCallbacks discovery = {.discovered = on_discovered};
+    IHS_ClientAuthorizationCallbacks authorization = {
+        .progress = on_authorization_progress,
+        .success = on_authorization_success,
+        .failed = on_authorization_failed,
+    };
     IHS_ClientStreamingCallbacks streaming = {
         .progress = on_streaming_progress,
         .success = on_streaming_success,
@@ -285,6 +335,7 @@ static int request_stream(ProbeContext *probe) {
     if (active_client == NULL) return -1;
     IHS_ClientSetLogFunction(active_client, log_print);
     IHS_ClientSetDiscoveryCallbacks(active_client, &discovery, probe);
+    IHS_ClientSetAuthorizationCallbacks(active_client, &authorization, probe);
     IHS_ClientSetStreamingCallbacks(active_client, &streaming, probe);
     if (!IHS_ClientStartDiscovery(active_client, 1000)) {
         fprintf(stderr, "could not start discovery\n");
@@ -297,7 +348,7 @@ static int request_stream(ProbeContext *probe) {
 }
 
 static void usage(const char *program) {
-    fprintf(stderr, "usage: %s [--pin SECURITY_PIN] [--duration SECONDS] [--no-display] [--video-fifo PATH] [--audio PATH]\n", program);
+    fprintf(stderr, "usage: %s [--pin SECURITY_PIN] [--pair-code PAIRING_CODE] [--duration SECONDS] [--no-display] [--video-fifo PATH] [--audio PATH]\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -309,6 +360,8 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--pin") == 0 && i + 1 < argc) {
             probe.stream_pin = argv[++i];
+        } else if (strcmp(argv[i], "--pair-code") == 0 && i + 1 < argc) {
+            probe.pairing_pin = argv[++i];
         } else if (strcmp(argv[i], "--duration") == 0 && i + 1 < argc) {
             duration = (unsigned) strtoul(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "--no-display") == 0) {
@@ -329,7 +382,7 @@ int main(int argc, char **argv) {
     IHS_Init();
     printf("requesting Steam Remote Play stream; duration=%us\n", duration);
     fflush(stdout);
-    if (request_stream(&probe) != 0) {
+    if (run_stream_probe(&probe) != 0) {
         fprintf(stderr, "Steam streaming request failed\n");
         IHS_Quit();
         return 1;
