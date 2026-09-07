@@ -110,6 +110,8 @@ bool SteamLinkStreamController::startStream() {
     disconnect_gate_.reset();
     media_epoch_ns_ = 0;
     video_samples_ = 0;
+    video_recovery_.reset();
+    media_activity_.reset(steadyNowNs());
     audio_samples_ = 0;
     audio_sequence_ = 0;
     rumble_generation_ = 0;
@@ -374,6 +376,15 @@ void SteamLinkStreamController::update() {
     }
     if (!session_ || !session_connected_.load() || state_.load() == app::StreamState::Error ||
         state_.load() == app::StreamState::Disconnected) return;
+    if (state_.load() == app::StreamState::Streaming && media_activity_.expired(steadyNowNs())) {
+        auto expected = app::StreamState::Streaming;
+        std::lock_guard<std::mutex> error_lock(error_mutex_);
+        if (state_.compare_exchange_strong(expected, app::StreamState::Error)) {
+            last_error_ = "Steam media timed out (20s); check host/network and reconnect";
+            lunar::persistentEventLog("steam-stream", "%s", last_error_.c_str());
+        }
+        return;
+    }
     if (!gamepad_) {
         gamepad_ = std::make_unique<input::GamepadReader>(input::ButtonMappingProfile::Steam);
         if (!gamepad_->initialize()) {
@@ -404,6 +415,8 @@ void SteamLinkStreamController::update() {
     if (!game_input || pointer_.gyro_mode!=GyroMode::Native) motion={};
     pad_state_->publish(state,motion);
     const auto mouse_motion=pointer_.gyro_mode==GyroMode::Mouse ? sensor_motion : MotionSample{};
+    const auto video_size = cursor_.snapshot();
+    pointer_.setVideoSize(video_size.video_width, video_size.video_height);
     auto pointer=pointer_.update(sensors_->touch(),mouse_motion,game_input,state.lt,now/1000000);
     if (pointer.absolute && IHS_SessionSendMousePosition(session_,pointer.x,pointer.y))
         cursor_.position(pointer.x, pointer.y);
@@ -491,7 +504,9 @@ void SteamLinkStreamController::onSessionDisconnected(IHS_Session*, void* contex
            !self->state_.compare_exchange_weak(state, app::StreamState::Disconnected)) {}
     lunar::persistentEventLog("steam-session", "disconnected state=%s", stateName(self->state_.load()));
 }
-void SteamLinkStreamController::onSessionFinalized(IHS_Session*, void*) {
+void SteamLinkStreamController::onSessionFinalized(IHS_Session* session, void* context) {
+    // A receive-worker error may finalize without a discovery disconnect packet.
+    onSessionDisconnected(session, context);
     lunar::diagnosticLog("steam-session", "finalized");
 }
 
@@ -518,6 +533,7 @@ int SteamLinkStreamController::onAudioSubmit(IHS_Session*, IHS_Buffer* data, voi
     const uint32_t count = self->audio_samples_.fetch_add(1) + 1;
     const uint64_t timestamp = self->mediaTimestampNs();
     self->media_->recordIncomingAudioPacket();
+    self->media_activity_.received(steadyNowNs());
     const bool queued = self->media_->decodeAudioPacket(
         IHS_BufferPointer(data), data->size, self->audio_sequence_++, timestamp);
     if (count == 1 || count % 500 == 0) {
@@ -555,6 +571,7 @@ IHS_StreamVideoSubmitResult SteamLinkStreamController::onVideoSubmit(
         return IHS_StreamVideoSubmitError;
     }
     const uint32_t count = self->video_samples_.fetch_add(1) + 1;
+    self->media_activity_.received(steadyNowNs());
     const uint64_t timestamp = self->mediaTimestampNs();
     self->media_->recordIncomingVideoSample(
         data->size, timestamp, 0);
@@ -570,7 +587,15 @@ IHS_StreamVideoSubmitResult SteamLinkStreamController::onVideoSubmit(
                              (flags & IHS_StreamVideoFrameKeyFrame) ? 1 : 0,
                              queued ? 1 : 0);
     }
-    return queued ? IHS_StreamVideoSubmitOK : IHS_StreamVideoSubmitReportLost;
+    if (self->video_recovery_.reportLost(
+            queued, self->media_->hasVideoRecoveryRequest(), steadyNowNs())) {
+        lunar::persistentEventLog("steam-video", "request keyframe: queued=%d recovery=%d",
+            queued, self->media_->hasVideoRecoveryRequest());
+        // ihslib translates ReportLost to a video-channel StreamDataLost packet.
+        // Leave the pipeline flag set until a fresh IDR is actually decoded.
+        return IHS_StreamVideoSubmitReportLost;
+    }
+    return IHS_StreamVideoSubmitOK;
 }
 void SteamLinkStreamController::onVideoStop(IHS_Session*, void* context) {
     auto* self = static_cast<SteamLinkStreamController*>(context);

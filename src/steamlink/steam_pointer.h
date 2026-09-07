@@ -36,6 +36,13 @@ class SteamPointer {
 public:
     TouchMode touch_mode = TouchMode::Trackpad;
     GyroMode gyro_mode = GyroMode::Native;
+    void setVideoSize(int width, int height) {
+        if (width <= 0 || height <= 0) return;
+        const float scale = std::min(1280.f/width, 720.f/height);
+        video_w_ = width*scale; video_h_ = height*scale;
+        video_x_ = (1280.f-video_w_)*0.5f;
+        video_y_ = (720.f-video_h_)*0.5f;
+    }
     void fenceTouches() { blocked_=true; cancel(); }
     PointerOutput update(const TouchSample& t, const MotionSample& m,
                          bool game, bool aim, uint64_t ms) {
@@ -51,6 +58,11 @@ public:
         // Match StreamView's 96px right-edge menu gesture. A touch starting
         // here belongs entirely to the UI, even before the menu opens.
         if (t.valid && t.count>0 && !count_ && t.x[0]>=1184) {
+            blocked_=true; cancel();
+        }
+        if (touch_mode == TouchMode::Absolute && t.valid && t.count>0 && !count_ &&
+            (t.x[0]<video_x_ || t.x[0]>=video_x_+video_w_ ||
+             t.y[0]<video_y_ || t.y[0]>=video_y_+video_h_)) {
             blocked_=true; cancel();
         }
         if (blocked_) {
@@ -84,8 +96,8 @@ public:
                 } else if (!multi_) {
                     if (touch_mode == TouchMode::Absolute) {
                         out.absolute = true;
-                        out.x = std::clamp(x/1279.f, 0.f, 1.f);
-                        out.y = std::clamp(y/719.f, 0.f, 1.f);
+                        out.x = std::clamp((x-video_x_)/std::max(1.f,video_w_-1.f), 0.f, 1.f);
+                        out.y = std::clamp((y-video_y_)/std::max(1.f,video_h_-1.f), 0.f, 1.f);
                     } else { rx_ += x-prev_x_; ry_ += y-prev_y_; }
                     if (!moved_ && ms-start_ms_ >= 400) drag_ = true;
                 }
@@ -107,6 +119,7 @@ public:
         return out;
     }
 private:
+    float video_x_=0, video_y_=0, video_w_=1280, video_h_=720;
     void cancel() { count_=0; drag_=false; multi_=false; click_until_=0; rx_=ry_=scroll_=0; }
     int count_=0, id_=0;
     bool blocked_=false, moved_=false, multi_=false, drag_=false, right_click_=false;

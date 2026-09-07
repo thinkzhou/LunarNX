@@ -16,7 +16,7 @@ set -- \
   "$root_dir/tools/steamlink_probe/desktop_stream_probe.c" \
   "$root_dir/tools/steamlink_probe/posix_thread.c" \
   "$ihs_src/base.c" "$ihs_src/crc32.c" "$ihs_src/crc32c.c" \
-  "$ihs_src/ihs_timer.c" "$ihs_src/ihs_ip.c" "$ihs_src/ihs_buffer.c" \
+  "$root_dir/src/steamlink/ihs_timer.c" "$ihs_src/ihs_ip.c" "$ihs_src/ihs_buffer.c" \
   "$ihs_src/ihs_queue.c" "$ihs_src/ihs_arraylist.c" "$ihs_src/ihs_enumeration.c" \
   "$ihs_src/ihs_enumeration_ll.c" "$ihs_src/ihs_enumeration_array.c" \
   "$ihs_src/client/client.c" "$ihs_src/client/discovery.c" \
@@ -25,9 +25,9 @@ set -- \
   "$ihs_src/session/window.c" "$ihs_src/session/frame_crypto.c" \
   "$ihs_src/session/frame_stats.c" "$ihs_src/session/callbacks.c" \
   "$ihs_src/session/retransmission.c" "$ihs_src/session/channels/channel.c" \
-  "$ihs_src/session/channels/ch_discovery.c" "$ihs_src/session/channels/ch_control.c" \
+  "$root_dir/src/steamlink/ihs_discovery.c" "$ihs_src/session/channels/ch_control.c" \
   "$ihs_src/session/channels/ch_control_authentication.c" \
-  "$ihs_src/session/channels/ch_control_negotiation.c" \
+  "$root_dir/src/steamlink/ihs_negotiation.c" \
   "$ihs_src/session/channels/ch_control_keepalive.c" \
   "$ihs_src/session/channels/ch_control_audio.c" \
   "$ihs_src/session/channels/ch_control_microphone.c" \

@@ -12,6 +12,36 @@
 
 namespace lunar::steamlink {
 
+// Queue acceptance is not decoder success. An asynchronous recovery request
+// must reach Steam even while the pipeline intentionally drops dependent frames.
+class VideoRecoveryFeedback {
+public:
+    void reset() { next_ns_ = 0; }
+    bool reportLost(bool queued, bool recovery_pending, uint64_t now_ns) {
+        if (queued && !recovery_pending) return false;
+        if (now_ns < next_ns_) return false;
+        next_ns_ = now_ns + 1000000000ULL;
+        return true;
+    }
+private:
+    uint64_t next_ns_ = 0; // single video-submit worker
+};
+
+class MediaActivityWatchdog {
+public:
+    void reset(uint64_t now_ns) { activity_ = now_ns; }
+    void received(uint64_t now_ns) {
+        auto last = activity_.load();
+        while (now_ns > last && !activity_.compare_exchange_weak(last, now_ns)) {}
+    }
+    bool expired(uint64_t now_ns) const {
+        const auto last = activity_.load();
+        return now_ns >= last && now_ns - last >= 20000000000ULL;
+    }
+private:
+    std::atomic<uint64_t> activity_{0};
+};
+
 // Monotonic deadlines, independent of media packet arrival. Receiving audio or
 // undecodable video must not keep the first rendered-frame wait alive forever.
 class StartupWatchdog {

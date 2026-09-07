@@ -45,7 +45,7 @@ protocol. Joy-Con digital triggers map to fully released/pressed; analog source
 values retain their range. Basic motor rumble and motion reports are supported;
 DualSense effects and multi-player controller slots are not. The ihslib dependency is
 LGPL-3.0; keep its license and notices when distributing a build.
-The small `src/steamlink/ihs_*.c` compile-time overrides keep the pinned submodule
+The tracked `src/steamlink/ihs_*.c` compile-time overrides keep the pinned submodule
 unchanged while serializing HID poll/close and stopping polling before session
 channels are destroyed. Both Switch and desktop probe builds use these overrides.
 
@@ -104,6 +104,40 @@ test substitutes for physical sensor calibration or a real Steam game session.
 
 ## Diagnostics and simulated verification
 
+### Stream recovery and protocol-error cleanup follow-up (2026-09-07)
+
+- `ihs_discovery.c` is a tracked copy of the pinned discovery channel with
+  disconnect initiation latched under the session timer mutex. This also covers
+  ihslib's internal error paths. Deinitialization drains the task under the same
+  lock, preventing a timer callback from touching an already-freed channel.
+  The extended ASan test first failed with a heap-use-after-free at
+  `DisconnectTimerEnd`, then passed with the override.
+- `ihs_negotiation.c` preserves the pinned negotiation flow but enables Remote
+  HID when a provider is registered and the host advertises support. It logs
+  that decision and advertises a 1280x720 mode and maximum resolution, matching
+  LunarNX's current fixed Steam profile. A host without Remote HID support
+  still has no legacy-controller fallback; inspect the host-support log.
+  Keep these two copies in sync when upgrading the pinned ihslib revision.
+- Decoder recovery is forwarded through `IHS_StreamVideoSubmitReportLost`,
+  which ihslib translates into a video-channel StreamDataLost request.
+  Requests are limited to once per second, and remain pending until the media
+  pipeline actually decodes a fresh IDR. Queue acceptance alone no longer
+  suppresses asynchronous recovery. A real host's response is not yet verified.
+- Once streaming, 20 seconds without either audio or submitted video becomes
+  a visible error; worker finalization also clears the connected state.
+  This detects total media silence, not every possible render-only stall.
+- Absolute touch uses the fitted video rectangle, including 4:3/16:10 black
+  bars, rather than normalizing against the entire Switch screen. Touches
+  beginning in a black bar are fenced until release.
+
+The HID simulation now exercises a real protocol-error disconnect before owner
+cleanup and captures/parses production negotiation messages for all combinations
+of host HID support and registered provider. Portable tests cover recovery
+retry timing, media inactivity and letterboxed touch coordinates. These are
+component tests, not a full Steam/decoder/Switch end-to-end test.
+No emulator interaction or new Ryubing mock-stream run is performed for this
+follow-up, per the user's request to operate the emulator themselves.
+
 ### Startup/retry and cursor fixes (2026-09-07)
 
 The streaming request has a 20-second application deadline. Cancellation and
@@ -121,8 +155,9 @@ video/audio callback counts; the stream exit shows the reason as a notification.
 Disconnection callbacks preserve the original timeout error. Session joins and
 media teardown remain on the stop worker, not the timer/network/input thread.
 Disconnect initiation has its own exactly-once gate, independent of the Error
-state, so watchdog/exit/host-disconnect cannot schedule duplicate disconnect
-timers. The POSIX session socket uses a 10ms receive timeout so join can finish
+state. The later discovery-channel fix above also covers library-internal
+disconnect calls, which this controller-only gate could not prevent.
+The POSIX session socket uses a 10ms receive timeout so join can finish
 even when the host sends no more packets. The desktop thread adapter matches
 SDL's recursive mutex contract used on Switch.
 

@@ -231,10 +231,10 @@ C_SRCS += vendor/ihslib/src/base.c vendor/ihslib/src/crc32.c vendor/ihslib/src/c
     vendor/ihslib/src/session/frame_crypto.c vendor/ihslib/src/session/frame_stats.c \
     vendor/ihslib/src/session/callbacks.c vendor/ihslib/src/session/retransmission.c \
     vendor/ihslib/src/session/channels/channel.c \
-    vendor/ihslib/src/session/channels/ch_discovery.c \
+    src/steamlink/ihs_discovery.c \
     vendor/ihslib/src/session/channels/ch_control.c \
     vendor/ihslib/src/session/channels/ch_control_authentication.c \
-    vendor/ihslib/src/session/channels/ch_control_negotiation.c \
+    src/steamlink/ihs_negotiation.c \
     vendor/ihslib/src/session/channels/ch_control_keepalive.c \
     vendor/ihslib/src/session/channels/ch_control_audio.c \
     vendor/ihslib/src/session/channels/ch_control_microphone.c \
