@@ -56,7 +56,15 @@ void IHS_ThreadJoin(IHS_Thread *thread) {
 
 IHS_Mutex *IHS_MutexCreate() {
     IHS_Mutex *mutex = calloc(1, sizeof(*mutex));
-    if (mutex == NULL || pthread_mutex_init(&mutex->handle, NULL) != 0) {
+    if (mutex == NULL) return NULL;
+    // Match SDL's recursive mutex contract used by the Switch build. ihslib's
+    // disconnect callback interrupts the session while already holding base.
+    pthread_mutexattr_t attributes;
+    if (pthread_mutexattr_init(&attributes) != 0) { free(mutex); return NULL; }
+    const int type_result = pthread_mutexattr_settype(&attributes, PTHREAD_MUTEX_RECURSIVE);
+    const int result = type_result == 0 ? pthread_mutex_init(&mutex->handle, &attributes) : type_result;
+    pthread_mutexattr_destroy(&attributes);
+    if (result != 0) {
         free(mutex);
         return NULL;
     }

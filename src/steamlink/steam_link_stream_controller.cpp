@@ -107,6 +107,7 @@ bool SteamLinkStreamController::startStream() {
     }
     if (cancellation_.requested()) return false;
     session_connected_ = false;
+    disconnect_gate_.reset();
     media_epoch_ns_ = 0;
     video_samples_ = 0;
     audio_samples_ = 0;
@@ -318,9 +319,7 @@ void SteamLinkStreamController::stopStream(bool set_disconnected) {
     if (session_) {
         lunar::persistentEventLog("steam-stream", "session disconnect begin");
         closeSession(session_, [this](IHS_Session* session) {
-            if (state_.load() != app::StreamState::Disconnected) {
-                IHS_SessionDisconnect(session);
-            }
+            disconnect_gate_.request([session]() { IHS_SessionDisconnect(session); });
         }, IHS_SessionThreadedJoin, IHS_SessionDestroy);
         lunar::persistentEventLog("steam-stream", "session disconnect done");
     }
@@ -368,9 +367,8 @@ void SteamLinkStreamController::update() {
                 last_error_ = reason;
                 lunar::persistentEventLog("steam-stream", "%s video_samples=%u audio_samples=%u",
                     reason, video_samples_.load(), audio_samples_.load());
-                // Join/destruction remain on the owner's stop path, never on
-                // the pump or an ihslib callback thread.
-                IHS_SessionDisconnect(session_);
+                // The stop worker owns disconnect initiation as well as
+                // join/destruction. Do not schedule another disconnect here.
             }
         }
     }
@@ -487,6 +485,7 @@ void SteamLinkStreamController::onSessionDisconnected(IHS_Session*, void* contex
     auto* self = static_cast<SteamLinkStreamController*>(context);
     if (!self) return;
     self->session_connected_ = false;
+    self->disconnect_gate_.disconnected();
     auto state = self->state_.load();
     while (state != app::StreamState::Error && state != app::StreamState::Disconnected &&
            !self->state_.compare_exchange_weak(state, app::StreamState::Disconnected)) {}

@@ -33,6 +33,19 @@ private:
     std::atomic<uint64_t> started_{0}, connected_{0};
 };
 
+// Protocol disconnect initiation is separate from the user-visible Error state.
+// A host disconnect and the owner cleanup can race without initiating twice.
+class SessionDisconnectGate {
+public:
+    void reset() { initiated_ = false; }
+    void disconnected() { initiated_ = true; }
+    template<class Send> void request(Send send) {
+        if (!initiated_.exchange(true)) send();
+    }
+private:
+    std::atomic<bool> initiated_{false};
+};
+
 // Caller owns the lifecycle mutex. Detach before invoking protocol callbacks;
 // repeated cleanup then cannot disconnect or free the same session twice.
 template<class Session, class Disconnect, class Join, class Destroy>

@@ -437,6 +437,7 @@ brls::View* StreamView::createContentView() {
     if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
         auto* cursor = new SteamCursorView(
             std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_));
+        cursor->detach();
         cursor->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
         cursor->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
         cursor->setDetachedPosition(0, 0);
