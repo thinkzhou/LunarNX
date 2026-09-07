@@ -14,16 +14,6 @@
 #include <cstdlib>
 #include <cstring>
 
-extern "C" char* IHS_IPAddressToString(const IHS_IPAddress* address) {
-    if (!address || address->family != IHS_IPAddressFamilyIPv4) return nullptr;
-    char* result = static_cast<char*>(std::malloc(16));
-    if (!result) return nullptr;
-    std::snprintf(result, 16, "%u.%u.%u.%u",
-                  address->v4.data[0], address->v4.data[1],
-                  address->v4.data[2], address->v4.data[3]);
-    return result;
-}
-
 namespace lunar::steamlink {
 namespace {
 
@@ -111,12 +101,18 @@ bool loadIdentity(SteamLinkClient::Identity* identity) {
 } // namespace
 
 SteamLinkClient::SteamLinkClient() {
+    lunar::diagnosticLog("steam-link", "client construct");
     if (!loadOrCreateIdentity()) {
         last_error_ = "Could not create Steam Link device identity";
+        lunar::persistentEventLog("steam-link", "identity unavailable");
+    } else {
+        lunar::diagnosticLog("steam-link", "identity ready device_id=%llu",
+                             static_cast<unsigned long long>(identity_.device_id));
     }
 }
 
 SteamLinkClient::~SteamLinkClient() {
+    lunar::diagnosticLog("steam-link", "client destruct");
     stopDiscovery();
     cancelAuthorization();
     if (client_) {
@@ -165,8 +161,15 @@ bool SteamLinkClient::ensureClient() {
         &SteamLinkClient::onAuthorizationProgress,
         &SteamLinkClient::onAuthorizationSuccess,
         &SteamLinkClient::onAuthorizationFailed};
+    static const IHS_ClientStreamingCallbacks streaming_callbacks{
+        &SteamLinkClient::onStreamingProgress,
+        &SteamLinkClient::onStreamingSuccess,
+        &SteamLinkClient::onStreamingFailed};
     IHS_ClientSetDiscoveryCallbacks(client_, &discovery_callbacks, this);
     IHS_ClientSetAuthorizationCallbacks(client_, &authorization_callbacks, this);
+    IHS_ClientSetStreamingCallbacks(client_, &streaming_callbacks, this);
+    IHS_ClientSetLogFunction(client_, &SteamLinkClient::logFunction);
+    lunar::diagnosticLog("steam-link", "ihslib client ready");
     return true;
 }
 
@@ -182,11 +185,13 @@ bool SteamLinkClient::startDiscovery(HostCallback callback) {
         last_error_ = "Steam Link discovery is already running";
         return false;
     }
+    lunar::diagnosticLog("steam-link", "discovery started interval_ms=2500");
     return true;
 }
 
 void SteamLinkClient::stopDiscovery() {
     if (client_) IHS_ClientStopDiscovery(client_);
+    lunar::diagnosticLog("steam-link", "discovery stopped");
     std::lock_guard<std::mutex> lock(mutex_);
     host_callback_ = {};
 }
@@ -223,6 +228,47 @@ bool SteamLinkClient::authorize(const SteamLinkHost& host, const std::string& pi
         last_error_ = "Steam Link authorization is already in progress";
         return false;
     }
+    lunar::diagnosticLog("steam-link", "authorization requested host=%s pin_len=%zu",
+                         host.address.c_str(), pin.size());
+    return true;
+}
+
+bool SteamLinkClient::requestStreaming(const SteamLinkHost& host, const std::string& pin,
+                                       int width, int height, StreamingCallback callback) {
+    if (pin.size() >= 16 || !std::all_of(pin.begin(), pin.end(), [](char c) {
+            return c >= '0' && c <= '9';
+        })) {
+        last_error_ = "Steam host security PIN must contain digits only";
+        return false;
+    }
+    if (!ensureClient()) return false;
+    IHS_HostInfo protocol_host{};
+    if (!findHost(host.client_id, &protocol_host)) {
+        last_error_ = "Steam Link host is no longer in the discovery list";
+        return false;
+    }
+    IHS_StreamingRequest request{};
+    std::snprintf(request.pin, sizeof(request.pin), "%s", pin.c_str());
+    request.streamingEnable.video = true;
+    request.streamingEnable.audio = true;
+    request.streamingEnable.input = true;
+    request.maxResolution.x = width > 0 ? width : 1280;
+    request.maxResolution.y = height > 0 ? height : 720;
+    request.audioChannelCount = 2;
+    request.streamingInterface = IHS_StreamInterfaceDefault;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        streaming_callback_ = std::move(callback);
+    }
+    if (!IHS_ClientStreamingRequest(client_, &protocol_host, &request)) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        streaming_callback_ = {};
+        last_error_ = "Steam Link streaming request is already in progress";
+        return false;
+    }
+    lunar::diagnosticLog("steam-link", "streaming requested host=%s pin_len=%zu profile=%dx%d",
+                         host.address.c_str(), pin.size(), request.maxResolution.x,
+                         request.maxResolution.y);
     return true;
 }
 
@@ -235,6 +281,20 @@ void SteamLinkClient::cancelAuthorization() {
 bool SteamLinkClient::isAuthorized(uint64_t client_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
     return authorized_client_id_ == client_id;
+}
+
+uint64_t SteamLinkClient::authorizedSteamId(uint64_t client_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto it = authorized_steam_ids_.find(client_id);
+    return it == authorized_steam_ids_.end() ? 0 : it->second;
+}
+
+bool SteamLinkClient::getSessionClientConfig(IHS_ClientConfig* config) const {
+    if (!config || identity_.device_id == 0) return false;
+    config->deviceId = identity_.device_id;
+    config->secretKey = identity_.secret_key.data();
+    config->deviceName = kDeviceName;
+    return true;
 }
 
 void SteamLinkClient::updateHost(const IHS_HostInfo& host) {
@@ -288,17 +348,65 @@ void SteamLinkClient::onAuthorizationProgress(IHS_Client*, const IHS_HostInfo*, 
 }
 
 void SteamLinkClient::onAuthorizationSuccess(IHS_Client*, const IHS_HostInfo* host,
-                                             uint64_t, void* context) {
+                                             uint64_t steam_id, void* context) {
     auto* self = static_cast<SteamLinkClient*>(context);
     if (!self || !host) return;
     AuthorizationCallback callback;
     {
         std::lock_guard<std::mutex> lock(self->mutex_);
         self->authorized_client_id_ = host->clientId;
+        self->authorized_steam_ids_[host->clientId] = steam_id;
         callback = self->authorization_callback_;
         self->authorization_callback_ = {};
     }
     if (callback) callback(true, {});
+}
+
+void SteamLinkClient::onStreamingProgress(IHS_Client*, const IHS_HostInfo* host, void* context) {
+    auto* self = static_cast<SteamLinkClient*>(context);
+    if (!self || !host) return;
+    lunar::diagnosticLog("steam-link", "streaming progress host=%s", host->hostname);
+}
+
+void SteamLinkClient::onStreamingSuccess(IHS_Client*, const IHS_HostInfo* host,
+                                         const IHS_SocketAddress* address,
+                                         const uint8_t* session_key, size_t session_key_len,
+                                         void* context) {
+    auto* self = static_cast<SteamLinkClient*>(context);
+    if (!self || !host || !address || !session_key ||
+        session_key_len == 0 || session_key_len > 32) return;
+    StreamingCallback callback;
+    SteamLinkStreamInfo info;
+    info.address = *address;
+    std::copy(session_key, session_key + session_key_len, info.session_key.begin());
+    info.session_key_len = session_key_len;
+    info.steam_id = self->authorizedSteamId(host->clientId);
+    {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        callback = self->streaming_callback_;
+        self->streaming_callback_ = {};
+    }
+    lunar::diagnosticLog("steam-link", "streaming success host=%s port=%u key_len=%zu steam_id=%llu",
+                         host->hostname, address->port, session_key_len,
+                         static_cast<unsigned long long>(info.steam_id));
+    if (callback) callback(true, info, {});
+}
+
+void SteamLinkClient::onStreamingFailed(IHS_Client*, const IHS_HostInfo* host,
+                                        IHS_StreamingResult result, void* context) {
+    auto* self = static_cast<SteamLinkClient*>(context);
+    if (!self) return;
+    StreamingCallback callback;
+    const std::string error = streamingError(result);
+    {
+        std::lock_guard<std::mutex> lock(self->mutex_);
+        callback = self->streaming_callback_;
+        self->streaming_callback_ = {};
+    }
+    lunar::persistentEventLog("steam-link", "streaming failed host=%s result=%d error=%s",
+                             host ? host->hostname : "unknown", static_cast<int>(result),
+                             error.c_str());
+    if (callback) callback(false, {}, error);
 }
 
 std::string SteamLinkClient::authorizationError(IHS_AuthorizationResult result) {
@@ -310,6 +418,32 @@ std::string SteamLinkClient::authorizationError(IHS_AuthorizationResult result) 
         case IHS_AuthorizationTimedOut: return "Steam PIN request timed out";
         case IHS_AuthorizationCanceled: return "Steam PIN request canceled";
         default: return "Steam Link authorization failed";
+    }
+}
+
+std::string SteamLinkClient::streamingError(IHS_StreamingResult result) {
+    switch (result) {
+        case IHS_StreamingUnauthorized: return "Steam rejected the device authorization";
+        case IHS_StreamingScreenLocked: return "Steam host screen is locked";
+        case IHS_StreamingBusy: return "Steam host is busy";
+        case IHS_StreamingDisabled: return "Steam Remote Play is disabled";
+        case IHS_StreamingPINRequired: return "Steam host security PIN is required or incorrect";
+        case IHS_StreamingGameLaunchFailed: return "Steam could not launch the selected game";
+        case IHS_StreamingTransportUnavailable: return "Steam streaming transport unavailable";
+        case IHS_StreamingTimeout: return "Steam streaming request timed out";
+        default: return "Steam Link streaming request failed";
+    }
+}
+
+void SteamLinkClient::logFunction(IHS_LogLevel level, const char* tag, const char* message) {
+    const char* safe_tag = tag ? tag : "ihslib";
+    const char* safe_message = message ? message : "";
+    if (level <= IHS_LogLevelError) {
+        lunar::persistentEventLog("steam-ihs", "level=%s tag=%s message=%s",
+                                  IHS_LogLevelName(level), safe_tag, safe_message);
+    } else {
+        lunar::diagnosticLog("steam-ihs", "level=%s tag=%s message=%s",
+                             IHS_LogLevelName(level), safe_tag, safe_message);
     }
 }
 

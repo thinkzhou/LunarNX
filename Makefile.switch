@@ -145,7 +145,7 @@ LIBDIRS = $(MBEDTLS_LIBDIR) \
     $(LIBPEER_LIBDIRS)
 
 LIBS = -Wl,--start-group -lborealis -lfmt -lyogacore -ltinyxml2 -ldeko3d -lsrtp2 \
-    -lopus -lz -lzstd -lbz2 \
+    -lopus -lSDL2 -lz -lzstd -lbz2 \
     $(CURL_LIB) -ljson-c -lminiupnpc \
     $(FFMPEG_LIBS) \
     lib/switch/libchiaki.a lib/switch/libgf_complete.a \
@@ -198,7 +198,8 @@ CXX_SRCS = src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_proces
     src/stream/audio_player.cpp src/stream/av_sync.cpp
 
 ifeq ($(STEAMLINK),1)
-CXX_SRCS += src/steamlink/steam_link_client.cpp src/ui/steam_link_activity.cpp
+CXX_SRCS += src/steamlink/steam_link_client.cpp \
+    src/steamlink/steam_link_stream_controller.cpp src/ui/steam_link_activity.cpp
 endif
 
 C_SRCS = lib/cJSON.c \
@@ -220,7 +221,37 @@ C_SRCS += vendor/ihslib/src/base.c vendor/ihslib/src/crc32.c vendor/ihslib/src/c
     vendor/ihslib/src/ihs_queue.c vendor/ihslib/src/ihs_timer.c \
     vendor/ihslib/src/client/authorization.c vendor/ihslib/src/client/client.c \
     vendor/ihslib/src/client/discovery.c vendor/ihslib/src/client/streaming.c \
+    vendor/ihslib/src/hid/device.c vendor/ihslib/src/hid/provider.c \
+    vendor/ihslib/src/hid/manager.c vendor/ihslib/src/hid/report.c \
+    vendor/ihslib/src/session/session.c vendor/ihslib/src/session/packet.c \
+    vendor/ihslib/src/session/frame.c vendor/ihslib/src/session/window.c \
+    vendor/ihslib/src/session/frame_crypto.c vendor/ihslib/src/session/frame_stats.c \
+    vendor/ihslib/src/session/callbacks.c vendor/ihslib/src/session/retransmission.c \
+    vendor/ihslib/src/session/channels/channel.c \
+    vendor/ihslib/src/session/channels/ch_discovery.c \
+    vendor/ihslib/src/session/channels/ch_control.c \
+    vendor/ihslib/src/session/channels/ch_control_authentication.c \
+    vendor/ihslib/src/session/channels/ch_control_negotiation.c \
+    vendor/ihslib/src/session/channels/ch_control_keepalive.c \
+    vendor/ihslib/src/session/channels/ch_control_audio.c \
+    vendor/ihslib/src/session/channels/ch_control_microphone.c \
+    vendor/ihslib/src/session/channels/ch_control_video.c \
+    vendor/ihslib/src/session/channels/ch_data.c \
+    vendor/ihslib/src/session/channels/ch_data_audio.c \
+    vendor/ihslib/src/session/channels/ch_data_microphone.c \
+    vendor/ihslib/src/session/channels/ch_stats.c \
+    vendor/ihslib/src/session/channels/control/control_cursor.c \
+    vendor/ihslib/src/session/channels/control/control_hid.c \
+    vendor/ihslib/src/session/channels/control/control_input_kbd.c \
+    vendor/ihslib/src/session/channels/control/control_input_mouse.c \
+    vendor/ihslib/src/session/channels/control/control_input_touch.c \
+    vendor/ihslib/src/session/channels/video/frame_h264.c \
+    vendor/ihslib/src/session/channels/video/frame_hevc.c \
+    vendor/ihslib/src/session/channels/video/partial_frames.c \
+    vendor/ihslib/src/session/channels/video/ch_data_video.c \
     vendor/ihslib/src/crypto/impl_mbedtls.c \
+    vendor/ihslib/src/platforms/ihs_ip_posix.c \
+    vendor/ihslib/src/platforms/ihs_udp_posix.c \
     vendor/ihslib/src/platforms/ihs_thread_sdl.c \
     vendor/ihslib/src/protobuf/discovery.pb-c.c \
     vendor/ihslib/src/protobuf/hiddevices.pb-c.c \
@@ -228,6 +259,11 @@ C_SRCS += vendor/ihslib/src/base.c vendor/ihslib/src/crc32.c vendor/ihslib/src/c
     vendor/ihslib/src/protobuf/remoteplay.pb-c.c \
     vendor/protobuf-c/protobuf-c/protobuf-c.c
 endif
+
+# ihs_ip_posix.c uses socket address family constants that are not exposed by
+# every ihslib header combination, so include the platform socket header only
+# for this source file.
+build/switch/vendor/ihslib/src/platforms/ihs_ip_posix.o: CFLAGS += -include sys/socket.h
 
 CXX_OBJS = $(CXX_SRCS:%.cpp=$(BUILD)/%.o)
 C_OBJS   = $(C_SRCS:%.c=$(BUILD)/%.o)
