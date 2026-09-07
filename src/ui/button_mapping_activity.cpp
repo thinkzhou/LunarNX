@@ -115,7 +115,9 @@ brls::View* ButtonMappingActivity::createContentView() {
         : kXboxLabels;
     for (size_t i = 0; i < row_count; ++i) {
         auto* row = new brls::DetailCell();
-        row->setText(brls::getStr(labels[i]));
+        row->setText(brls::getStr(profile_ == input::ButtonMappingProfile::Steam &&
+            i == static_cast<size_t>(input::RemoteButton::Guide)
+                ? "lunarnx/steam_ui/menu_button" : labels[i]));
         row->setFocusable(true);
         row->registerClickAction([this, i](brls::View*) -> bool {
             enterCapture(i);
@@ -175,7 +177,9 @@ brls::View* ButtonMappingActivity::createContentView() {
     return makeAppFrame(brls::getStr(
         profile_ == input::ButtonMappingProfile::PlayStation
             ? "lunarnx/button_mapping/ps_title"
-            : "lunarnx/button_mapping/xbox_title"), root);
+            : profile_ == input::ButtonMappingProfile::Steam
+                ? "lunarnx/steam_ui/mapping_title"
+                : "lunarnx/button_mapping/xbox_title"), root);
 }
 
 void ButtonMappingActivity::enterCapture(size_t index) {

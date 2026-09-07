@@ -4,6 +4,10 @@
 #include "stream_overlay.h"
 #include "perf_overlay.h"
 #include "ps_settings_activity.h"
+#if LUNARNX_STEAMLINK
+#include "steam_settings_activity.h"
+#include "../steamlink/steam_link_stream_controller.h"
+#endif
 #include "stream_settings_activity.h"
 #include "ui_style.h"
 #include "../diagnostics.h"
@@ -457,7 +461,18 @@ brls::View* StreamView::createContentView() {
             brls::Application::pushActivity(
                 new PsSettingsActivity(loadPsSettings()),
                 brls::TransitionAnimation::NONE);
-        } else {
+        }
+#if LUNARNX_STEAMLINK
+        else if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+            auto steam = std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_);
+            const auto modes = steam->pointerModes();
+            brls::Application::pushActivity(new SteamSettingsActivity({modes.first, modes.second},
+                [steam](const SteamInputSettings& settings) {
+                    steam->configurePointer(settings.touch, settings.gyro);
+                }), brls::TransitionAnimation::NONE);
+        }
+#endif
+        else {
             brls::Application::pushActivity(
                 new StreamSettingsActivity(nullptr, loadStreamSettings(), {},
                     StreamSettingsScope::Xbox),
@@ -480,7 +495,9 @@ brls::View* StreamView::createContentView() {
         brls::Application::pushActivity(new ButtonMappingActivity(
             runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation
                 ? input::ButtonMappingProfile::PlayStation
-                : input::ButtonMappingProfile::Xbox),
+                : runtime_->getStreamPlatform() == app::StreamPlatform::Steam
+                    ? input::ButtonMappingProfile::Steam
+                    : input::ButtonMappingProfile::Xbox),
             brls::TransitionAnimation::NONE);
         return true;
     });
@@ -494,7 +511,9 @@ brls::View* StreamView::createContentView() {
     platform_button->setText(brls::getStr(
         runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation
             ? "lunarnx/stream/menu_ps_button"
-            : "lunarnx/stream/menu_xbox_button"));
+            : runtime_->getStreamPlatform() == app::StreamPlatform::Steam
+                ? "lunarnx/steam_ui/menu_button"
+                : "lunarnx/stream/menu_xbox_button"));
     platform_button->registerClickAction([this](brls::View*) -> bool {
         setQuickMenuVisible(false);
         runtime_->requestPlatformHomeButton();
@@ -739,6 +758,10 @@ void StreamView::onPause() {
 }
 
 void StreamView::onResume() {
+#if LUNARNX_STEAMLINK
+    if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam)
+        std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_)->reloadInputMapping();
+#endif
     child_activity_visible_ = false;
     runtime_->setVideoPresentationSuspended(false);
     updateInputOwnership();
