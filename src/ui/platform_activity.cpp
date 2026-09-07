@@ -20,6 +20,27 @@
 namespace lunar::ui {
 namespace {
 
+// Resolution-independent linked-wheel mark for the Steam Remote Play entry.
+class SteamPlatformMark : public brls::View {
+    void draw(NVGcontext* vg, float x, float y, float w, float h,
+              brls::Style, brls::FrameContext*) override {
+        nvgSave(vg);
+        nvgTranslate(vg, x, y);
+        nvgScale(vg, w / 82.0f, h / 82.0f);
+        nvgStrokeColor(vg, uiPalette().text);
+        nvgStrokeWidth(vg, 7);
+        nvgBeginPath(vg);
+        nvgMoveTo(vg, 8, 49); nvgLineTo(vg, 28, 58);
+        nvgMoveTo(vg, 34, 54); nvgLineTo(vg, 57, 29);
+        nvgStroke(vg);
+        nvgBeginPath(vg); nvgCircle(vg, 29, 59, 12); nvgStroke(vg);
+        nvgBeginPath(vg); nvgCircle(vg, 60, 25, 17); nvgStroke(vg);
+        nvgStrokeWidth(vg, 3);
+        nvgBeginPath(vg); nvgCircle(vg, 60, 25, 9); nvgStroke(vg);
+        nvgRestore(vg);
+    }
+};
+
 brls::Button* makePlatformTile(const std::string& title,
                                const std::string& detail,
                                const std::string& account_state,
@@ -28,50 +49,59 @@ brls::Button* makePlatformTile(const std::string& title,
     const auto& p = uiPalette();
     auto* tile = new brls::Button();
     tile->setStyle(&brls::BUTTONSTYLE_BORDERLESS);
-    tile->setWidth(500);
-    tile->setHeight(220);
-    tile->setPadding(24, 28, 24, 28);
+    tile->setWidth(328);
+    tile->setHeight(304);
+    tile->setPadding(16, 16, 16, 16);
     tile->setBackgroundColor(p.card);
     tile->setBorderThickness(1);
     tile->setBorderColor(p.border);
     tile->setCornerRadius(8);
     tile->setHighlightCornerRadius(10);
-    tile->setAxis(brls::Axis::ROW);
+    tile->setAxis(brls::Axis::COLUMN);
     tile->setAlignItems(brls::AlignItems::CENTER);
 
     auto* logo_surface = new brls::Box(brls::Axis::COLUMN);
-    logo_surface->setWidth(150);
-    logo_surface->setHeight(150);
+    logo_surface->setWidth(104);
+    logo_surface->setHeight(104);
     logo_surface->setAlignItems(brls::AlignItems::CENTER);
     logo_surface->setJustifyContent(brls::JustifyContent::CENTER);
     logo_surface->setBackgroundColor(p.surface_alt);
     logo_surface->setCornerRadius(8);
-    auto* logo = new brls::Image();
-    logo->setWidth(82);
-    logo->setHeight(82);
-    logo->setScalingType(brls::ImageScalingType::FIT);
-    logo->setImageFromRes(logo_resource);
-    logo_surface->addView(logo);
+    if (logo_resource.empty()) {
+        auto* logo = new SteamPlatformMark();
+        logo->setWidth(82); logo->setHeight(82);
+        logo_surface->addView(logo);
+    } else {
+        auto* logo = new brls::Image();
+        logo->setWidth(82); logo->setHeight(82);
+        logo->setScalingType(brls::ImageScalingType::FIT);
+        logo->setImageFromRes(logo_resource);
+        logo_surface->addView(logo);
+    }
     tile->addView(logo_surface);
 
     auto* copy = new brls::Box(brls::Axis::COLUMN);
     copy->setGrow(1.0f);
-    copy->setPadding(12, 0, 12, 26);
+    copy->setWidth(296);
+    copy->setPadding(12, 0, 0, 0);
     auto* label = new brls::Label();
     label->setText(title);
     label->setFontSize(28);
     label->setTextColor(p.text);
     label->setHeight(42);
+    label->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     copy->addView(label);
     auto* description = makeMutedLabel(detail, 14);
     description->setHeight(48);
     description->setIsWrapping(true);
+    description->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     copy->addView(description);
     auto* state = new brls::Label();
     state->setText(account_state);
     state->setFontSize(13);
     state->setTextColor(p.accent);
     state->setHeight(28);
+    state->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     copy->addView(state);
     tile->addView(copy);
     tile->registerClickAction([open](brls::View*) -> bool {
@@ -156,7 +186,7 @@ brls::View* PlatformActivity::createContentView() {
         brls::getStr("lunarnx/platform/subtitle")));
 
     auto* platforms = new brls::Box(brls::Axis::ROW);
-    platforms->setHeight(250);
+    platforms->setHeight(336);
     platforms->setAlignItems(brls::AlignItems::CENTER);
     platforms->setJustifyContent(brls::JustifyContent::CENTER);
     const bool xbox_saved = savedFileExists(lunar::get_token_path());
@@ -182,19 +212,21 @@ brls::View* PlatformActivity::createContentView() {
         diagnosticLog("ui-platform", "PlayStation Open clicked");
         openPlayStation();
     });
-    ps_card->setMarginLeft(24);
+    ps_card->setMarginLeft(20);
     platforms->addView(ps_card);
-    content->addView(platforms);
 #if LUNARNX_STEAMLINK
-    auto* steam_tile = makeUtilityTile(
+    auto* steam_tile = makePlatformTile(
         brls::getStr("lunarnx/platform/steam_title"),
         brls::getStr("lunarnx/platform/steam_desc"),
+        brls::getStr("lunarnx/steam_link/pair"), "",
         [this]() {
             diagnosticLog("ui-platform", "Steam Link Open clicked");
             openSteamLink();
         });
-    content->addView(steam_tile);
+    steam_tile->setMarginLeft(20);
+    platforms->addView(steam_tile);
 #endif
+    content->addView(platforms);
     auto* about_tile = makeUtilityTile(
         brls::getStr("lunarnx/about/home_entry_title"),
         brls::getStr("lunarnx/about/home_entry_desc"),
@@ -204,7 +236,7 @@ brls::View* PlatformActivity::createContentView() {
         });
     content->addView(about_tile);
 #if LUNARNX_STEAMLINK
-    wireVerticalGridNavigation({{xbox_card, ps_card}, {steam_tile}, {about_tile}});
+    wireVerticalGridNavigation({{xbox_card, ps_card, steam_tile}, {about_tile}});
 #else
     wireVerticalGridNavigation({{xbox_card, ps_card}, {about_tile}});
 #endif
