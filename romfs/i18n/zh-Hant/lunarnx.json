@@ -562,6 +562,31 @@
   "steam_title": "Steam Link",
   "steam_desc": "區域網路 Steam Remote Play"
  },
+ "steam_ui": {
+   "settings_title": "Steam 串流設定",
+   "input_title": "Steam 輸入",
+   "settings_help": "僅儲存至 Steam 設定。串流中修改後，返回遊戲即生效。",
+   "touch": "觸控螢幕滑鼠",
+   "gyro": "體感控制",
+   "off": "關閉",
+   "trackpad": "觸控板",
+   "absolute": "絕對定位",
+   "native": "Steam 原生體感",
+   "mouse": "滑鼠瞄準（按住 ZL）",
+   "mapping_title": "Steam 按鍵對應",
+   "menu_button": "Steam 選單",
+   "save": "儲存並返回",
+   "save_failed": "無法儲存 Steam 設定。",
+   "gesture_help": "輕點：左鍵；靜按 0.4 秒後移動：拖曳；雙指輕點：右鍵；雙指上下滑動：滾輪。由螢幕右緣向內滑動開啟 LunarNX 選單。體感校準時保持靜止；滑鼠瞄準使用對應後的左扳機（預設 ZL）。",
+   "security_pin": "主機安全 PIN（選填）",
+   "security_help": "這是 Steam Remote Play 中另外設定的安全 PIN，不是配對碼。未設定可留空。",
+   "security_example": "例如：1234",
+   "start": "開始串流",
+   "requesting": "正在請求 Steam 串流…",
+   "stream_failed": "Steam 串流失敗。",
+   "worker_failed": "無法啟動串流工作執行緒。",
+   "paired": "已配對"
+ },
  "steam_link": {
   "title": "Steam Link",
   "subtitle": "搜尋同一網路中執行 Steam 的電腦，然後使用 PIN 配對。",
@@ -572,7 +597,7 @@
   "backspace": "刪除",
   "pair": "配對",
   "pairing": "等待 Steam 確認配對…",
-  "pair_success": "配對成功。下一步將接入串流傳輸。",
+  "pair_success": "配對成功。如主機設有安全 PIN，請填寫後開始串流。",
   "pair_failed": "Steam Link 配對失敗。"
  }
 }
