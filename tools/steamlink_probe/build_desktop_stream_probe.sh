@@ -21,7 +21,7 @@ set -- \
   "$ihs_src/ihs_enumeration_ll.c" "$ihs_src/ihs_enumeration_array.c" \
   "$ihs_src/client/client.c" "$ihs_src/client/discovery.c" \
   "$ihs_src/client/authorization.c" "$ihs_src/client/streaming.c" \
-  "$ihs_src/session/session.c" "$ihs_src/session/packet.c" "$ihs_src/session/frame.c" \
+  "$root_dir/src/steamlink/ihs_session.c" "$ihs_src/session/packet.c" "$ihs_src/session/frame.c" \
   "$ihs_src/session/window.c" "$ihs_src/session/frame_crypto.c" \
   "$ihs_src/session/frame_stats.c" "$ihs_src/session/callbacks.c" \
   "$ihs_src/session/retransmission.c" "$ihs_src/session/channels/channel.c" \
@@ -43,7 +43,7 @@ set -- \
   "$ihs_src/session/channels/control/control_input_kbd.c" \
   "$ihs_src/session/channels/control/control_input_mouse.c" \
   "$ihs_src/session/channels/control/control_input_touch.c" \
-  "$ihs_src/hid/device.c" "$ihs_src/hid/provider.c" "$ihs_src/hid/manager.c" \
+  "$root_dir/src/steamlink/ihs_hid_device.c" "$ihs_src/hid/provider.c" "$root_dir/src/steamlink/ihs_hid_manager.c" \
   "$ihs_src/hid/report.c" "$ihs_src/protobuf/discovery.pb-c.c" \
   "$ihs_src/protobuf/hiddevices.pb-c.c" "$ihs_src/protobuf/pb_utils.c" \
   "$ihs_src/protobuf/remoteplay.pb-c.c" "$pb_src" \

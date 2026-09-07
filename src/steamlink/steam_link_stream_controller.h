@@ -4,6 +4,8 @@
 
 #include "steam_link_client.h"
 #include "stream_support.h"
+#include "steam_hid.h"
+#include "../input/rumble_controller.h"
 #include "../app/stream_runtime.h"
 #include "../input/gamepad_reader.h"
 #include "../stream/media_pipeline.h"
@@ -100,7 +102,6 @@ private:
     void setState(app::StreamState state, const std::string& detail = {});
     void setLastError(std::string error);
     uint64_t mediaTimestampNs();
-    void sendMappedKey(bool pressed, uint32_t scancode, bool& previous);
 
     std::shared_ptr<SteamLinkClient> client_;
     SteamLinkHost host_;
@@ -113,11 +114,17 @@ private:
     std::unique_ptr<stream::MediaPipeline> media_;
     std::unique_ptr<input::GamepadReader> gamepad_;
     IHS_Session* session_ = nullptr;
+    IHS_HIDProvider* hid_provider_ = nullptr;
+    std::shared_ptr<SteamPadState> pad_state_;
+    std::unique_ptr<input::RumbleController> rumble_;
+    uint64_t rumble_generation_ = 0;
+    uint64_t guide_until_ns_ = 0;
+    bool hid_announced_ = false;
 
     std::atomic<app::StreamState> state_{app::StreamState::Idle};
     StreamCancellation cancellation_;
     InputPump input_pump_;
-    LogThrottle input_failure_log_;
+    LogThrottle hid_announce_log_;
     LogThrottle analog_log_;
     std::vector<uint8_t> video_parameters_;
     std::atomic<bool> session_connected_{false};
@@ -132,11 +139,6 @@ private:
     input::StreamInputRouter input_router_;
     stream::PerfStats perf_;
 
-    // Previous states for the keyboard fallback. ihslib's public API exposes
-    // keyboard/mouse/touch messages, while controller reports are HID devices.
-    // This keeps basic menu/game keyboard control usable until a Switch HID
-    // provider is added, and makes that limitation explicit in the log.
-    std::array<bool, 16> previous_keys_{};
 };
 
 } // namespace lunar::steamlink

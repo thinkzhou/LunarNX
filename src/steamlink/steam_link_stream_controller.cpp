@@ -89,7 +89,8 @@ bool SteamLinkStreamController::startStream() {
     video_samples_ = 0;
     audio_samples_ = 0;
     audio_sequence_ = 0;
-    previous_keys_.fill(false);
+    rumble_generation_ = 0;
+    guide_until_ns_ = 0;
     video_parameters_.clear();
     perf_.reset();
     setState(app::StreamState::Connecting, "Requesting Steam stream");
@@ -213,6 +214,11 @@ bool SteamLinkStreamController::initializeSession(const SteamLinkStreamInfo& inf
         setLastError("Steam session allocation failed");
         return false;
     }
+    pad_state_ = std::make_shared<SteamPadState>();
+    hid_announced_ = false;
+    hid_provider_ = createSteamPadProvider(pad_state_);
+    IHS_SessionHIDAddProvider(session_, hid_provider_);
+    lunar::persistentEventLog("steam-hid", "registered generic Switch gamepad axes=6 buttons=16 report_bytes=48");
     static const IHS_StreamSessionCallbacks session_callbacks{
         &SteamLinkStreamController::onSessionInitialized,
         &SteamLinkStreamController::onSessionConnecting,
@@ -253,6 +259,8 @@ bool SteamLinkStreamController::initializeSession(const SteamLinkStreamInfo& inf
         setLastError("Steam session worker failed to start");
         IHS_SessionDestroy(session_);
         session_ = nullptr;
+        destroySteamPadProvider(hid_provider_);
+        hid_provider_ = nullptr;
         return false;
     }
     return true;
@@ -266,6 +274,7 @@ void SteamLinkStreamController::stopStream(bool set_disconnected) {
     std::lock_guard<std::mutex> lock(lifecycle_mutex_);
     // update() never waits for this lock, so joining while holding it is safe.
     input_pump_.stop();
+    if (rumble_) rumble_->stop();
     if (session_) {
         lunar::persistentEventLog("steam-stream", "session disconnect begin");
         closeSession(session_, [this](IHS_Session* session) {
@@ -275,6 +284,10 @@ void SteamLinkStreamController::stopStream(bool set_disconnected) {
         }, IHS_SessionThreadedJoin, IHS_SessionDestroy);
         lunar::persistentEventLog("steam-stream", "session disconnect done");
     }
+    destroySteamPadProvider(hid_provider_);
+    hid_provider_ = nullptr;
+    pad_state_.reset();
+    rumble_.reset();
     if (gamepad_) gamepad_->releaseCaptureButton();
     gamepad_.reset();
     if (media_) {
@@ -299,20 +312,6 @@ bool SteamLinkStreamController::resumeAfterForeground(CancelCallback cancel) {
     return startStream();
 }
 
-void SteamLinkStreamController::sendMappedKey(bool pressed, uint32_t scancode,
-                                               bool& previous) {
-    if (!session_ || pressed == previous) return;
-    const bool sent = sendKeyTransition(pressed, previous, [&](bool down) {
-        return down ? IHS_SessionSendKeyDown(session_, scancode)
-                    : IHS_SessionSendKeyUp(session_, scancode);
-    });
-    if (sent) perf_.recordInputPacket();
-    if (sent || input_failure_log_.allow(steadyNowNs() / 1000000)) {
-        lunar::diagnosticLog("steam-input", "keyboard scancode=0x%x pressed=%d sent=%d",
-                             scancode, pressed ? 1 : 0, sent ? 1 : 0);
-    }
-}
-
 void SteamLinkStreamController::update() {
     std::unique_lock<std::mutex> lock(lifecycle_mutex_, std::try_to_lock);
     if (!lock.owns_lock() || cancellation_.requested()) return;
@@ -325,30 +324,41 @@ void SteamLinkStreamController::update() {
             gamepad_.reset();
             return;
         }
-        lunar::persistentEventLog("steam-input", "using keyboard fallback for Steam input");
+        rumble_ = std::make_unique<input::RumbleController>();
+        if (!rumble_->initialize())
+            lunar::persistentEventLog("steam-input", "rumble unavailable; input remains enabled");
+        lunar::persistentEventLog("steam-input", "native generic gamepad input active");
     }
     auto state = input_router_.route(gamepad_->read());
-    if (guide_requested_.exchange(false)) state.guide = true;
-    const std::array<bool, 16> keys{
-        state.a, state.b, state.x, state.y,
-        state.dpad_up, state.dpad_down, state.dpad_left, state.dpad_right,
-        state.lb, state.rb, state.l3, state.r3, state.view, state.menu,
-        state.lt, state.rt};
-    // USB HID usage IDs: Space, Escape, X, Y, arrows, Q/E, Z/C, Tab/Enter, 1/2.
-    constexpr std::array<uint32_t, 16> usages{
-        0x2c, 0x29, 0x1b, 0x1c, 0x52, 0x51, 0x50, 0x4f,
-        0x14, 0x08, 0x1d, 0x06, 0x2b, 0x28, 0x1e, 0x1f};
-    for (size_t i = 0; i < keys.size(); ++i) {
-        sendMappedKey(keys[i], usages[i], previous_keys_[i]);
+    const auto now = steadyNowNs();
+    if (!hid_announced_ && hid_announce_log_.allow(now / 1000000)) {
+        hid_announced_ = IHS_SessionHIDNotifyDeviceChange(session_);
+        lunar::persistentEventLog("steam-hid", hid_announced_
+            ? "gamepad device list sent" : "device list pending: host input not ready");
     }
-    // Analog values are still sampled and reported so the real Switch path
-    // is visible in the log. A virtual HID gamepad is the follow-up needed to
-    // carry these values natively to Steam.
-    if ((state.left_stick_x || state.left_stick_y || state.right_stick_x || state.right_stick_y) &&
-        analog_log_.allow(steadyNowNs() / 1000000)) {
-        lunar::diagnosticLog("steam-input", "analog sampled (not transmitted) lx=%d ly=%d rx=%d ry=%d",
-                             state.left_stick_x, state.left_stick_y,
-                             state.right_stick_x, state.right_stick_y);
+    if (guide_requested_.exchange(false)) guide_until_ns_ = now + 150000000;
+    state.guide = state.guide || now < guide_until_ns_;
+    pad_state_->publish(state);
+    if (rumble_) {
+        std::lock_guard<std::mutex> pad_lock(pad_state_->mutex);
+        if (pad_state_->rumble_generation != rumble_generation_) {
+            rumble_generation_ = pad_state_->rumble_generation;
+            rumble_->setRumble(0, pad_state_->rumble_low / 65535.0f,
+                pad_state_->rumble_high / 65535.0f, 0, 0,
+                uint16_t(std::min(pad_state_->rumble_duration, uint32_t(65535))), 0, 0);
+        }
+        rumble_->setEnabled(input_router_.gameHasInput());
+        rumble_->update();
+    }
+    if (analog_log_.allow(now / 1000000)) {
+        const auto report = encodeSteamPad(state);
+        lunar::diagnosticLog("steam-hid", "host_opened=%d reports=%llu buttons=%04x lx=%d ly=%d rx=%d ry=%d lt=%u rt=%u rumble_commands=%llu",
+            int(pad_state_->opened.load()), (unsigned long long)pad_state_->reports.load(),
+            unsigned(report[16]) | (unsigned(report[17]) << 8),
+            state.left_stick_x, state.left_stick_y, state.right_stick_x, state.right_stick_y,
+            unsigned(report[8]) | (unsigned(report[9]) << 8),
+            unsigned(report[10]) | (unsigned(report[11]) << 8),
+            (unsigned long long)rumble_generation_);
     }
 }
 
