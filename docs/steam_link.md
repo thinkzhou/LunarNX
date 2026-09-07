@@ -49,8 +49,11 @@ These settings are saved separately in `config.json.steam-input`; button mapping
 uses `steam_button_mapping` rather than the Xbox profile. The pairing/start page
 only handles authorization, the optional security PIN and connection status.
 The in-stream Settings entry opens the same Steam-specific page; saved changes
-apply on return to the game, and button mappings are reloaded. Steam's Guide
-action is labeled Steam menu rather than Xbox button. English, Simplified Chinese
+apply on return to the game, and button mappings are reloaded.
+The explicit Save and return button persists touch/gyro modes; B discards those
+unsaved changes and returns without a filesystem write, even after save failure.
+Button mappings have their own save flow.
+Steam's Guide action is labeled Steam menu rather than Xbox button. English, Simplified Chinese
 and Traditional Chinese are included. Paired hosts can reconnect in the same app
 run without starting a second pairing request.
 

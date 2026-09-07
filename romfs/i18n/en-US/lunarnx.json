@@ -562,7 +562,8 @@
   "steam_title": "Steam Link",
   "steam_desc": "Steam Remote Play on your local network"
  },
- "steam_ui": {
+  "steam_ui": {
+    "discard": "Discard and return",
    "settings_title": "Steam streaming settings",
    "input_title": "Steam input",
    "settings_help": "Saved for Steam only. In-stream changes apply when you return to the game.",

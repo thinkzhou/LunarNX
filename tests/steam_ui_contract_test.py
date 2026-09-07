@@ -23,6 +23,8 @@ settings = source("src/ui/steam_settings_activity.cpp")
 assert '".steam-input"' in settings
 assert "steamlink::commitSettingsFile(temporary, path)" in settings
 assert "ButtonMappingProfile::Steam" in settings
+discard = settings.split('"lunarnx/steam_ui/discard"', 1)[1].split("auto* root", 1)[0]
+assert "popActivity" in discard and "closeSettings" not in discard
 hosts = source("src/ui/steam_link_activity.cpp")
 stream = source("src/ui/stream_view.cpp")
 assert "new SteamSettingsActivity" in hosts and "new SteamSettingsActivity" in stream

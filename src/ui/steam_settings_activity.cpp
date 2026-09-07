@@ -60,8 +60,11 @@ brls::View* SteamSettingsActivity::createContentView() {
     auto* scroll = new brls::ScrollingFrame();
     scroll->setBackgroundColor(uiPalette().background);
     scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
-    scroll->registerAction(brls::getStr("lunarnx/common/back"), brls::ControllerButton::BUTTON_B,
-        [this](brls::View*) { closeSettings(); return true; });
+    scroll->registerAction(brls::getStr("lunarnx/steam_ui/discard"), brls::ControllerButton::BUTTON_B,
+        [](brls::View*) {
+            brls::Application::popActivity(brls::TransitionAnimation::NONE);
+            return true;
+        });
     auto* root = new brls::Box(brls::Axis::COLUMN);
     root->setPadding(20, 52, 28, 52);
     scroll->setContentView(root);
