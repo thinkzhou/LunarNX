@@ -108,6 +108,9 @@ jobs:
           ./scripts/setup_dependencies.sh
           ./scripts/setup_chiaki_dependencies.sh
 
+      - name: Check Steam dependency setup from a clean checkout
+        run: python3 tests/steam_dependency_setup_test.py
+
       - name: Build Chiaki libraries
         run: ./tools/chiaki_switch/build_in_container.sh
 
