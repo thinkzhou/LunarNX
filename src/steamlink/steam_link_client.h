@@ -58,6 +58,7 @@ public:
     bool requestStreaming(const SteamLinkHost& host, const std::string& pin,
                           int width, int height, StreamingCallback callback);
     void cancelAuthorization();
+    void cancelStreaming();
     bool isAuthorized(uint64_t client_id) const;
     uint64_t authorizedSteamId(uint64_t client_id) const;
     bool getSessionClientConfig(IHS_ClientConfig* config) const;
@@ -91,6 +92,7 @@ private:
     bool ihs_initialized_ = false;
     bool discovery_started_ = false; // Discovery lifecycle is owned by the UI thread.
     mutable std::mutex mutex_;
+    std::mutex streaming_operation_mutex_;
     std::unordered_map<uint64_t, IHS_HostInfo> host_infos_;
     std::vector<SteamLinkHost> hosts_;
     HostCallback host_callback_;
