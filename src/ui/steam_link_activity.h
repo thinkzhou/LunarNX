@@ -33,6 +33,7 @@ private:
     std::string security_pin_;
     bool authorizing_ = false;
     bool starting_stream_ = false;
+    std::shared_ptr<steamlink::SteamLinkStreamController> pending_runtime_;
 
     void startAuthorization();
     void startStream();

@@ -1,6 +1,7 @@
 #ifdef __SWITCH__
 
 #include "steam_link_client.h"
+#include "stream_support.h"
 
 #include "../common.h"
 #include "../diagnostics.h"
@@ -436,9 +437,17 @@ std::string SteamLinkClient::streamingError(IHS_StreamingResult result) {
 }
 
 void SteamLinkClient::logFunction(IHS_LogLevel level, const char* tag, const char* message) {
+    // Packet-level traces must never synchronously flush to the SD card.
+    if (level >= IHS_LogLevelDebug) return;
+    static LogThrottle warning_throttle;
+    static LogThrottle info_throttle;
+    const auto now_ms = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    if (level == IHS_LogLevelWarn && !warning_throttle.allow(now_ms)) return;
+    if (level == IHS_LogLevelInfo && !info_throttle.allow(now_ms)) return;
     const char* safe_tag = tag ? tag : "ihslib";
     const char* safe_message = message ? message : "";
-    if (level <= IHS_LogLevelError) {
+    if (level <= IHS_LogLevelWarn) {
         lunar::persistentEventLog("steam-ihs", "level=%s tag=%s message=%s",
                                   IHS_LogLevelName(level), safe_tag, safe_message);
     } else {

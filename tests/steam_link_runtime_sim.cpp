@@ -1,0 +1,109 @@
+#include "steamlink/stream_support.h"
+#include <cassert>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+
+using namespace lunar::steamlink;
+using namespace std::chrono_literals;
+
+int main(int argc, char** argv) {
+    {
+        auto* session = new int(42);
+        std::vector<int> events;
+        auto disconnect = [&](int* p) { assert(*p == 42); events.push_back(1); };
+        auto join = [&](int* p) { assert(*p == 42); events.push_back(2); };
+        auto destroy = [&](int* p) { events.push_back(3); delete p; };
+        closeSession(session, disconnect, join, destroy);
+        closeSession(session, disconnect, join, destroy);
+        assert(!session && (events == std::vector<int>{1,2,3}));
+        bool previous = false;
+        std::vector<bool> sent;
+        auto send = [&](bool down) { sent.push_back(down); return true; };
+        assert(!sendKeyTransition(true, previous, [](bool) { return false; }));
+        assert(!previous);
+        assert(sendKeyTransition(true, previous, send));
+        assert(!sendKeyTransition(true, previous, send));
+        assert(sendKeyTransition(false, previous, send));
+        assert((sent == std::vector<bool>{true, false}));
+    }
+    // The production cancellation waiter must wake without a network callback,
+    // even while the protocol owner holds its lifecycle lock.
+    for (int i = 0; i < 50; ++i) {
+        StreamCancellation cancel;
+        std::mutex mutex;
+        std::condition_variable cv;
+        std::atomic<bool> waiting{false};
+        std::thread worker([&] {
+            std::unique_lock<std::mutex> lock(mutex);
+            waiting = true;
+            assert(cancel.wait(cv, lock, 20s, [] { return false; }));
+            assert(cancel.requested());
+        });
+        while (!waiting) std::this_thread::yield();
+        const auto start = std::chrono::steady_clock::now();
+        cancel.request();
+        cancel.request();
+        worker.join();
+        assert(std::chrono::steady_clock::now() - start < 500ms);
+    }
+    {
+        StreamCancellation cancel;
+        std::mutex mutex;
+        std::condition_variable cv;
+        std::unique_lock<std::mutex> lock(mutex);
+        assert(!cancel.wait(cv, lock, 20ms, [] { return false; }));
+        assert(cancel.wait(cv, lock, 20ms, [] { return true; }));
+    }
+    // Exercise the same pump/try-lock shutdown contract used by the controller.
+    for (int i = 0; i < 30; ++i) {
+        InputPump pump;
+        std::mutex lifecycle;
+        std::atomic<unsigned> sends{0};
+        pump.start([&] {
+            std::unique_lock<std::mutex> lock(lifecycle, std::try_to_lock);
+            if (lock.owns_lock()) ++sends;
+        });
+        while (sends < 2) std::this_thread::sleep_for(1ms);
+        std::lock_guard<std::mutex> lock(lifecycle);
+        pump.stop();
+        const auto stopped = sends.load();
+        pump.stop();
+        std::this_thread::sleep_for(10ms);
+        assert(sends == stopped);
+    }
+    std::vector<uint8_t> params;
+    const uint8_t avcc[] = {1, 66, 0, 30, 255, 225, 0, 2, 0x67, 1, 1, 0, 2, 0x68, 2};
+    assert(h264Parameters(avcc, sizeof(avcc), params));
+    assert((params == std::vector<uint8_t>{0,0,0,1,0x67,1,0,0,0,1,0x68,2}));
+    for (size_t n = 1; n < sizeof(avcc); ++n) {
+        assert(!h264Parameters(avcc, n, params));
+        assert(params.empty());
+    }
+    assert(h264Parameters(nullptr, 0, params));
+    assert(!h264Parameters(nullptr, 1, params));
+    const uint8_t annex[] = {0,0,0,1,0x67,1,0,0,0,1,0x68,2};
+    assert(h264Parameters(annex, sizeof(annex), params));
+    const uint8_t idr[] = {0,0,0,1,0x65,3};
+    const auto unit = h264AccessUnit(params, idr, sizeof(idr));
+    assert(unit.size() == sizeof(annex) + sizeof(idr));
+    LogThrottle throttle;
+    assert(throttle.allow(1000));
+    for (int i = 0; i < 10000; ++i) assert(!throttle.allow(1001));
+    assert(throttle.allow(2000));
+    // Optional real H.264 fixture: transport supplies SPS/PPS separately.
+    if (argc == 4) {
+        auto read = [](const char* path) {
+            std::ifstream file(path, std::ios::binary);
+            return std::vector<uint8_t>(std::istreambuf_iterator<char>(file), {});
+        };
+        const auto config = read(argv[1]);
+        const auto frames = read(argv[2]);
+        assert(!config.empty() && !frames.empty());
+        assert(h264Parameters(config.data(), config.size(), params));
+        const auto output = h264AccessUnit(params, frames.data(), frames.size());
+        std::ofstream file(argv[3], std::ios::binary);
+        file.write(reinterpret_cast<const char*>(output.data()), output.size());
+    }
+    std::cout << "PASS: cancellation, timeout, input pump, key retry/release, single session destruction, H264 config, log throttle\n";
+}
