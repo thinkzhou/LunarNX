@@ -1,0 +1,6 @@
+[submodule "vendor/ihslib"]
+	path = vendor/ihslib
+	url = https://github.com/mariotaku/ihslib.git
+[submodule "vendor/protobuf-c"]
+	path = vendor/protobuf-c
+	url = https://github.com/protobuf-c/protobuf-c.git

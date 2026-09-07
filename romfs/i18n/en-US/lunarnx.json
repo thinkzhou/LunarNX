@@ -558,6 +558,21 @@
   "xbox_title": "Xbox",
   "xbox_desc": "Remote Play & xCloud",
   "ps_title": "PlayStation",
-  "ps_desc": "Remote Play for PS4 & PS5"
+  "ps_desc": "Remote Play for PS4 & PS5",
+  "steam_title": "Steam Link",
+  "steam_desc": "Steam Remote Play on your local network"
+ },
+ "steam_link": {
+  "title": "Steam Link",
+  "subtitle": "Find a computer running Steam on the same network, then pair with its PIN.",
+  "discovering": "Searching for Steam hosts…",
+  "refresh": "Refresh",
+  "no_hosts": "No Steam hosts found. Start Steam and check that both devices are on the same network.",
+  "pin_help": "Enter this four-digit pairing code in Steam's Pair Steam Link dialog.",
+  "backspace": "Delete",
+  "pair": "Pair",
+  "pairing": "Waiting for Steam to confirm pairing…",
+  "pair_success": "Paired successfully. Stream transport is the next integration step.",
+  "pair_failed": "Steam Link pairing failed."
  }
 }
