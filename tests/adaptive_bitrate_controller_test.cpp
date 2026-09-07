@@ -199,10 +199,10 @@ void test_profile_specific_jitter_policy() {
     home_path.quality = NetworkPathQuality::Good;
     const auto home = computeVideoJitterPolicy(NetworkPathMode::Home,
                                                 home_path);
-    require(home.frame_hold_ms <= 32 && home.missing_packet_hold_ms <= 32,
-            "healthy LAN keeps retransmission latency below two frames");
-    require(home.max_head_blocked_frames == 3,
-            "home path prioritizes input-to-picture latency");
+    require(home.frame_hold_ms == 60 && home.missing_packet_hold_ms == 60,
+            "Home restores the bounded v0.2.0 minimum loss deadline");
+    require(home.max_head_blocked_frames == 8,
+            "Home allows v0.2.0 frame elasticity during WAN repair");
 
     auto home_50_path = estimate(6, 2000, 0, 0, 0, 0, 0,
                                  50, 50, 0);
@@ -210,14 +210,12 @@ void test_profile_specific_jitter_policy() {
     home_50_path.observed_quality = NetworkPathQuality::Good;
     const auto home_50 = computeVideoJitterPolicy(
         NetworkPathMode::Home, home_50_path);
-    require(home_50.frame_hold_ms <= 40,
-            "complete 50 ms LAN frames keep the low-latency pacing budget");
-    require(home_50.missing_packet_hold_ms >= 70 &&
-                home_50.missing_packet_hold_ms <= 80,
-            "50 ms LAN loss leaves enough time for one retransmission");
-    require(home_50.head_blocked_hold_ms ==
-                home_50.missing_packet_hold_ms,
-            "LAN HOL handling must not pre-empt its useful retransmission");
+    require(home_50.frame_hold_ms == 120,
+            "50 ms Home loss uses the v0.2.0 recovery budget");
+    require(home_50.missing_packet_hold_ms == 120,
+            "50 ms Home loss tolerates retransmission scheduling jitter");
+    require(home_50.head_blocked_hold_ms == 80,
+            "Home backlog limit matches v0.2.0");
 
     auto sudden_home_rtt = estimate(7, 2000, 0, 20, 0, 0, 0,
                                     5, 5, 75, 0, 80);
@@ -225,8 +223,8 @@ void test_profile_specific_jitter_policy() {
     sudden_home_rtt.observed_quality = NetworkPathQuality::Poor;
     const auto home_spike = computeVideoJitterPolicy(
         NetworkPathMode::Home, sudden_home_rtt);
-    require(home_spike.frame_hold_ms <= 32,
-            "a raw RTT spike must not delay complete LAN frames");
+    require(home_spike.frame_hold_ms == 180,
+            "Home loss deadline reacts immediately to raw RTT spikes");
     require(home_spike.missing_packet_hold_ms >= 140 &&
                 home_spike.head_blocked_hold_ms >= 100,
             "a raw RTT spike with loss must immediately expand retry time");

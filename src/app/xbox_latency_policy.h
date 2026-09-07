@@ -124,10 +124,9 @@ private:
         XboxLatencyState result;
         result.mode = mode_;
         if (!cloud_) {
-            result.video_presentation =
-                mode_ == XboxLatencyMode::Realtime
-                    ? stream::VideoPresentationMode::RealtimeAdaptive
-                    : stream::VideoPresentationMode::BufferedFifo;
+            // Repair encoded dependencies in order, then present the newest
+            // decoded picture. WAN recovery must not add another FIFO delay.
+            result.video_presentation = stream::VideoPresentationMode::RealtimeLatest;
             result.video_decode_catch_up =
                 stream::VideoDecodeCatchUpMode::Realtime;
             result.audio_latency =
@@ -167,12 +166,9 @@ private:
 
 inline stream::VideoPresentationMode xboxVideoPresentationMode(
     bool cloud,
-    const webrtc::NetworkPathEstimate& path) {
-    if (cloud) return stream::VideoPresentationMode::BufferedFifo;
-    if (path.valid && path.quality != webrtc::NetworkPathQuality::Good) {
-        return stream::VideoPresentationMode::BufferedFifo;
-    }
-    return stream::VideoPresentationMode::RealtimeAdaptive;
+    const webrtc::NetworkPathEstimate&) {
+    return cloud ? stream::VideoPresentationMode::BufferedFifo
+                 : stream::VideoPresentationMode::RealtimeLatest;
 }
 
 inline stream::AudioLatencyMode xboxAudioLatencyMode(bool cloud) {

@@ -103,21 +103,41 @@ int main() {
     assert(stream::audioStartupPrebufferPackets(
                stream::AudioLatencyMode::Resilient) == 4);
 
+    // Home should always choose the freshest already-decoded frame, including
+    // after a burst/recovery. Cloud and PS keep their existing FIFO/adaptive modes.
+    app::XboxLatencyController home_freshness(false);
+    webrtc::NetworkPathEstimate home_path;
+    for (const auto quality : {webrtc::NetworkPathQuality::Good,
+                               webrtc::NetworkPathQuality::Poor,
+                               webrtc::NetworkPathQuality::Fair}) {
+        home_path.valid = true;
+        home_path.quality = home_path.observed_quality = quality;
+        for (bool recovery : {false, true}) {
+            const auto home = home_freshness.observe(home_path, recovery);
+            assert(stream::stalePresentationFramesToDrop(
+                home.video_presentation, 2, 1'000) == 1);
+            assert(stream::stalePresentationFramesToDrop(
+                app::xboxVideoPresentationMode(false, home_path), 2, 1'000) == 1);
+            assert(stream::stalePresentationFramesToDrop(
+                home.video_presentation, 1, 100'000) == 0);
+        }
+    }
+
     webrtc::NetworkPathEstimate path;
     assert(app::xboxVideoPresentationMode(false, path) ==
-           stream::VideoPresentationMode::RealtimeAdaptive);
+           stream::VideoPresentationMode::RealtimeLatest);
     path.valid = true;
     path.quality = webrtc::NetworkPathQuality::Good;
     path.observed_quality = webrtc::NetworkPathQuality::Good;
     path.sequence = 1;
     assert(app::xboxVideoPresentationMode(false, path) ==
-           stream::VideoPresentationMode::RealtimeAdaptive);
+           stream::VideoPresentationMode::RealtimeLatest);
     path.quality = webrtc::NetworkPathQuality::Fair;
     assert(app::xboxVideoPresentationMode(false, path) ==
-           stream::VideoPresentationMode::BufferedFifo);
+           stream::VideoPresentationMode::RealtimeLatest);
     path.quality = webrtc::NetworkPathQuality::Poor;
     assert(app::xboxVideoPresentationMode(false, path) ==
-           stream::VideoPresentationMode::BufferedFifo);
+           stream::VideoPresentationMode::RealtimeLatest);
     path.quality = webrtc::NetworkPathQuality::Good;
     app::XboxLatencyController cloud_latency(true);
     auto latency = cloud_latency.observe(path, false);

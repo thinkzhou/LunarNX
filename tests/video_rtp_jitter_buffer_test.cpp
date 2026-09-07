@@ -1,4 +1,5 @@
 #include "webrtc/video_rtp_jitter_buffer.h"
+#include "webrtc/video_jitter_policy.h"
 
 #include <cassert>
 #include <cstdint>
@@ -66,6 +67,105 @@ void openWithIdr(Harness& h, uint16_t sequence, uint32_t timestamp) {
     h.push(rtp(sequence, timestamp, true, {0x65, 0xaa}), 0);
     assert(h.frames.size() == 1);
     assert(!h.jitter.waitingForKeyframe());
+}
+
+// Exercise the actual Home policy and jitter buffer together: a policy-only
+// assertion misses the earlier HOL deadline when later complete frames arrive.
+void test_home_policy_emits_clean_frames_immediately_and_bounds_unrepaired_loss() {
+    using namespace lunar::webrtc;
+    for (uint32_t rtt_ms : {0u, 5u, 60u, 140u, 160u, 500u}) {
+        Harness h;
+        NetworkPathEstimate path;
+        path.raw_rtt_ms = path.smoothed_rtt_ms = rtt_ms;
+        const auto policy = computeVideoJitterPolicy(NetworkPathMode::Home, path);
+        h.jitter.setHoldMs(policy.frame_hold_ms);
+        h.jitter.setMissingPacketHoldMs(policy.missing_packet_hold_ms);
+        h.jitter.setRecoveryHoldMs(policy.recovery_hold_ms);
+        h.jitter.setHeadBlockedPolicy(policy.max_head_blocked_frames,
+                                      policy.head_blocked_hold_ms);
+        h.jitter.setNetworkRttMs(rtt_ms);
+        openWithIdr(h, 10, 1000);
+        h.push(rtp(11, 4000, true, {0x61, 0x44}), 10);
+        assert(h.frames.size() == 2); // No timer/prebuffer needed for clean media.
+        assert(h.jitter.stats().buffered_frames == 0);
+        h.push(rtp(12, 7000, false, {0x7c, 0x81, 0x11}), 20);
+        h.push(rtp(14, 7000, true, {0x7c, 0x41, 0x33}), 21);
+        for (uint16_t i = 0; i < 20; ++i) {
+            h.push(rtp(15 + i, 10000 + i * 3000, true, {0x61, 0x44}),
+                   37 + i * 17);
+        }
+        assert(h.jitter.stats().corrupt_frames == 1);
+        assert(h.recovery_requests > 0);
+        assert(h.jitter.stats().buffered_frames == 0);
+    }
+}
+
+void test_home_wan_keyframe_repair_keeps_its_longer_recovery_budget() {
+    using namespace lunar::webrtc;
+    Harness h;
+    NetworkPathEstimate path;
+    path.raw_rtt_ms = path.smoothed_rtt_ms = 300;
+    const auto policy = computeVideoJitterPolicy(NetworkPathMode::Home, path);
+    h.jitter.setHoldMs(policy.frame_hold_ms);
+    h.jitter.setMissingPacketHoldMs(policy.missing_packet_hold_ms);
+    h.jitter.setRecoveryHoldMs(policy.recovery_hold_ms);
+    h.jitter.setHeadBlockedPolicy(policy.max_head_blocked_frames,
+                                  policy.head_blocked_hold_ms);
+    h.jitter.setNetworkRttMs(300);
+    // Start while waiting for IDR. Ordinary frames may use the 180 ms cap,
+    // but this recovery IDR needs a complete WAN round trip.
+    h.push(rtp(10, 1000, false, {0x7c, 0x85, 0x11}), 10);
+    h.push(rtp(12, 1000, true, {0x7c, 0x45, 0x33}), 11);
+    for (uint16_t i = 0; i < 17; ++i) {
+        h.push(rtp(13 + i, 4000 + i * 3000, true, {0x61, 0x44}),
+               27 + i * 17);
+    }
+    h.push(rtp(11, 1000, false, {0x7c, 0x05, 0x22}), 311);
+    assert(h.jitter.stats().corrupt_frames == 0);
+    assert(h.frames.size() == 18);
+    assert(!h.jitter.waitingForKeyframe());
+}
+
+void test_home_wan_retransmission_survives_frame_backlog() {
+    using namespace lunar::webrtc;
+    for (const auto quality : {NetworkPathQuality::Good,
+                               NetworkPathQuality::Fair,
+                               NetworkPathQuality::Poor}) {
+        for (const auto timing : {std::pair<uint32_t, uint32_t>{60, 30},
+                                  {60, 50}, {80, 50}, {120, 30},
+                                  {140, 0}, {140, 15}, {160, 0}, {160, 15}}) {
+            Harness h;
+            NetworkPathEstimate path;
+            path.valid = true;
+            path.raw_rtt_ms = path.smoothed_rtt_ms = timing.first;
+            path.quality = path.observed_quality = quality;
+            const auto policy = computeVideoJitterPolicy(NetworkPathMode::Home, path);
+            h.jitter.setHoldMs(policy.frame_hold_ms);
+            h.jitter.setMissingPacketHoldMs(policy.missing_packet_hold_ms);
+            h.jitter.setRecoveryHoldMs(policy.recovery_hold_ms);
+            h.jitter.setHeadBlockedPolicy(policy.max_head_blocked_frames,
+                                          policy.head_blocked_hold_ms);
+            h.jitter.setNetworkRttMs(timing.first);
+            openWithIdr(h, 10, 1000);
+            h.push(rtp(11, 4000, false, {0x7c, 0x81, 0x11}), 10);
+            h.push(rtp(13, 4000, true, {0x7c, 0x41, 0x33}), 11);
+            uint16_t sequence = 14;
+            uint32_t timestamp = 7000;
+            for (uint64_t now = 12; now <= 350; ++now) {
+                if (now == 11 + timing.first + timing.second) {
+                    h.push(rtp(12, 4000, false, {0x7c, 0x01, 0x22}), now);
+                }
+                if (now >= 27 && (now - 27) % 17 == 0) {
+                    h.push(rtp(sequence++, timestamp, true, {0x61, 0x44}), now);
+                    timestamp += 3000;
+                }
+            }
+            assert(h.frames.size() == 22);
+            assert(h.jitter.stats().corrupt_frames == 0);
+            assert(h.recovery_requests == 0);
+            assert(h.jitter.stats().buffered_frames == 0);
+        }
+    }
 }
 
 void test_reorders_retransmitted_fu_a() {
@@ -758,6 +858,9 @@ void test_frame_backlog_bounds_head_of_line_wait() {
 } // namespace
 
 int main() {
+    test_home_wan_keyframe_repair_keeps_its_longer_recovery_budget();
+    test_home_policy_emits_clean_frames_immediately_and_bounds_unrepaired_loss();
+    test_home_wan_retransmission_survives_frame_backlog();
     test_reorders_retransmitted_fu_a();
     test_repeated_timeouts_gate_p_frames_until_real_idr();
     test_active_frame_progress_extends_idle_deadline();
