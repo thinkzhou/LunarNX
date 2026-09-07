@@ -179,19 +179,26 @@ bool SteamLinkClient::startDiscovery(HostCallback callback) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         host_callback_ = std::move(callback);
-        hosts_.clear();
-        host_infos_.clear();
+    }
+    // Refresh reuses the periodic discovery timer and preserves hosts needed by
+    // pairing. Restarting ihslib's asynchronous timer can race its end callback.
+    if (discovery_started_) {
+        emitHosts();
+        return true;
     }
     if (!IHS_ClientStartDiscovery(client_, 2500)) {
         last_error_ = "Steam Link discovery is already running";
         return false;
     }
+    discovery_started_ = true;
+    emitHosts();
     lunar::diagnosticLog("steam-link", "discovery started interval_ms=2500");
     return true;
 }
 
 void SteamLinkClient::stopDiscovery() {
     if (client_) IHS_ClientStopDiscovery(client_);
+    discovery_started_ = false;
     lunar::diagnosticLog("steam-link", "discovery stopped");
     std::lock_guard<std::mutex> lock(mutex_);
     host_callback_ = {};

@@ -4,6 +4,7 @@
 #include "button_mapping_activity.h"
 #include "../common.h"
 #include "../diagnostics.h"
+#include "../steamlink/settings_file.h"
 #include <cJSON.h>
 #include <cstdio>
 #include <cstring>
@@ -18,7 +19,7 @@ int mode(cJSON* root, const char* key, int fallback) {
 }
 SteamInputSettings loadSteamInputSettings() {
     SteamInputSettings settings;
-    FILE* file = std::fopen(settingsPath().c_str(), "rb");
+    FILE* file = steamlink::openSettingsFile(settingsPath());
     if (!file) return settings;
     char data[1025]{};
     const size_t count = std::fread(data, 1, 1024, file);
@@ -38,11 +39,20 @@ bool saveSteamInputSettings(const SteamInputSettings& settings) {
     const auto temporary = path + ".tmp";
     ensureDiagnosticLogDirectory();
     FILE* file = std::fopen(temporary.c_str(), "wb");
-    if (!file) return false;
+    if (!file) {
+        diagnosticLog("steam-settings", "save failed stage=open errno=%d", errno);
+        return false;
+    }
     const bool written = std::fprintf(file, "{\"touch\":%d,\"gyro\":%d}\n",
         int(settings.touch), int(settings.gyro)) > 0;
+    const int write_error = written ? 0 : errno;
     const bool closed = std::fclose(file) == 0;
-    const bool ok = written && closed && std::rename(temporary.c_str(), path.c_str()) == 0;
+    const int close_error = closed ? 0 : errno;
+    const bool ok = written && closed && steamlink::commitSettingsFile(temporary, path);
+    const int error = !written ? write_error : !closed ? close_error : errno;
+    if (!ok) diagnosticLog("steam-settings", "save failed stage=%s errno=%d (%s)",
+        !written ? "write" : !closed ? "close" : "commit", error, std::strerror(error));
+    else diagnosticLog("steam-settings", "saved touch=%d gyro=%d", int(settings.touch), int(settings.gyro));
     if (!ok) std::remove(temporary.c_str());
     return ok;
 }
@@ -82,6 +92,7 @@ brls::View* SteamSettingsActivity::createContentView() {
     card->addView(mapping);
     root->addView(card);
     auto* help = makeMutedLabel(brls::getStr("lunarnx/steam_ui/gesture_help"), 16);
+    help->setSingleLine(false);
     help->setIsWrapping(true); help->setHeight(132); help->setMarginTop(20);
     root->addView(help);
     auto* done = new brls::Button();

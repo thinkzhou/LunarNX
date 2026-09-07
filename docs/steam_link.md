@@ -43,8 +43,16 @@ channels are destroyed. Both Switch and desktop probe builds use these overrides
 
 ## Motion and touchscreen
 
-The pairing/start page has two cycling buttons. Choose modes before starting;
-settings apply to this session and are not persisted across app launches.
+Steam is a first-class platform card alongside Xbox and PlayStation. Open the
+Steam host page's Settings button to configure touch and gyro using selectors.
+These settings are saved separately in `config.json.steam-input`; button mapping
+uses `steam_button_mapping` rather than the Xbox profile. The pairing/start page
+only handles authorization, the optional security PIN and connection status.
+The in-stream Settings entry opens the same Steam-specific page; saved changes
+apply on return to the game, and button mappings are reloaded. Steam's Guide
+action is labeled Steam menu rather than Xbox button. English, Simplified Chinese
+and Traditional Chinese are included. Paired hosts can reconnect in the same app
+run without starting a second pairing request.
 
 - **Gyro: Native** (default): sends angular velocity and acceleration in the
   generic HID report when Steam requests sensors (command 8). Switch rotations/s
@@ -131,6 +139,32 @@ Non-zero video/audio callbacks and visible/audible output are separately
 required; a successful pairing alone is not an end-to-end streaming pass.
 
 ## Desktop discovery probe
+
+### UI verification (2026-09-07)
+
+The three equal platform cards and entry into Steam discovery/settings were
+observed in Ryubing Canary 1.3.333. This exposed two issues: repeated discovery
+startup from Refresh and saving over an existing settings file. Refresh now
+reuses the periodic discovery task. Settings save rotates the old file to
+`.bak` before committing `.tmp`, avoiding overwrite-by-rename assumptions on
+Switch. Failed commits restore the old file; loading falls back to `.bak` if
+the main file is missing. This is recoverable replacement, not a guarantee of
+atomic persistence during power loss. Logs use `[steam-settings]` with the save
+stage and errno, or the saved mode values (no credentials).
+
+`python3 tests/steam_settings_file_test.py` uses real temporary files and an
+injected no-overwrite rename implementation under ASan/UBSan. It covers first
+and repeated saves, commit/restore failures and backup recovery. It is not a
+Switch filesystem or UI test. `tests/steam_ui_contract_test.py` checks static
+wiring and locale keys only. Pointer/HID/runtime simulation tests also passed.
+
+Further emulator interaction is user-operated. Reopen the new NRO, change a
+mode, save, reopen settings, then change and save again to verify persistence.
+One earlier emulator run exited in macOS CAMetalLayer/objc_release; this is
+recorded separately from guest behavior. No actual Steam media/input round trip
+or Switch hardware compatibility is certified by these checks. The existing
+`libpeer_sctp_config_test.py` drain-loop assertion also fails on main and is not
+changed by this Steam UI work.
 
 The dependency-free probe can validate the network discovery path without a
 Switch NRO:
