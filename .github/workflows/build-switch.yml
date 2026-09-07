@@ -44,6 +44,15 @@ jobs:
             -DENABLE_MBEDTLS=OFF -DTEST_APPS=OFF -DCMAKE_BUILD_TYPE=Release
           cmake --build lib/libpeer/third_party/libsrtp/build_host -j3
 
+      - name: Run Steam lifecycle and input simulations
+        run: |
+          brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+          python3 tests/steam_link_hid_sim_test.py
+          python3 tests/steam_link_runtime_sim_test.py
+          python3 tests/steam_pointer_test.py
+          python3 tests/steam_settings_file_test.py
+          python3 tests/steam_ui_contract_test.py
+
       - name: Run Xbox input state-machine tests
         run: |
           make -f Makefile.desktop input_tests

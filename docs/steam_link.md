@@ -29,8 +29,10 @@ After pairing, enter the optional host security PIN and select Start Steam
 stream. The adapter requests Big Picture desktop streaming at up to 1280x720, negotiates
 H.264/Opus, and feeds LunarNX's media pipeline. H.264 codec data supplied as
 Annex B or AVCDecoderConfigurationRecord is normalized and included with frames.
-Pair and start streaming in the same app run; account/device authorization
-resumption across launches is not implemented yet.
+Pair and start streaming without leaving the Steam host page. Returning to the
+platform home recreates the Steam client when reopened, so pair again then too.
+Account/device authorization resumption across client instances/app launches is
+not implemented yet (only the device identity is persisted).
 
 The pairing direction is important: LunarNX generates and displays the
 four-digit pairing code, and the user enters that code in Steam's `Pair Steam
@@ -101,6 +103,43 @@ enable/disable requests and saturated gyro/accelerometer report bytes. Neither
 test substitutes for physical sensor calibration or a real Steam game session.
 
 ## Diagnostics and simulated verification
+
+### Startup/retry and cursor fixes (2026-09-07)
+
+The streaming request has a 20-second application deadline. Cancellation and
+timeout now drain the ihslib request/timer callback before allowing a retry;
+a duplicate request cannot overwrite the active callback. Tracked adapters
+`src/steamlink/ihs_streaming.c` and `ihs_timer.c` serialize streaming state on
+the timer lock, including network callbacks, task execution and cleanup. They
+wrap the pinned submodule without modifying it. Call request/cancel only from
+the owner, outside ihslib callbacks and without holding a base/client mutex.
+
+After the response, session connection has a 15-second deadline, followed by a
+20-second first-rendered-frame deadline. Audio packets or undecodable video do
+not extend either deadline. Failure logs distinguish the stage and include
+video/audio callback counts; the stream exit shows the reason as a notification.
+Disconnection callbacks preserve the original timeout error. Session joins and
+media teardown remain on the stop worker, not the timer/network/input thread.
+
+Remote cursor show/hide/select/delete/image events now feed a UI-thread overlay,
+hidden while LunarNX owns input. Raw RGBA images require an exact byte count and
+a valid hotspot; dimensions are limited to 256x256 with eight cached images.
+Unknown/rejected images use a fallback arrow only while the host requests a
+visible cursor. Rendering accounts for video letterboxing and capture scaling.
+Relative touch/gyro motion predicts the cursor locally; host acceleration can
+cause drift until a host ShowCursor update. Verify accuracy in an actual game.
+The RGBA format is supported by the protocol research in
+[Thalium's Remote Play analysis](https://blog.thalium.re/posts/achieving-remote-code-execution-in-steam-remote-play/).
+
+Desktop ASan/UBSan checks include 100 real ihslib timer/request/cancel/retry
+cycles with a loopback UDP receiver, stale request IDs and callbacks racing
+cancellation. Portable tests cover startup deadline boundaries and cursor
+validation, cache bounds, immutable snapshots, coordinates and reset. The tests
+run in CI alongside input simulations. These are component tests, not a native
+Borealis cursor rendering test, Steam authentication test, or successful
+end-to-end Switch stream. No emulator was operated for this fix at the user's
+request. Hardware checks still needed: blocked host port, connected-without-
+video, immediate retry, actual visible cursor/hotspot, gamepad, sound and video.
 
 Build Switch artifacts only in Docker with STEAMLINK=1 APP_DIAG=1 DROP_DIAG=1.
 Read `sdmc:/switch/LunarNX/lunarnx.log` after a failed test. Phase tags include
