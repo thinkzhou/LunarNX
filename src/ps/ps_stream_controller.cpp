@@ -886,7 +886,12 @@ void PsStreamController::update() {
 }
 
 void PsStreamController::presentVideoFrame() {
-    std::shared_lock<std::shared_mutex> operation_lock(stream_operation_mutex_);
+    // Borealis holds the GPU mutex throughout draw(). Shutdown owns the
+    // operation mutex while releasing the renderer, which needs that GPU
+    // mutex. Skip a frame instead of waiting with the GPU mutex held.
+    std::shared_lock<std::shared_mutex> operation_lock(
+        stream_operation_mutex_, std::try_to_lock);
+    if (!operation_lock.owns_lock()) return;
     if (media_) media_->presentVideoFrame();
 }
 

@@ -1635,7 +1635,10 @@ void MediaPipeline::presentVideoFrame() {
               std::memory_order_relaxed)
         : 0;
 #endif
-    std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
+    // draw() already owns the GPU mutex. Lifecycle operations can hold this
+    // mutex while waiting for the GPU, so presentation must never wait here.
+    std::unique_lock<std::recursive_mutex> lock(lifecycle_mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) return;
     if (running_.load() && video_renderer_) {
         const uint64_t successful_present_before =
             video_renderer_->successfulPresentCount();

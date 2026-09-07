@@ -29,6 +29,9 @@ jobs:
       - name: Check out LunarNX
         uses: actions/checkout@v5
 
+      - name: Check presentation shutdown lock ordering
+        run: python3 tests/stream_presentation_lock_test.py
+
       - name: Prepare legacy libpeer source
         run: ./scripts/setup_dependencies.sh
 
