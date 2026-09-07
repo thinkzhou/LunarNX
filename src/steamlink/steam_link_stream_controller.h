@@ -6,6 +6,7 @@
 #include "stream_support.h"
 #include "steam_hid.h"
 #include "steam_sensors.h"
+#include "steam_cursor.h"
 #include "../input/rumble_controller.h"
 #include "../app/stream_runtime.h"
 #include "../input/gamepad_reader.h"
@@ -42,6 +43,7 @@ public:
     std::pair<TouchMode, GyroMode> pointerModes() const;
     void reloadInputMapping();
     std::string lastError() const;
+    CursorSnapshot cursorSnapshot() const { return cursor_.snapshot(); }
 
     void requestStop() override;
     void stopStream(bool set_disconnected) override;
@@ -123,12 +125,14 @@ private:
     uint64_t guide_until_ns_ = 0;
     bool hid_announced_ = false;
     SteamPointer pointer_;
+    SteamCursor cursor_;
     std::unique_ptr<SteamSensors> sensors_;
     bool mouse_left_ = false, mouse_right_ = false;
 
     std::atomic<app::StreamState> state_{app::StreamState::Idle};
     StreamCancellation cancellation_;
     InputPump input_pump_;
+    StartupWatchdog startup_watchdog_;
     LogThrottle hid_announce_log_;
     LogThrottle analog_log_;
     std::vector<uint8_t> video_parameters_;

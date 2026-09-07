@@ -30,6 +30,9 @@ stream = source("src/ui/stream_view.cpp")
 assert "new SteamSettingsActivity" in hosts and "new SteamSettingsActivity" in stream
 assert "loadSteamInputSettings()" in hosts
 assert "steam->configurePointer(settings.touch, settings.gyro)" in stream
+assert "new SteamCursorView" in stream and "nvgCreateImageRGBA(vg, pixels_->width" in stream
+assert "!runtime_->inputRouter().gameHasInput()" in stream
+assert "Application::notify(reason)" in stream
 client = source("src/steamlink/steam_link_client.cpp")
 discovery = client.split("bool SteamLinkClient::startDiscovery", 1)[1].split(
     "void SteamLinkClient::stopDiscovery", 1)[0]
