@@ -3,6 +3,7 @@
 #ifdef __SWITCH__
 
 #include "steam_link_client.h"
+#include "stream_support.h"
 #include "../app/stream_runtime.h"
 #include "../input/gamepad_reader.h"
 #include "../stream/media_pipeline.h"
@@ -114,7 +115,11 @@ private:
     IHS_Session* session_ = nullptr;
 
     std::atomic<app::StreamState> state_{app::StreamState::Idle};
-    std::atomic<bool> cancel_requested_{false};
+    StreamCancellation cancellation_;
+    InputPump input_pump_;
+    LogThrottle input_failure_log_;
+    LogThrottle analog_log_;
+    std::vector<uint8_t> video_parameters_;
     std::atomic<bool> session_connected_{false};
     std::atomic<bool> guide_requested_{false};
     std::atomic<uint64_t> media_epoch_ns_{0};

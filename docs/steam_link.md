@@ -15,20 +15,39 @@ Build dependencies are pinned as Git submodules:
 git submodule update --init --recursive
 ```
 
-The current screen intentionally stops after pairing. Steam Remote Play's
-stream transport is a separate protocol/session layer; it still needs an
-adapter for ihslib's encrypted session frames, Steam's negotiated codecs, the
-existing LunarNX decode/audio pipeline, and Switch controller input. Until that
-adapter is implemented, the UI does not claim that a paired host can stream.
+After pairing, enter the optional host security PIN and select Start Steam
+stream. The adapter requests desktop streaming at up to 1280x720, negotiates
+H.264/Opus, and feeds LunarNX's media pipeline. H.264 codec data supplied as
+Annex B or AVCDecoderConfigurationRecord is normalized and included with frames.
+Pair and start streaming in the same app run; account/device authorization
+resumption across launches is not implemented yet.
 
 The pairing direction is important: LunarNX generates and displays the
 four-digit pairing code, and the user enters that code in Steam's `Pair Steam
 Link` dialog on the host. The host's optional fixed Remote Play security code
-is a separate setting and is not used by this pairing screen.
+is a separate setting, entered in the host security PIN field on LunarNX.
 
-The bundled ihslib sources are used only for the discovery/authorization slice
-at present. Its session/HID sources are not linked yet. The ihslib dependency is
+The bundled ihslib discovery, authorization and session sources are linked.
+Input currently uses a 125 Hz keyboard fallback; native controller HID reports,
+analog sticks and rumble are not implemented. The ihslib dependency is
 LGPL-3.0; keep its license and notices when distributing a build.
+
+## Diagnostics and simulated verification
+
+Build Switch artifacts only in Docker with STEAMLINK=1 APP_DIAG=1 DROP_DIAG=1.
+Read `sdmc:/switch/LunarNX/lunarnx.log` after a failed test. Phase tags include
+steam-link, steam-session, steam-video, steam-audio and steam-input. Protocol
+Debug/Verbose output is discarded; Warning/Info forwarding is limited to one
+message per level per second. Error messages and explicit phase logs remain.
+
+Run `python3 tests/steam_link_runtime_sim_test.py` on a desktop with clang++ and
+FFmpeg/libx264. It exercises the production cancellation, input pump, key edge
+retry, session cleanup and codec-data helpers under ASan/UBSan. A generated
+H.264 stream has SPS/PPS separated from its frames, is reconstructed using the
+production helper, and decoded to matching frame hashes. This does not emulate
+Steam authentication, libnx input, NVDEC, audio output or a real Steam session.
+The Xbox Ryubing mock cannot validate the Steam wire protocol. Real Switch
+Steam streaming and a Ryubing smoke test have not been run for these fixes.
 
 ## Desktop discovery probe
 

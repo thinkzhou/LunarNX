@@ -25,6 +25,7 @@ SteamLinkPairingActivity::SteamLinkPairingActivity(
 
 SteamLinkPairingActivity::~SteamLinkPairingActivity() {
     alive_->store(false);
+    if (pending_runtime_) pending_runtime_->requestStop();
     if (client_ && authorizing_) client_->cancelAuthorization();
 }
 
@@ -159,6 +160,7 @@ void SteamLinkPairingActivity::startStream() {
     if (status_) status_->setText("Requesting Steam stream...");
     auto runtime = std::make_shared<steamlink::SteamLinkStreamController>(
         client_, host_, security_pin_, 1280, 720);
+    pending_runtime_ = runtime;
     auto alive = alive_;
     if (!lunar::platform::startNetworkWorker("steam-link-stream",
             [this, alive, runtime]() {
@@ -181,6 +183,7 @@ void SteamLinkPairingActivity::startStream() {
                         return;
                     }
                     starting_stream_ = false;
+                    pending_runtime_.reset();
                     if (!ok) {
                         if (status_) status_->setText(error.empty() ? "Steam stream failed" : error);
                         if (stream_button_) stream_button_->setFocusable(true);
