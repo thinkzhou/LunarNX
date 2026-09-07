@@ -110,16 +110,21 @@ private:
 
 class HardwareVideoView : public brls::View {
 public:
-    explicit HardwareVideoView(std::shared_ptr<app::IStreamRuntime> runtime)
-        : runtime_(std::move(runtime)) {}
+    HardwareVideoView(std::shared_ptr<app::IStreamRuntime> runtime,
+                      std::shared_ptr<std::atomic<bool>> terminal_stop)
+        : runtime_(std::move(runtime)), terminal_stop_(std::move(terminal_stop)) {}
 
     void draw(NVGcontext*, float, float, float, float,
               brls::Style, brls::FrameContext*) override {
+        // The stopping overlay leaves this view in the tree. Stop presenting
+        // before its worker begins tearing down the runtime.
+        if (terminal_stop_->load()) return;
         runtime_->presentVideoFrame();
     }
 
 private:
     std::shared_ptr<app::IStreamRuntime> runtime_;
+    std::shared_ptr<std::atomic<bool>> terminal_stop_;
 };
 
 class TouchpadFeedbackView : public brls::View {
@@ -363,7 +368,7 @@ brls::View* StreamView::createContentView() {
         brls::ControllerButton::BUTTON_BACK, stop_handler);
 
     if (stream::usesZeroCopyRender(runtime_->getDefaultVideoBackend())) {
-        auto* hardware_video = new HardwareVideoView(runtime_);
+        auto* hardware_video = new HardwareVideoView(runtime_, terminal_stop_);
         hardware_video->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
         hardware_video->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
         hardware_video->setDetachedPosition(0, 0);
