@@ -201,7 +201,8 @@ ifeq ($(STEAMLINK),1)
 CXX_SRCS += src/steamlink/steam_link_client.cpp \
     src/steamlink/steam_hid.cpp \
     src/steamlink/steam_sensors.cpp \
-    src/steamlink/steam_link_stream_controller.cpp src/ui/steam_link_activity.cpp
+    src/steamlink/steam_link_stream_controller.cpp src/ui/steam_link_activity.cpp \
+    src/ui/steam_settings_activity.cpp
 endif
 
 C_SRCS = lib/cJSON.c \
