@@ -562,7 +562,8 @@
   "steam_title": "Steam Link",
   "steam_desc": "區域網路 Steam Remote Play"
  },
- "steam_ui": {
+  "steam_ui": {
+    "discard": "不儲存並返回",
    "settings_title": "Steam 串流設定",
    "input_title": "Steam 輸入",
    "settings_help": "僅儲存至 Steam 設定。串流中修改後，返回遊戲即生效。",
