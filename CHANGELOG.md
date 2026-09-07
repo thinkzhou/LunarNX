@@ -2,6 +2,16 @@
 
 Notable LunarNX changes are recorded here by the automated release workflow.
 
+## [0.3.2](https://github.com/thinkzhou/LunarNX/compare/v0.3.1...v0.3.2) (2026-09-07)
+
+
+### Bug Fixes
+
+* avoid GPU lock inversion when stopping streams ([76a8a2f](https://github.com/thinkzhou/LunarNX/commit/76a8a2f5df0d26ecf4a7a357c60dd978bcec2e52))
+* prevent deadlock when exiting a stream ([011a0c9](https://github.com/thinkzhou/LunarNX/commit/011a0c9a407d97798445d0268d3d712a72255960))
+* **release:** match Sphaira package layout ([dff50b9](https://github.com/thinkzhou/LunarNX/commit/dff50b98da6028ba90d964f727e7ce8864fb2d97))
+* **release:** match Sphaira package layout ([5f5e5ec](https://github.com/thinkzhou/LunarNX/commit/5f5e5ec60d0c5e0f54c4ccfdfcb51dbaa23cc875))
+
 ## [0.3.1](https://github.com/thinkzhou/LunarNX/compare/v0.3.0...v0.3.1) (2026-09-04)
 
 LunarNX 0.3.1 focuses on faster reconnection, safer stream teardown, and
