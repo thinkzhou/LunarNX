@@ -26,6 +26,8 @@ for sub in ("client", "session", "protobuf"):
     sources += list((ihs / sub).rglob("*.c"))
 sources += list((ihs / "hid").glob("*.c"))
 overrides = {ihs / "hid/device.c": ROOT / "src/steamlink/ihs_hid_device.c",
+             ihs / "ihs_timer.c": ROOT / "src/steamlink/ihs_timer.c",
+             ihs / "client/streaming.c": ROOT / "src/steamlink/ihs_streaming.c",
              ihs / "hid/manager.c": ROOT / "src/steamlink/ihs_hid_manager.c",
              ihs / "session/session.c": ROOT / "src/steamlink/ihs_session.c"}
 sources = [overrides.get(source, source) for source in sources]

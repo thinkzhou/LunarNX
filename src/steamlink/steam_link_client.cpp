@@ -2,6 +2,9 @@
 
 #include "steam_link_client.h"
 #include "stream_support.h"
+extern "C" {
+#include "ihs_streaming_support.h"
+}
 
 #include "../common.h"
 #include "../diagnostics.h"
@@ -116,6 +119,7 @@ SteamLinkClient::~SteamLinkClient() {
     lunar::diagnosticLog("steam-link", "client destruct");
     stopDiscovery();
     cancelAuthorization();
+    cancelStreaming();
     if (client_) {
         IHS_ClientStop(client_);
         IHS_ClientThreadedJoin(client_);
@@ -243,6 +247,14 @@ bool SteamLinkClient::authorize(const SteamLinkHost& host, const std::string& pi
 
 bool SteamLinkClient::requestStreaming(const SteamLinkHost& host, const std::string& pin,
                                        int width, int height, StreamingCallback callback) {
+    std::lock_guard<std::mutex> operation(streaming_operation_mutex_);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (streaming_callback_) {
+            last_error_ = "Steam Link streaming request is already in progress";
+            return false; // Never replace the active request's callback.
+        }
+    }
     if (pin.size() >= 16 || !std::all_of(pin.begin(), pin.end(), [](char c) {
             return c >= '0' && c <= '9';
         })) {
@@ -250,6 +262,9 @@ bool SteamLinkClient::requestStreaming(const SteamLinkHost& host, const std::str
         return false;
     }
     if (!ensureClient()) return false;
+    // A completed callback may precede the timer's deferred cleanup. Drain it
+    // before installing the next callback; late packets are matched by ID.
+    LunarIHSStreamingCancel(client_);
     IHS_HostInfo protocol_host{};
     if (!findHost(host.client_id, &protocol_host)) {
         last_error_ = "Steam Link host is no longer in the discovery list";
@@ -278,6 +293,17 @@ bool SteamLinkClient::requestStreaming(const SteamLinkHost& host, const std::str
                          host.address.c_str(), pin.size(), request.maxResolution.x,
                          request.maxResolution.y);
     return true;
+}
+
+void SteamLinkClient::cancelStreaming() {
+    std::lock_guard<std::mutex> operation(streaming_operation_mutex_);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        streaming_callback_ = {};
+    }
+    // Do not hold mutex_: an executing protocol callback may need it.
+    if (client_) LunarIHSStreamingCancel(client_);
+    lunar::diagnosticLog("steam-link", "streaming request drained");
 }
 
 void SteamLinkClient::cancelAuthorization() {

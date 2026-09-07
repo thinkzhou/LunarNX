@@ -8,13 +8,92 @@ extern "C" {
 #include "hid/report.h"
 #include "ihs_buffer.h"
 #include "ihs_enumeration.h"
+#include "client/client_pri.h"
+#include "steamlink/ihs_streaming_support.h"
 }
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 #include <cassert>
 #include <iostream>
 #include <vector>
 #include <thread>
 #include <chrono>
 using namespace lunar::steamlink;
+
+// Real timer/request/protobuf code against a loopback receiver, not Steam.
+static void testStreamingCancellation(const IHS_ClientConfig& config) {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    assert(fd >= 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    assert(bind(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
+    socklen_t length = sizeof(address);
+    assert(getsockname(fd, reinterpret_cast<sockaddr*>(&address), &length) == 0);
+    timeval timeout{2, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    IHS_Client client{};
+    IHS_BaseInit(&client.base, &config, nullptr, false);
+    client.base.socket = IHS_UDPSocketOpen(false);
+    client.timers = IHS_TimerCreate();
+    IHS_HostInfo host{};
+    host.clientId = 123;
+    host.address.ip.family = IHS_IPAddressFamilyIPv4;
+    host.address.ip.v4.data[0] = 127; host.address.ip.v4.data[3] = 1;
+    host.address.port = ntohs(address.sin_port);
+    std::atomic<unsigned> progress{0};
+    IHS_ClientStreamingCallbacks callbacks{};
+    callbacks.progress = [](IHS_Client*, const IHS_HostInfo*, void* p) {
+        ++*static_cast<std::atomic<unsigned>*>(p);
+    };
+    IHS_ClientSetStreamingCallbacks(&client, &callbacks, &progress);
+    IHS_StreamingRequest request{};
+    uint32_t previous_id = 0;
+    for (int cycle = 0; cycle < 100; ++cycle) {
+        assert(IHS_ClientStreamingRequest(&client, &host, &request));
+        assert(!IHS_ClientStreamingRequest(&client, &host, &request));
+        uint8_t data[2048];
+        const auto size = recv(fd, data, sizeof(data), 0);
+        assert(size > 16);
+        auto le32 = [&](size_t i) { return uint32_t(data[i]) | uint32_t(data[i+1])<<8 |
+            uint32_t(data[i+2])<<16 | uint32_t(data[i+3])<<24; };
+        const auto offset = 12 + le32(8);
+        assert(offset + 4 <= size && offset + 4 + le32(offset) == size);
+        auto* sent = cmsg_remote_device_streaming_request__unpack(nullptr, le32(offset), data+offset+4);
+        assert(sent);
+        const auto id = sent->request_id;
+        cmsg_remote_device_streaming_request__free_unpacked(sent, nullptr);
+        CMsgRemoteClientBroadcastHeader header = CMSG_REMOTE_CLIENT_BROADCAST_HEADER__INIT;
+        header.has_client_id = true; header.client_id = host.clientId;
+        header.msg_type = k_ERemoteDeviceStreamingResponse;
+        CMsgRemoteDeviceStreamingResponse response = CMSG_REMOTE_DEVICE_STREAMING_RESPONSE__INIT;
+        response.result = k_ERemoteDeviceStreamingInProgress;
+        response.request_id = previous_id == id ? id + 1 : previous_id;
+        const auto before = progress.load();
+        IHS_ClientStreamingCallback(&client, &host.address, &header, &response.base);
+        assert(progress == before); // late previous-generation response ignored
+        response.request_id = id;
+        IHS_ClientStreamingCallback(&client, &host.address, &header, &response.base);
+        assert(progress == before + 1);
+        std::thread incoming([&] {
+            for (int i = 0; i < 100; ++i)
+                IHS_ClientStreamingCallback(&client, &host.address, &header, &response.base);
+        });
+        LunarIHSStreamingCancel(&client);
+        const auto canceled = progress.load();
+        incoming.join();
+        assert(progress == canceled);
+        LunarIHSStreamingCancel(&client);
+        assert(!client.taskHandles.streaming);
+        previous_id = id;
+    }
+    IHS_TimerDestroy(client.timers);
+    IHS_UDPSocketClose(client.base.socket);
+    IHS_BaseDestroy(&client.base);
+    close(fd);
+    std::cout << "PASS: 100 loopback request/cancel/retry cycles, stale IDs, concurrent callbacks drained\n";
+}
 
 int main() {
     lunar::input::GamepadState state;
@@ -48,6 +127,7 @@ int main() {
     uint8_t secret[32]{};
     IHS_ClientConfig config{};
     config.deviceId = 100; config.secretKey = secret; config.deviceName = "LunarNX HID simulation";
+    testStreamingCancellation(config);
     IHS_SessionInfo info{};
     info.address.ip.family = IHS_IPAddressFamilyIPv4;
     info.address.ip.v4.data[0] = 127; info.address.ip.v4.data[3] = 1;
