@@ -6,6 +6,11 @@ on:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional vMAJOR.MINOR.PATCH tag to rebuild and republish
+        required: false
+        type: string
   workflow_call:
     inputs:
       release_tag:
