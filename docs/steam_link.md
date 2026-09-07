@@ -19,6 +19,12 @@ Build dependencies are pinned as Git submodules:
 git submodule update --init --recursive
 ```
 
+The shared `scripts/setup_dependencies.sh` also prepares these root submodules
+through `scripts/setup_steamlink_dependencies.sh`, using the revisions recorded
+in Git. CI runs `tests/steam_dependency_setup_test.py` against a fresh clone to
+verify both headers are fetched and repeated setup retains those revisions.
+This test needs network access to the public dependency repositories.
+
 After pairing, enter the optional host security PIN and select Start Steam
 stream. The adapter requests Big Picture desktop streaming at up to 1280x720, negotiates
 H.264/Opus, and feeds LunarNX's media pipeline. H.264 codec data supplied as
