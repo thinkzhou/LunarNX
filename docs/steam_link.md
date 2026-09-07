@@ -120,6 +120,11 @@ not extend either deadline. Failure logs distinguish the stage and include
 video/audio callback counts; the stream exit shows the reason as a notification.
 Disconnection callbacks preserve the original timeout error. Session joins and
 media teardown remain on the stop worker, not the timer/network/input thread.
+Disconnect initiation has its own exactly-once gate, independent of the Error
+state, so watchdog/exit/host-disconnect cannot schedule duplicate disconnect
+timers. The POSIX session socket uses a 10ms receive timeout so join can finish
+even when the host sends no more packets. The desktop thread adapter matches
+SDL's recursive mutex contract used on Switch.
 
 Remote cursor show/hide/select/delete/image events now feed a UI-thread overlay,
 hidden while LunarNX owns input. Raw RGBA images require an exact byte count and
@@ -131,9 +136,14 @@ cause drift until a host ShowCursor update. Verify accuracy in an actual game.
 The RGBA format is supported by the protocol research in
 [Thalium's Remote Play analysis](https://blog.thalium.re/posts/achieving-remote-code-execution-in-steam-remote-play/).
 
+The cursor is explicitly detached from the column layout before being added
+over the video. Source contracts verify its full-screen overlay geometry; the
+actual Borealis/NanoVG output still needs user-operated testing.
+
 Desktop ASan/UBSan checks include 100 real ihslib timer/request/cancel/retry
 cycles with a loopback UDP receiver, stale request IDs and callbacks racing
-cancellation. Portable tests cover startup deadline boundaries and cursor
+cancellation, plus 20 real session disconnect/join/destroy cycles covering no
+host response and a host disconnect racing cleanup. Portable tests cover startup deadline boundaries and cursor
 validation, cache bounds, immutable snapshots, coordinates and reset. The tests
 run in CI alongside input simulations. These are component tests, not a native
 Borealis cursor rendering test, Steam authentication test, or successful

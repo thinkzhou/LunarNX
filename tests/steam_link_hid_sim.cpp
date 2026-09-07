@@ -1,4 +1,5 @@
 #include "steamlink/steam_hid.h"
+#include "steamlink/stream_support.h"
 #include "input/stream_input_router.h"
 extern "C" {
 #include "ihslib/session.h"
@@ -20,6 +21,43 @@ extern "C" {
 #include <thread>
 #include <chrono>
 using namespace lunar::steamlink;
+
+static void testSessionShutdown(const IHS_ClientConfig& config, const IHS_SessionInfo& info) {
+    struct Context { SessionDisconnectGate gate; std::atomic<bool> ready{false}; } context;
+    IHS_StreamSessionCallbacks callbacks{};
+    callbacks.initialized = [](IHS_Session*, void* p) { static_cast<Context*>(p)->ready = true; };
+    callbacks.disconnected = [](IHS_Session*, void* p) { static_cast<Context*>(p)->gate.disconnected(); };
+    for (int cycle = 0; cycle < 20; ++cycle) {
+        context.gate.reset(); context.ready = false;
+        auto* session = IHS_SessionCreate(&config, &info);
+        IHS_SessionSetSessionCallbacks(session, &callbacks, &context);
+        assert(IHS_SessionConnect(session));
+        while (!context.ready) std::this_thread::yield();
+        unsigned requests = 0;
+        auto disconnect = [&](IHS_Session* value) {
+            context.gate.request([&] { ++requests; IHS_SessionDisconnect(value); });
+        };
+        // The owner initiates exactly once even when cleanup is requested again.
+        disconnect(session);
+        disconnect(session);
+        std::thread host;
+        if (cycle != 0) {
+            auto* discovery = IHS_SessionChannelFor(session, IHS_SessionChannelIdDiscovery);
+            host = std::thread([discovery, cycle] {
+                std::this_thread::sleep_for(std::chrono::milliseconds(cycle % 5));
+                IHS_SessionPacket packet{};
+                packet.header.type = IHS_SessionPacketTypeDisconnect;
+                discovery->cls->received(discovery, &packet);
+            });
+        }
+        closeSession(session, disconnect, [&](IHS_Session* value) {
+            if (host.joinable()) host.join();
+            IHS_SessionThreadedJoin(value);
+        }, IHS_SessionDestroy);
+        assert(requests == 1 && session == nullptr);
+    }
+    std::cout << "PASS: 20 real session disconnect/join/destroy cycles, no-host timeout and host-disconnect race\n";
+}
 
 // Real timer/request/protobuf code against a loopback receiver, not Steam.
 static void testStreamingCancellation(const IHS_ClientConfig& config) {
@@ -132,6 +170,7 @@ int main() {
     info.address.ip.family = IHS_IPAddressFamilyIPv4;
     info.address.ip.v4.data[0] = 127; info.address.ip.v4.data[3] = 1;
     info.address.port = 27031; info.sessionKeyLen = 16;
+    testSessionShutdown(config, info);
     auto* session = IHS_SessionCreate(&config, &info);
     auto shared = std::make_shared<SteamPadState>();
     auto* provider = createSteamPadProvider(shared);

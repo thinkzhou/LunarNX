@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 def run(args):
-    r = subprocess.run([str(a) for a in args], cwd=ROOT, capture_output=True, text=True)
+    r = subprocess.run([str(a) for a in args], cwd=ROOT, capture_output=True, text=True, timeout=60)
     if r.returncode:
         print(r.stdout + r.stderr, file=sys.stderr)
         r.check_returncode()

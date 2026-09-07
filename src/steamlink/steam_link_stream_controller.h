@@ -133,6 +133,7 @@ private:
     StreamCancellation cancellation_;
     InputPump input_pump_;
     StartupWatchdog startup_watchdog_;
+    SessionDisconnectGate disconnect_gate_;
     LogThrottle hid_announce_log_;
     LogThrottle analog_log_;
     std::vector<uint8_t> video_parameters_;
