@@ -2,6 +2,14 @@
 
 Notable LunarNX changes are recorded here by the automated release workflow.
 
+## [0.3.3](https://github.com/thinkzhou/LunarNX/compare/v0.3.2...v0.3.3) (2026-09-07)
+
+
+### Bug Fixes
+
+* **xbox:** restore Home WAN recovery and latest-frame presentation ([1a9b361](https://github.com/thinkzhou/LunarNX/commit/1a9b361409a77f91e0fd01111999bb5aaa1b85b3))
+* **xbox:** restore Home WAN recovery and latest-frame presentation ([6bd2583](https://github.com/thinkzhou/LunarNX/commit/6bd2583f62aafe6c22e0cfc124ce3bc22ff1a609))
+
 ## [0.3.2](https://github.com/thinkzhou/LunarNX/compare/v0.3.1...v0.3.2) (2026-09-07)
 
 
