@@ -74,7 +74,7 @@ Xbox Cloud Gaming availability depends on account entitlement and region. PlaySt
    sdmc:/switch/LunarNX/LunarNX.nro
    ```
 
-   The ZIP contains a versioned directory such as `LunarNX-0.3.1/LunarNX.nro` so Sphaira can safely identify and replace package contents. Rename that directory to `LunarNX` while extracting it into the SD card's `switch/` directory. For a standalone NRO, copy it to the path above.
+   The ZIP contains the compatibility directory `LunarNX-0.3.0/LunarNX.nro` so Sphaira can identify and replace package contents using its current store metadata. Rename that directory to `LunarNX` while extracting it into the SD card's `switch/` directory. For a standalone NRO, copy it to the path above.
 
 3. Open Homebrew Menu using title override/full-memory mode, then launch LunarNX.
 

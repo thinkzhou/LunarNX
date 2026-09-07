@@ -29,14 +29,14 @@ require(workflow, "type: string", "workflow")
 require(workflow, 'artifact_dir="$RUNNER_TEMP/LunarNX"', "workflow")
 require(workflow, "path: ${{ runner.temp }}/LunarNX", "workflow")
 require(workflow, 'package_dir="$release_root/LunarNX"', "workflow")
-require(workflow, 'APP_VERSION: ${{ needs.build-switch.outputs.app_version }}', "workflow")
-require(workflow, 'package_root="$release_root/LunarNX-$APP_VERSION"', "workflow")
+require(workflow, 'package_root="$release_root/LunarNX-0.3.0"', "workflow")
 require(workflow, 'mv "$package_dir" "$package_root"', "workflow")
 require(workflow, '"LunarNX.nro"', "workflow")
 require(workflow, '"LunarNX.zip"', "workflow")
 require(workflow, "SHA256SUMS", "workflow")
 assert 'LunarNX-$APP_VERSION.nro' not in workflow
-require(workflow, 'zip -qr "LunarNX.zip" "LunarNX-$APP_VERSION"', "workflow")
+assert 'LunarNX-$APP_VERSION' not in workflow
+require(workflow, 'zip -qr "LunarNX.zip" "LunarNX-0.3.0"', "workflow")
 assert "actions/create-release" not in workflow
 assert "softprops/action-gh-release" not in workflow
 
