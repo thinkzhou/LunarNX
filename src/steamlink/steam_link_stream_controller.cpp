@@ -1,0 +1,505 @@
+#ifdef __SWITCH__
+
+#include "steam_link_stream_controller.h"
+
+#include "../diagnostics.h"
+#include "../stream/video_codec.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cstring>
+
+namespace lunar::steamlink {
+namespace {
+
+constexpr auto kStreamingWait = std::chrono::seconds(20);
+
+uint64_t steadyNowNs() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+const char* stateName(app::StreamState state) {
+    switch (state) {
+        case app::StreamState::Idle: return "idle";
+        case app::StreamState::Authenticating: return "authenticating";
+        case app::StreamState::Connecting: return "connecting";
+        case app::StreamState::Streaming: return "streaming";
+        case app::StreamState::Disconnected: return "disconnected";
+        case app::StreamState::Error: return "error";
+    }
+    return "unknown";
+}
+
+} // namespace
+
+SteamLinkStreamController::SteamLinkStreamController(
+    std::shared_ptr<SteamLinkClient> client, SteamLinkHost host,
+    std::string security_pin, int width, int height)
+    : client_(std::move(client)), host_(std::move(host)),
+      security_pin_(std::move(security_pin)), width_(width > 0 ? width : 1280),
+      height_(height > 0 ? height : 720) {}
+
+SteamLinkStreamController::~SteamLinkStreamController() {
+    requestStop();
+    stopStream(false);
+}
+
+std::string SteamLinkStreamController::lastError() const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    return last_error_;
+}
+
+void SteamLinkStreamController::setLastError(std::string error) {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_ = std::move(error);
+}
+
+void SteamLinkStreamController::setState(app::StreamState state, const std::string& detail) {
+    state_.store(state);
+    lunar::diagnosticLog("steam-stream", "state=%s detail=%s",
+                         stateName(state), detail.empty() ? "none" : detail.c_str());
+    if (state == app::StreamState::Error && !detail.empty()) setLastError(detail);
+}
+
+uint64_t SteamLinkStreamController::mediaTimestampNs() {
+    const uint64_t now = steadyNowNs();
+    uint64_t epoch = media_epoch_ns_.load(std::memory_order_acquire);
+    if (epoch == 0 && media_epoch_ns_.compare_exchange_strong(
+            epoch, now, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        epoch = now;
+        lunar::diagnosticLog("steam-media", "media clock anchored");
+    }
+    return now >= epoch ? now - epoch : 0;
+}
+
+bool SteamLinkStreamController::startStream() {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    if (state_.load() != app::StreamState::Idle) {
+        setLastError("Steam Link stream is already active");
+        return false;
+    }
+    if (!client_) {
+        setState(app::StreamState::Error, "Steam Link client is unavailable");
+        return false;
+    }
+    cancel_requested_ = false;
+    session_connected_ = false;
+    media_epoch_ns_ = 0;
+    perf_.reset();
+    setState(app::StreamState::Connecting, "Requesting Steam stream");
+    lunar::persistentEventLog(
+        "steam-stream", "start host=%s profile=%dx%d security_pin_len=%zu",
+        host_.address.c_str(), width_, height_, security_pin_.size());
+
+    auto wait = std::make_shared<StreamWaitState>();
+    if (!client_->requestStreaming(host_, security_pin_, width_, height_,
+            [wait](bool success, const SteamLinkStreamInfo& info,
+                   const std::string& error) {
+                std::lock_guard<std::mutex> wait_lock(wait->mutex);
+                wait->done = true;
+                wait->success = success;
+                wait->info = info;
+                wait->error = error;
+                wait->condition.notify_one();
+            })) {
+        setState(app::StreamState::Error, client_->lastError());
+        return false;
+    }
+
+    {
+        std::unique_lock<std::mutex> wait_lock(wait->mutex);
+        if (!wait->condition.wait_for(wait_lock, kStreamingWait,
+                                     [&wait, this]() {
+                                         return wait->done || cancel_requested_.load();
+                                     })) {
+            setState(app::StreamState::Error,
+                     "Timed out waiting for Steam streaming response");
+            return false;
+        }
+        if (cancel_requested_.load()) {
+            setState(app::StreamState::Disconnected, "Steam stream canceled");
+            return false;
+        }
+        if (!wait->success) {
+            setState(app::StreamState::Error,
+                     wait->error.empty() ? "Steam streaming request failed" : wait->error);
+            return false;
+        }
+        if (wait->info.session_key_len == 0 ||
+            wait->info.session_key_len > sizeof(wait->info.session_key)) {
+            setState(app::StreamState::Error, "Steam returned an invalid session key");
+            return false;
+        }
+        if (wait->info.steam_id == 0) {
+            // The Steam session authentication message carries this ID. It is
+            // learned during pairing and must be available in this process.
+            setState(app::StreamState::Error,
+                     "Steam account ID unavailable; pair this host again");
+            return false;
+        }
+    }
+
+    if (!initializeMedia()) {
+        setState(app::StreamState::Error, "Failed to initialize Steam media pipeline");
+        return false;
+    }
+    if (!initializeSession(wait->info)) {
+        if (media_) media_->shutdown();
+        setState(app::StreamState::Error,
+                 lastError().empty() ? "Failed to initialize Steam session" : lastError());
+        return false;
+    }
+    setState(app::StreamState::Connecting, "Steam session connected; waiting for video");
+    lunar::persistentEventLog("steam-stream", "session started address=%s port=%u",
+                              host_.address.c_str(), wait->info.address.port);
+    return true;
+}
+
+bool SteamLinkStreamController::initializeMedia() {
+    stream_backend_ = stream::StreamBackendProvider::createDefault();
+    if (!stream_backend_) {
+        setLastError("Steam media backend unavailable");
+        return false;
+    }
+    media_ = std::make_unique<stream::MediaPipeline>(*stream_backend_);
+    stream::MediaPipelineOptions options;
+    options.video_path = stream::VideoPipelinePath::Xbox;
+    options.video_codec = stream::VideoCodec::H264;
+    options.video_backend = video_backend_;
+    options.hold_non_target_startup_frames = true;
+    options.video_scheduling = stream::VideoSchedulingMode::BoundedLowLatency;
+    options.video_queue_limits.max_packets = 6;
+    options.video_queue_limits.max_bytes = 8 * 1024 * 1024;
+    options.video_queue_limits.max_age = std::chrono::milliseconds(100);
+    media_->setVideoReadyCallback([this]() {
+        lunar::persistentEventLog("steam-media", "first video frame rendered");
+        setState(app::StreamState::Streaming, "Video ready");
+    });
+    lunar::diagnosticLog("steam-media", "initialize begin profile=%dx%d backend=%s",
+                         width_, height_, stream::videoBackendName(video_backend_));
+    if (!media_->initialize(width_, height_, &perf_, options)) {
+        setLastError("Steam media pipeline initialization failed");
+        media_.reset();
+        return false;
+    }
+    lunar::diagnosticLog("steam-media", "initialize done");
+    return true;
+}
+
+bool SteamLinkStreamController::initializeSession(const SteamLinkStreamInfo& info) {
+    IHS_ClientConfig client_config{};
+    // The client object owns the same identity used to request the stream. The
+    // session API only needs a copy of the identity config.
+    if (!client_->getSessionClientConfig(&client_config)) {
+        setLastError("Steam session identity unavailable");
+        return false;
+    }
+    IHS_SessionInfo session_info{};
+    session_info.address = info.address;
+    std::copy(info.session_key.begin(),
+              info.session_key.begin() + info.session_key_len,
+              session_info.sessionKey);
+    session_info.sessionKeyLen = info.session_key_len;
+    session_info.steamId = info.steam_id;
+
+    session_ = IHS_SessionCreate(&client_config, &session_info);
+    if (!session_) {
+        setLastError("Steam session allocation failed");
+        return false;
+    }
+    static const IHS_StreamSessionCallbacks session_callbacks{
+        &SteamLinkStreamController::onSessionInitialized,
+        &SteamLinkStreamController::onSessionConnecting,
+        &SteamLinkStreamController::onSessionConfiguring,
+        &SteamLinkStreamController::onSessionConnected,
+        &SteamLinkStreamController::onSessionDisconnected,
+        &SteamLinkStreamController::onSessionFinalized};
+    static const IHS_StreamAudioCallbacks audio_callbacks{
+        &SteamLinkStreamController::onAudioStart,
+        &SteamLinkStreamController::onAudioSubmit,
+        &SteamLinkStreamController::onAudioStop};
+    static const IHS_StreamVideoCallbacks video_callbacks{
+        &SteamLinkStreamController::onVideoStart,
+        &SteamLinkStreamController::onVideoSubmit,
+        &SteamLinkStreamController::onVideoStop,
+        &SteamLinkStreamController::onVideoCaptureSize,
+        &SteamLinkStreamController::onVideoFramerate,
+        &SteamLinkStreamController::onVideoBitrate,
+        &SteamLinkStreamController::onVideoQuality,
+        &SteamLinkStreamController::onVideoBitrateOverride};
+    static const IHS_StreamInputCallbacks input_callbacks{
+        &SteamLinkStreamController::onSetCursor,
+        &SteamLinkStreamController::onDeleteCursor,
+        &SteamLinkStreamController::onCursorImage,
+        &SteamLinkStreamController::onShowCursor,
+        &SteamLinkStreamController::onHideCursor,
+        &SteamLinkStreamController::onCapsLock,
+        &SteamLinkStreamController::onKeymap};
+    IHS_SessionSetSessionCallbacks(session_, &session_callbacks, this);
+    IHS_SessionSetAudioCallbacks(session_, &audio_callbacks, this);
+    IHS_SessionSetVideoCallbacks(session_, &video_callbacks, this);
+    IHS_SessionSetInputCallbacks(session_, &input_callbacks, this);
+    IHS_SessionSetLogFunction(session_, &SteamLinkClient::logFunction);
+    lunar::diagnosticLog("steam-session", "create address=%s port=%u steam_id=%llu key_len=%zu",
+                         host_.address.c_str(), info.address.port,
+                         static_cast<unsigned long long>(info.steam_id), info.session_key_len);
+    if (!IHS_SessionConnect(session_)) {
+        setLastError("Steam session worker failed to start");
+        IHS_SessionDestroy(session_);
+        session_ = nullptr;
+        return false;
+    }
+    return true;
+}
+
+void SteamLinkStreamController::requestStop() {
+    cancel_requested_ = true;
+    IHS_Session* session = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+        session = session_;
+    }
+    if (session) IHS_SessionDisconnect(session);
+    lunar::diagnosticLog("steam-stream", "stop requested");
+}
+
+void SteamLinkStreamController::stopStream(bool set_disconnected) {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    if (session_) {
+        lunar::persistentEventLog("steam-stream", "session disconnect begin");
+        IHS_SessionDisconnect(session_);
+        IHS_SessionThreadedJoin(session_);
+        IHS_SessionDestroy(session_);
+        session_ = nullptr;
+        lunar::persistentEventLog("steam-stream", "session disconnect done");
+    }
+    if (gamepad_) gamepad_->releaseCaptureButton();
+    if (media_) {
+        media_->setVideoReadyCallback({});
+        media_->shutdown();
+        media_.reset();
+    }
+    stream_backend_.reset();
+    session_connected_ = false;
+    if (set_disconnected) setState(app::StreamState::Disconnected, "Stopped");
+    else state_ = app::StreamState::Idle;
+}
+
+bool SteamLinkStreamController::resumeAfterForeground(CancelCallback cancel) {
+    if (cancel && cancel()) return false;
+    if (state_.load() == app::StreamState::Streaming && session_connected_.load()) {
+        lunar::diagnosticLog("steam-stream", "foreground resume kept session");
+        return true;
+    }
+    stopStream(false);
+    if (cancel && cancel()) return false;
+    return startStream();
+}
+
+void SteamLinkStreamController::sendMappedKey(bool pressed, uint32_t scancode,
+                                               bool& previous) {
+    if (!session_ || pressed == previous) return;
+    const bool sent = pressed ? IHS_SessionSendKeyDown(session_, scancode)
+                              : IHS_SessionSendKeyUp(session_, scancode);
+    previous = pressed;
+    if (sent) perf_.recordInputPacket();
+    lunar::diagnosticLog("steam-input", "keyboard scancode=0x%x pressed=%d sent=%d",
+                         scancode, pressed ? 1 : 0, sent ? 1 : 0);
+}
+
+void SteamLinkStreamController::update() {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    if (!session_ || state_.load() == app::StreamState::Error ||
+        state_.load() == app::StreamState::Disconnected) return;
+    if (!gamepad_) {
+        gamepad_ = std::make_unique<input::GamepadReader>(input::ButtonMappingProfile::Xbox);
+        if (!gamepad_->initialize()) {
+            lunar::persistentEventLog("steam-input", "gamepad initialize failed");
+            return;
+        }
+        lunar::persistentEventLog("steam-input", "using keyboard fallback for Steam input");
+    }
+    auto state = input_router_.route(gamepad_->read());
+    if (guide_requested_.exchange(false)) state.guide = true;
+    const std::array<bool, 16> keys{
+        state.a, state.b, state.x, state.y,
+        state.dpad_up, state.dpad_down, state.dpad_left, state.dpad_right,
+        state.lb, state.rb, state.l3, state.r3, state.view, state.menu,
+        state.lt, state.rt};
+    // USB HID usage IDs: Space, Escape, X, Y, arrows, Q/E, Z/C, Tab/Enter, 1/2.
+    constexpr std::array<uint32_t, 16> usages{
+        0x2c, 0x29, 0x1b, 0x1c, 0x52, 0x51, 0x50, 0x4f,
+        0x14, 0x08, 0x1d, 0x06, 0x2b, 0x28, 0x1e, 0x1f};
+    for (size_t i = 0; i < keys.size(); ++i) {
+        sendMappedKey(keys[i], usages[i], previous_keys_[i]);
+    }
+    // Analog values are still sampled and reported so the real Switch path
+    // is visible in the log. A virtual HID gamepad is the follow-up needed to
+    // carry these values natively to Steam.
+    if ((state.left_stick_x != 0 || state.left_stick_y != 0 ||
+         state.right_stick_x != 0 || state.right_stick_y != 0) &&
+        (perf_.input_packets.load() % 30 == 0)) {
+        lunar::diagnosticLog("steam-input", "analog fallback lx=%d ly=%d rx=%d ry=%d",
+                             state.left_stick_x, state.left_stick_y,
+                             state.right_stick_x, state.right_stick_y);
+    }
+}
+
+void SteamLinkStreamController::presentVideoFrame() {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    if (media_) media_->presentVideoFrame();
+}
+
+void SteamLinkStreamController::setVideoPresentationSuspended(bool suspended) {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    if (media_) media_->setVideoPresentationSuspended(suspended);
+}
+
+void SteamLinkStreamController::onSessionInitialized(IHS_Session*, void* context) {
+    lunar::diagnosticLog("steam-session", "initialized");
+    (void)context;
+}
+void SteamLinkStreamController::onSessionConnecting(IHS_Session*, void* context) {
+    auto* self = static_cast<SteamLinkStreamController*>(context);
+    if (self) lunar::diagnosticLog("steam-session", "connecting");
+}
+void SteamLinkStreamController::onSessionConfiguring(IHS_Session*, IHS_SessionConfig* config,
+                                                     void* context) {
+    auto* self = static_cast<SteamLinkStreamController*>(context);
+    if (!config) return;
+    config->enableAudio = true;
+    config->enableHevc = false;
+    if (self) lunar::diagnosticLog("steam-session", "configuring audio=1 hevc=0");
+}
+void SteamLinkStreamController::onSessionConnected(IHS_Session*, void* context) {
+    auto* self = static_cast<SteamLinkStreamController*>(context);
+    if (!self) return;
+    self->session_connected_ = true;
+    lunar::persistentEventLog("steam-session", "connected");
+}
+void SteamLinkStreamController::onSessionDisconnected(IHS_Session*, void* context) {
+    auto* self = static_cast<SteamLinkStreamController*>(context);
+    if (!self) return;
+    self->session_connected_ = false;
+    self->setState(app::StreamState::Disconnected, "Steam host disconnected");
+}
+void SteamLinkStreamController::onSessionFinalized(IHS_Session*, void*) {
+    lunar::diagnosticLog("steam-session", "finalized");
+}
+
+int SteamLinkStreamController::onAudioStart(IHS_Session*, const IHS_StreamAudioConfig* config,
+                                             void* context) {
+    auto* self = static_cast<SteamLinkStreamController*>(context);
+    if (!self || !config) return -1;
+    lunar::diagnosticLog("steam-audio", "start codec=%d rate=%u channels=%u codec_data=%zu",
+                         static_cast<int>(config->codec), config->frequency,
+                         config->channels, config->codecDataLen);
+    if (config->codec != IHS_StreamAudioCodecOpus || config->frequency != 48000 ||
+        config->channels != 2) {
+        lunar::persistentEventLog("steam-audio", "unsupported format codec=%d rate=%u channels=%u",
+                                  static_cast<int>(config->codec), config->frequency,
+                                  config->channels);
+        return -1;
+    }
+    return 0;
+}
+
+int SteamLinkStreamController::onAudioSubmit(IHS_Session*, IHS_Buffer* data, void* context) {
+    auto* self = static_cast<SteamLinkStreamController*>(context);
+    if (!self || !self->media_ || !data || data->size == 0) return -1;
+    const uint32_t count = self->audio_samples_.fetch_add(1) + 1;
+    const uint64_t timestamp = self->mediaTimestampNs();
+    self->media_->recordIncomingAudioPacket();
+    const bool queued = self->media_->decodeAudioPacket(
+        IHS_BufferPointer(data), data->size, self->audio_sequence_++, timestamp);
+    if (count == 1 || count % 500 == 0) {
+        lunar::diagnosticLog("steam-audio", "submit count=%u bytes=%zu queued=%d",
+                             count, data->size, queued ? 1 : 0);
+    }
+    return queued ? 0 : -1;
+}
+void SteamLinkStreamController::onAudioStop(IHS_Session*, void* context) {
+    auto* self = static_cast<SteamLinkStreamController*>(context);
+    if (self) lunar::diagnosticLog("steam-audio", "stop packets=%u",
+                                   self->audio_samples_.load());
+}
+
+int SteamLinkStreamController::onVideoStart(IHS_Session*, const IHS_StreamVideoConfig* config,
+                                             void* context) {
+    auto* self = static_cast<SteamLinkStreamController*>(context);
+    if (!self || !config) return -1;
+    lunar::persistentEventLog("steam-video", "start width=%u height=%u codec=%d codec_data=%zu",
+                              config->width, config->height, static_cast<int>(config->codec),
+                              config->codecDataLen);
+    if (config->codec != IHS_StreamVideoCodecH264) return -1;
+    return 0;
+}
+
+IHS_StreamVideoSubmitResult SteamLinkStreamController::onVideoSubmit(
+    IHS_Session*, IHS_Buffer* data, IHS_StreamVideoFrameFlag flags, void* context) {
+    auto* self = static_cast<SteamLinkStreamController*>(context);
+    if (!self || !self->media_ || !data || data->size == 0) {
+        return IHS_StreamVideoSubmitError;
+    }
+    const uint32_t count = self->video_samples_.fetch_add(1) + 1;
+    const uint64_t timestamp = self->mediaTimestampNs();
+    self->media_->recordIncomingVideoSample(
+        data->size, timestamp, 0);
+    const bool queued = self->media_->decodeVideoPacket(
+        IHS_BufferPointer(data), data->size, timestamp);
+    if (count == 1 || (count % 120 == 0)) {
+        lunar::diagnosticLog("steam-video", "submit count=%u bytes=%zu keyframe=%d queued=%d",
+                             count, data->size,
+                             (flags & IHS_StreamVideoFrameKeyFrame) ? 1 : 0,
+                             queued ? 1 : 0);
+    }
+    return queued ? IHS_StreamVideoSubmitOK : IHS_StreamVideoSubmitReportLost;
+}
+void SteamLinkStreamController::onVideoStop(IHS_Session*, void* context) {
+    auto* self = static_cast<SteamLinkStreamController*>(context);
+    if (self) lunar::persistentEventLog("steam-video", "stop samples=%u",
+                                       self->video_samples_.load());
+}
+int SteamLinkStreamController::onVideoCaptureSize(IHS_Session*, int width, int height, void*) {
+    lunar::diagnosticLog("steam-video", "capture size=%dx%d", width, height);
+    return 0;
+}
+void SteamLinkStreamController::onVideoFramerate(IHS_Session*, uint32_t numerator,
+                                                  uint32_t denominator, uint32_t reasons, void*) {
+    lunar::diagnosticLog("steam-video", "target framerate=%u/%u reasons=0x%x",
+                         numerator, denominator, reasons);
+}
+void SteamLinkStreamController::onVideoBitrate(IHS_Session*, int32_t bitrate, void*) {
+    lunar::diagnosticLog("steam-video", "target bitrate=%d", bitrate);
+}
+void SteamLinkStreamController::onVideoQuality(IHS_Session*, int32_t value, void*) {
+    lunar::diagnosticLog("steam-video", "quality override=%d", value);
+}
+void SteamLinkStreamController::onVideoBitrateOverride(IHS_Session*, int32_t value, void*) {
+    lunar::diagnosticLog("steam-video", "bitrate override=%d", value);
+}
+
+bool SteamLinkStreamController::onSetCursor(IHS_Session*, uint64_t, void*) { return false; }
+bool SteamLinkStreamController::onDeleteCursor(IHS_Session*, uint64_t, void*) { return true; }
+void SteamLinkStreamController::onCursorImage(IHS_Session*, const IHS_StreamInputCursorImage* image, void*) {
+    if (image) lunar::diagnosticLog("steam-input", "cursor image id=%llu %dx%d bytes=%zu",
+                                   static_cast<unsigned long long>(image->cursorId), image->width,
+                                   image->height, image->imageLen);
+}
+void SteamLinkStreamController::onShowCursor(IHS_Session*, float x, float y, void*) {
+    lunar::diagnosticLog("steam-input", "show cursor x=%.3f y=%.3f", x, y);
+}
+void SteamLinkStreamController::onHideCursor(IHS_Session*, void*) {
+    lunar::diagnosticLog("steam-input", "hide cursor");
+}
+void SteamLinkStreamController::onCapsLock(IHS_Session*, bool pressed, void*) {
+    lunar::diagnosticLog("steam-input", "caps lock=%d", pressed ? 1 : 0);
+}
+void SteamLinkStreamController::onKeymap(IHS_Session*, const IHS_KeymapEntry*, size_t count, void*) {
+    lunar::diagnosticLog("steam-input", "keymap entries=%zu", count);
+}
+
+} // namespace lunar::steamlink
+
+#endif

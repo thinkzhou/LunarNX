@@ -4,6 +4,7 @@
 #include <borealis.hpp>
 
 #include "../steamlink/steam_link_client.h"
+#include "../steamlink/steam_link_stream_controller.h"
 
 #include <atomic>
 #include <memory>
@@ -26,10 +27,15 @@ private:
         std::make_shared<std::atomic<bool>>(true);
     brls::Label* pin_display_ = nullptr;
     brls::Label* status_ = nullptr;
+    brls::InputCell* security_pin_input_ = nullptr;
+    brls::Button* stream_button_ = nullptr;
     std::string pairing_pin_;
+    std::string security_pin_;
     bool authorizing_ = false;
+    bool starting_stream_ = false;
 
     void startAuthorization();
+    void startStream();
 };
 
 class SteamLinkActivity : public brls::Activity {

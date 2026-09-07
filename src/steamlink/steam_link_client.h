@@ -26,6 +26,13 @@ struct SteamLinkHost {
     bool games_running = false;
 };
 
+struct SteamLinkStreamInfo {
+    IHS_SocketAddress address{};
+    std::array<uint8_t, 32> session_key{};
+    size_t session_key_len = 0;
+    uint64_t steam_id = 0;
+};
+
 class SteamLinkClient {
 public:
     struct Identity {
@@ -35,6 +42,8 @@ public:
 
     using HostCallback = std::function<void(const std::vector<SteamLinkHost>&)>;
     using AuthorizationCallback = std::function<void(bool, const std::string&)>;
+    using StreamingCallback = std::function<void(bool, const SteamLinkStreamInfo&,
+                                                  const std::string&)>;
 
     SteamLinkClient();
     ~SteamLinkClient();
@@ -46,8 +55,13 @@ public:
     void stopDiscovery();
     bool authorize(const SteamLinkHost& host, const std::string& pin,
                    AuthorizationCallback callback);
+    bool requestStreaming(const SteamLinkHost& host, const std::string& pin,
+                          int width, int height, StreamingCallback callback);
     void cancelAuthorization();
     bool isAuthorized(uint64_t client_id) const;
+    uint64_t authorizedSteamId(uint64_t client_id) const;
+    bool getSessionClientConfig(IHS_ClientConfig* config) const;
+    static void logFunction(IHS_LogLevel level, const char* tag, const char* message);
     const std::string& lastError() const { return last_error_; }
 
 private:
@@ -57,6 +71,12 @@ private:
                                        void* context);
     static void onAuthorizationFailed(IHS_Client*, const IHS_HostInfo*,
                                       IHS_AuthorizationResult result, void* context);
+    static void onStreamingProgress(IHS_Client*, const IHS_HostInfo*, void* context);
+    static void onStreamingSuccess(IHS_Client*, const IHS_HostInfo*,
+                                   const IHS_SocketAddress*, const uint8_t*, size_t,
+                                   void* context);
+    static void onStreamingFailed(IHS_Client*, const IHS_HostInfo*,
+                                  IHS_StreamingResult result, void* context);
 
     bool loadOrCreateIdentity();
     bool ensureClient();
@@ -64,6 +84,7 @@ private:
     void updateHost(const IHS_HostInfo& host);
     void emitHosts();
     static std::string authorizationError(IHS_AuthorizationResult result);
+    static std::string streamingError(IHS_StreamingResult result);
 
     Identity identity_;
     IHS_Client* client_ = nullptr;
@@ -73,7 +94,9 @@ private:
     std::vector<SteamLinkHost> hosts_;
     HostCallback host_callback_;
     AuthorizationCallback authorization_callback_;
+    StreamingCallback streaming_callback_;
     uint64_t authorized_client_id_ = 0;
+    std::unordered_map<uint64_t, uint64_t> authorized_steam_ids_;
     std::string last_error_;
 };
 

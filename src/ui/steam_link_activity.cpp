@@ -5,10 +5,13 @@
 #include "grid_navigation.h"
 #include "ui_style.h"
 #include "../diagnostics.h"
+#include "../platform/network_worker.h"
+#include "stream_view.h"
 
 #include <switch/kernel/random.h>
 
 #include <algorithm>
+#include <exception>
 
 namespace lunar::ui {
 namespace {
@@ -42,13 +45,13 @@ brls::View* SteamLinkPairingActivity::createContentView() {
 
     auto* card = makeUiCard(brls::Axis::COLUMN);
     card->setWidth(760);
-    card->setHeight(350);
+    card->setHeight(510);
     card->setPadding(24, 36, 24, 36);
     card->setAlignItems(brls::AlignItems::CENTER);
 
     auto* details = new brls::Box(brls::Axis::COLUMN);
     details->setWidth(680);
-    details->setHeight(270);
+    details->setHeight(430);
     details->setJustifyContent(brls::JustifyContent::CENTER);
     details->setAlignItems(brls::AlignItems::CENTER);
     auto* title = new brls::Label();
@@ -81,6 +84,31 @@ brls::View* SteamLinkPairingActivity::createContentView() {
     status_->setIsWrapping(true);
     status_->setVerticalAlign(brls::VerticalAlign::CENTER);
     details->addView(status_);
+
+    security_pin_input_ = new brls::InputCell();
+    security_pin_input_->setWidth(560);
+    security_pin_input_->setHeight(58);
+    security_pin_input_->setMarginTop(10);
+    security_pin_input_->init(
+        "Steam host security PIN",
+        "",
+        [this](std::string text) { security_pin_ = std::move(text); },
+        "The PIN configured in Steam Remote Play; leave empty to try without one",
+        "Example: 1234", 15, 0);
+    details->addView(security_pin_input_);
+
+    stream_button_ = new brls::Button();
+    stream_button_->setWidth(300);
+    stream_button_->setHeight(54);
+    stream_button_->setMarginTop(12);
+    stream_button_->setText("Start Steam stream");
+    stream_button_->setFocusable(false);
+    stylePrimaryButton(stream_button_);
+    stream_button_->registerClickAction([this](brls::View*) -> bool {
+        startStream();
+        return true;
+    });
+    details->addView(stream_button_);
     card->addView(details);
     root->addView(card);
     uint32_t random_value = 0;
@@ -107,6 +135,9 @@ void SteamLinkPairingActivity::startAuthorization() {
             authorizing_ = false;
             if (success) {
                 status_->setText(brls::getStr("lunarnx/steam_link/pair_success"));
+                if (stream_button_) stream_button_->setFocusable(true);
+                lunar::persistentEventLog("steam-link-ui", "pair success host=%s",
+                                          host_.address.c_str());
             } else {
                 status_->setText(error.empty()
                     ? brls::getStr("lunarnx/steam_link/pair_failed") : error);
@@ -115,6 +146,57 @@ void SteamLinkPairingActivity::startAuthorization() {
     })) {
         authorizing_ = false;
         status_->setText(client_->lastError());
+    }
+}
+
+void SteamLinkPairingActivity::startStream() {
+    if (starting_stream_ || authorizing_ || !client_ || !client_->isAuthorized(host_.client_id)) {
+        return;
+    }
+    starting_stream_ = true;
+    if (stream_button_) stream_button_->setFocusable(false);
+    if (security_pin_input_) security_pin_input_->setFocusable(false);
+    if (status_) status_->setText("Requesting Steam stream...");
+    auto runtime = std::make_shared<steamlink::SteamLinkStreamController>(
+        client_, host_, security_pin_, 1280, 720);
+    auto alive = alive_;
+    if (!lunar::platform::startNetworkWorker("steam-link-stream",
+            [this, alive, runtime]() {
+                bool ok = false;
+                std::string error;
+                try {
+                    ok = runtime->startStream();
+                    if (!ok) error = runtime->lastError();
+                } catch (const std::exception& e) {
+                    error = std::string("Steam stream exception: ") + e.what();
+                    lunar::persistentEventLog("steam-link-ui", "stream exception detail=%s", e.what());
+                } catch (...) {
+                    error = "Unexpected Steam stream exception";
+                    lunar::persistentEventLog("steam-link-ui", "stream unknown exception");
+                }
+                brls::sync([this, alive, runtime, ok, error]() {
+                    if (!alive->load()) {
+                        if (ok) lunar::platform::startNetworkWorker(
+                            "steam-link-orphan-stop", [runtime]() { runtime->stopStream(false); });
+                        return;
+                    }
+                    starting_stream_ = false;
+                    if (!ok) {
+                        if (status_) status_->setText(error.empty() ? "Steam stream failed" : error);
+                        if (stream_button_) stream_button_->setFocusable(true);
+                        if (security_pin_input_) security_pin_input_->setFocusable(true);
+                        return;
+                    }
+                    lunar::diagnosticLog("steam-link-ui", "stream runtime ready; opening StreamView");
+                    brls::Application::popActivity(brls::TransitionAnimation::NONE);
+                    brls::Application::pushActivity(
+                        new StreamView(runtime), brls::TransitionAnimation::NONE);
+                });
+            })) {
+        starting_stream_ = false;
+        if (stream_button_) stream_button_->setFocusable(true);
+        if (security_pin_input_) security_pin_input_->setFocusable(true);
+        if (status_) status_->setText("Could not start Steam stream worker");
     }
 }
 
