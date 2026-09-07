@@ -23,13 +23,24 @@ extern "C" {
 using namespace lunar::steamlink;
 
 static void testSessionShutdown(const IHS_ClientConfig& config, const IHS_SessionInfo& info) {
+    // Reserve an ephemeral loopback peer, never the local Steam installation.
+    int peer = socket(AF_INET, SOCK_DGRAM, 0);
+    assert(peer >= 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    assert(bind(peer, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
+    socklen_t length = sizeof(address);
+    assert(getsockname(peer, reinterpret_cast<sockaddr*>(&address), &length) == 0);
+    auto local_info = info;
+    local_info.address.port = ntohs(address.sin_port);
     struct Context { SessionDisconnectGate gate; std::atomic<bool> ready{false}; } context;
     IHS_StreamSessionCallbacks callbacks{};
     callbacks.initialized = [](IHS_Session*, void* p) { static_cast<Context*>(p)->ready = true; };
     callbacks.disconnected = [](IHS_Session*, void* p) { static_cast<Context*>(p)->gate.disconnected(); };
     for (int cycle = 0; cycle < 20; ++cycle) {
         context.gate.reset(); context.ready = false;
-        auto* session = IHS_SessionCreate(&config, &info);
+        auto* session = IHS_SessionCreate(&config, &local_info);
         IHS_SessionSetSessionCallbacks(session, &callbacks, &context);
         assert(IHS_SessionConnect(session));
         while (!context.ready) std::this_thread::yield();
@@ -56,6 +67,7 @@ static void testSessionShutdown(const IHS_ClientConfig& config, const IHS_Sessio
         }, IHS_SessionDestroy);
         assert(requests == 1 && session == nullptr);
     }
+    close(peer);
     std::cout << "PASS: 20 real session disconnect/join/destroy cycles, no-host timeout and host-disconnect race\n";
 }
 
