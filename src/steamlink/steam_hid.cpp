@@ -76,7 +76,10 @@ int write(IHS_HIDDevice* p, const uint8_t* data, size_t size) {
             s.report[27] = data[1];
             return 0;
         case 5: return size >= 4 ? 0 : -1; // no RGB LED on the Switch
-        case 8: return size >= 2 && data[1] == 0 ? 0 : -1; // motion sensors unavailable
+        case 8:
+            if (size < 2) return -1;
+            s.sensors_requested = data[1] != 0;
+            return 0;
         case 10: return -1; // no DualSense effects
         case 11: return size >= 2 ? 0 : -1; // one virtual player slot
         default: return -1;
@@ -120,6 +123,7 @@ const IHS_HIDDeviceClass device_class = [] {
         auto& s = *dev(p)->state;
         s.opened = false;
         std::lock_guard<std::mutex> lock(s.mutex);
+        s.sensors_requested = false;
         s.rumble_low = s.rumble_high = 0; s.rumble_duration = 0; ++s.rumble_generation;
     };
     c.write = write;
@@ -183,9 +187,19 @@ SteamPadReport encodeSteamPad(const input::GamepadState& s) {
     put16(r.data() + 16, bits);
     return r;
 }
-void SteamPadState::publish(const input::GamepadState& state) {
+void SteamPadState::publish(const input::GamepadState& state, const MotionSample& motion) {
     auto next = encodeSteamPad(state);
     std::lock_guard<std::mutex> lock(mutex);
+    if (sensors_requested && motion.valid) {
+        const auto quantize = [](float v, float range) {
+            if (!std::isfinite(v)) return int16_t(0);
+            return int16_t(-32768.f + (std::clamp(v/range,-1.f,1.f)+1.f)*32767.5f);
+        };
+        for(size_t i=0;i<3;++i) {
+            put16(next.data()+28+2*i, uint16_t(quantize(motion.gyro[i],34.90659f)));
+            put16(next.data()+34+2*i, uint16_t(quantize(motion.accel[i],19.6133f)));
+        }
+    }
     next[27] = report[27]; report = next;
 }
 IHS_HIDProvider* createSteamPadProvider(std::shared_ptr<SteamPadState> state) {

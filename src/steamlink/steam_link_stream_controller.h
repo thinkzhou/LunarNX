@@ -5,6 +5,7 @@
 #include "steam_link_client.h"
 #include "stream_support.h"
 #include "steam_hid.h"
+#include "steam_sensors.h"
 #include "../input/rumble_controller.h"
 #include "../app/stream_runtime.h"
 #include "../input/gamepad_reader.h"
@@ -37,6 +38,10 @@ public:
     SteamLinkStreamController& operator=(const SteamLinkStreamController&) = delete;
 
     bool startStream();
+    // Configure before starting the worker; not mutated during a session.
+    void configurePointer(TouchMode touch, GyroMode gyro) {
+        pointer_.touch_mode = touch; pointer_.gyro_mode = gyro;
+    }
     std::string lastError() const;
 
     void requestStop() override;
@@ -120,6 +125,9 @@ private:
     uint64_t rumble_generation_ = 0;
     uint64_t guide_until_ns_ = 0;
     bool hid_announced_ = false;
+    SteamPointer pointer_;
+    std::unique_ptr<SteamSensors> sensors_;
+    bool mouse_left_ = false, mouse_right_ = false;
 
     std::atomic<app::StreamState> state_{app::StreamState::Idle};
     StreamCancellation cancellation_;

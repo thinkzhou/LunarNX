@@ -1,5 +1,6 @@
 #pragma once
 #include "../input/gamepad_reader.h"
+#include "steam_pointer.h"
 extern "C" {
 #include <ihslib/hid.h>
 }
@@ -20,7 +21,8 @@ struct SteamPadState {
     uint64_t rumble_generation = 0;
     std::atomic<uint64_t> reports{0};
     std::atomic<bool> opened{false};
-    void publish(const input::GamepadState& state);
+    bool sensors_requested = false;
+    void publish(const input::GamepadState& state, const MotionSample& motion = {});
 };
 // Provider remains caller-owned. Destroy it only after IHS_SessionDestroy.
 IHS_HIDProvider* createSteamPadProvider(std::shared_ptr<SteamPadState> state);
