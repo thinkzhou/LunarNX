@@ -70,6 +70,7 @@ public:
     virtual stream::VideoCodec getVideoCodec() const = 0;
     virtual StreamPlatform getStreamPlatform() const = 0;
 
+    // All game-directed controls (buttons, pointer, motion) share ownership.
     virtual input::StreamInputRouter& inputRouter() = 0;
     virtual void requestPlatformHomeButton() = 0;
     // Called from a network worker after Switch returns to the foreground.

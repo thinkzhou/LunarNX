@@ -91,6 +91,11 @@ bool SteamLinkStreamController::startStream() {
     audio_sequence_ = 0;
     rumble_generation_ = 0;
     guide_until_ns_ = 0;
+    const auto touch_mode=pointer_.touch_mode;
+    const auto gyro_mode=pointer_.gyro_mode;
+    pointer_=SteamPointer{}; pointer_.touch_mode=touch_mode; pointer_.gyro_mode=gyro_mode;
+    pointer_.fenceTouches(); // do not turn the Start button's release into a game click
+    mouse_left_=mouse_right_=false;
     video_parameters_.clear();
     perf_.reset();
     setState(app::StreamState::Connecting, "Requesting Steam stream");
@@ -274,6 +279,12 @@ void SteamLinkStreamController::stopStream(bool set_disconnected) {
     std::lock_guard<std::mutex> lock(lifecycle_mutex_);
     // update() never waits for this lock, so joining while holding it is safe.
     input_pump_.stop();
+    sensors_.reset();
+    if (session_) {
+        if (mouse_left_) IHS_SessionSendMouseUp(session_, IHS_MOUSE_BUTTON_LEFT);
+        if (mouse_right_) IHS_SessionSendMouseUp(session_, IHS_MOUSE_BUTTON_RIGHT);
+    }
+    mouse_left_=mouse_right_=false;
     if (rumble_) rumble_->stop();
     if (session_) {
         lunar::persistentEventLog("steam-stream", "session disconnect begin");
@@ -328,6 +339,9 @@ void SteamLinkStreamController::update() {
         if (!rumble_->initialize())
             lunar::persistentEventLog("steam-input", "rumble unavailable; input remains enabled");
         lunar::persistentEventLog("steam-input", "native generic gamepad input active");
+        sensors_ = std::make_unique<SteamSensors>(pointer_.gyro_mode!=GyroMode::Off);
+        lunar::persistentEventLog("steam-pointer", "touch_mode=%d gyro_mode=%d mouse gyro requires ZL",
+            int(pointer_.touch_mode),int(pointer_.gyro_mode));
     }
     auto state = input_router_.route(gamepad_->read());
     const auto now = steadyNowNs();
@@ -338,7 +352,25 @@ void SteamLinkStreamController::update() {
     }
     if (guide_requested_.exchange(false)) guide_until_ns_ = now + 150000000;
     state.guide = state.guide || now < guide_until_ns_;
-    pad_state_->publish(state);
+    const bool game_input=input_router_.gameHasInput();
+    const auto sensor_motion=sensors_->read();
+    auto motion=sensor_motion;
+    if (!game_input || pointer_.gyro_mode!=GyroMode::Native) motion={};
+    pad_state_->publish(state,motion);
+    const auto mouse_motion=pointer_.gyro_mode==GyroMode::Mouse ? sensor_motion : MotionSample{};
+    auto pointer=pointer_.update(sensors_->touch(),mouse_motion,game_input,state.lt,now/1000000);
+    if(pointer.absolute) IHS_SessionSendMousePosition(session_,pointer.x,pointer.y);
+    if(pointer.dx || pointer.dy) IHS_SessionSendMouseMovement(session_,pointer.dx,pointer.dy);
+    for(int i=0;i<std::abs(pointer.wheel);++i)
+        IHS_SessionSendMouseWheel(session_,pointer.wheel>0?IHS_MOUSE_WHEEL_DOWN:IHS_MOUSE_WHEEL_UP);
+    sendKeyTransition(pointer.left,mouse_left_,[&](bool down) {
+        return down?IHS_SessionSendMouseDown(session_,IHS_MOUSE_BUTTON_LEFT)
+                   :IHS_SessionSendMouseUp(session_,IHS_MOUSE_BUTTON_LEFT);
+    });
+    sendKeyTransition(pointer.right,mouse_right_,[&](bool down) {
+        return down?IHS_SessionSendMouseDown(session_,IHS_MOUSE_BUTTON_RIGHT)
+                   :IHS_SessionSendMouseUp(session_,IHS_MOUSE_BUTTON_RIGHT);
+    });
     if (rumble_) {
         std::lock_guard<std::mutex> pad_lock(pad_state_->mutex);
         if (pad_state_->rumble_generation != rumble_generation_) {
@@ -351,6 +383,12 @@ void SteamLinkStreamController::update() {
         rumble_->update();
     }
     if (analog_log_.allow(now / 1000000)) {
+        bool host_sensors=false;
+        { std::lock_guard<std::mutex> pad_lock(pad_state_->mutex); host_sensors=pad_state_->sensors_requested; }
+        lunar::diagnosticLog("steam-pointer","game=%d motion=%d host_sensors=%d gyro=%.3f,%.3f,%.3f dx=%d dy=%d left=%d right=%d wheel=%d",
+            int(game_input),int(motion.valid||mouse_motion.valid),int(host_sensors),
+            sensor_motion.gyro[0],sensor_motion.gyro[1],sensor_motion.gyro[2],pointer.dx,pointer.dy,
+            int(mouse_left_),int(mouse_right_),pointer.wheel);
         const auto report = encodeSteamPad(state);
         lunar::diagnosticLog("steam-hid", "host_opened=%d reports=%llu buttons=%04x lx=%d ly=%d rx=%d ry=%d lt=%u rt=%u rumble_commands=%llu",
             int(pad_state_->opened.load()), (unsigned long long)pad_state_->reports.load(),

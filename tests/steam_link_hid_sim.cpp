@@ -112,6 +112,18 @@ int main() {
         assert(buffer.size == 21 && IHS_BufferPointer(&buffer)[3] == 44);
         assert(device->cls->getFeatureReport(device, &command, 1, &buffer, 2) == -1);
         IHS_BufferClear(&buffer, true);
+        const uint8_t sensor_on[]={8,1}, sensor_off[]={8,0};
+        assert(device->cls->write(device,sensor_on,1)==-1);
+        assert(device->cls->write(device,sensor_on,2)==0);
+        MotionSample motion{true,{34.90659f,-34.90659f,0},{19.6133f,-19.6133f,0}};
+        shared->publish({},motion);
+        assert(shared->report[28]==255 && shared->report[29]==127);
+        assert(shared->report[30]==0 && shared->report[31]==128);
+        assert(shared->report[34]==255 && shared->report[35]==127);
+        assert(shared->report[36]==0 && shared->report[37]==128);
+        assert(device->cls->write(device,sensor_off,2)==0);
+        shared->publish({},motion);
+        for(int i=28;i<40;++i) assert(shared->report[i]==0);
         const uint8_t rumble[] = {1, 255,255, 0,128, 0xe8,3,0,0};
         for (size_t n = 0; n < 9; ++n) assert(device->cls->write(device, rumble, n) == -1);
         assert(device->cls->write(device, rumble, sizeof(rumble)) == 0);

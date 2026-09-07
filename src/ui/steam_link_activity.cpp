@@ -46,13 +46,13 @@ brls::View* SteamLinkPairingActivity::createContentView() {
 
     auto* card = makeUiCard(brls::Axis::COLUMN);
     card->setWidth(760);
-    card->setHeight(510);
+    card->setHeight(630);
     card->setPadding(24, 36, 24, 36);
     card->setAlignItems(brls::AlignItems::CENTER);
 
     auto* details = new brls::Box(brls::Axis::COLUMN);
     details->setWidth(680);
-    details->setHeight(430);
+    details->setHeight(580);
     details->setJustifyContent(brls::JustifyContent::CENTER);
     details->setAlignItems(brls::AlignItems::CENTER);
     auto* title = new brls::Label();
@@ -97,6 +97,27 @@ brls::View* SteamLinkPairingActivity::createContentView() {
         "The PIN configured in Steam Remote Play; leave empty to try without one",
         "Example: 1234", 15, 0);
     details->addView(security_pin_input_);
+
+    auto* touch = new brls::Button();
+    touch->setWidth(560); touch->setHeight(44);
+    touch->setText("Touch: Trackpad");
+    touch->registerClickAction([this,touch](brls::View*) {
+        if(starting_stream_) return true;
+        touch_mode_=static_cast<steamlink::TouchMode>((int(touch_mode_)+1)%3);
+        const char* names[]={"Touch: Off","Touch: Trackpad","Touch: Absolute pointer"};
+        touch->setText(names[int(touch_mode_)]); return true;
+    });
+    details->addView(touch);
+    auto* gyro = new brls::Button();
+    gyro->setWidth(560); gyro->setHeight(44);
+    gyro->setText("Gyro: Native (keep still to calibrate)");
+    gyro->registerClickAction([this,gyro](brls::View*) {
+        if(starting_stream_) return true;
+        gyro_mode_=static_cast<steamlink::GyroMode>((int(gyro_mode_)+1)%3);
+        const char* names[]={"Gyro: Off","Gyro: Native (keep still to calibrate)","Gyro: Mouse (hold ZL to aim)"};
+        gyro->setText(names[int(gyro_mode_)]); return true;
+    });
+    details->addView(gyro);
 
     stream_button_ = new brls::Button();
     stream_button_->setWidth(300);
@@ -160,6 +181,7 @@ void SteamLinkPairingActivity::startStream() {
     if (status_) status_->setText("Requesting Steam stream...");
     auto runtime = std::make_shared<steamlink::SteamLinkStreamController>(
         client_, host_, security_pin_, 1280, 720);
+    runtime->configurePointer(touch_mode_,gyro_mode_);
     pending_runtime_ = runtime;
     auto alive = alive_;
     if (!lunar::platform::startNetworkWorker("steam-link-stream",

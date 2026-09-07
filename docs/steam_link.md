@@ -34,12 +34,54 @@ is a separate setting, entered in the host security PIN field on LunarNX.
 The bundled ihslib discovery, authorization and session sources are linked.
 Input is sampled at 125 Hz and sent through ihslib's 48-byte generic HID
 protocol. Joy-Con digital triggers map to fully released/pressed; analog source
-values retain their range. Basic motor rumble is supported, but motion sensors,
+values retain their range. Basic motor rumble and motion reports are supported;
 DualSense effects and multi-player controller slots are not. The ihslib dependency is
 LGPL-3.0; keep its license and notices when distributing a build.
 The small `src/steamlink/ihs_*.c` compile-time overrides keep the pinned submodule
 unchanged while serializing HID poll/close and stopping polling before session
 channels are destroyed. Both Switch and desktop probe builds use these overrides.
+
+## Motion and touchscreen
+
+The pairing/start page has two cycling buttons. Choose modes before starting;
+settings apply to this session and are not persisted across app launches.
+
+- **Gyro: Native** (default): sends angular velocity and acceleration in the
+  generic HID report when Steam requests sensors (command 8). Switch rotations/s
+  and g are converted to SDL controller axes, rad/s and m/s². Keep the controller
+  stationary for 125 distinct samples (roughly one second) to calibrate bias.
+  Handheld, Pro Controller and paired Joy-Con sources are selected automatically.
+- **Gyro: Mouse**: hold ZL (default left-trigger mapping) to aim. Does not also
+  send native motion, avoiding double movement. Fixed sensitivity is 650 pixels
+  per radian, with a small dead zone and a capped timestep after pauses.
+- **Gyro: Off**: does not start six-axis sensors.
+- **Touch: Trackpad** (default): one-finger movement; short tap for left click;
+  hold still for 400ms, then move to drag; lift to release. Two-finger short tap
+  gives right click, and two-finger vertical motion scrolls.
+- **Touch: Absolute pointer**: places the cursor at the touched screen position
+  using the full 1280×720 surface, with the same click/drag gestures. This assumes
+  full-screen video; letterboxed/custom aspect ratios require hardware checking.
+- **Touch: Off** disables game mouse gestures.
+
+The rightmost 96 pixels are reserved for LunarNX's swipe-in menu: start there
+to open it, or start inside the picture to move the game pointer. A held touch
+is fenced off until release after the UI takes ownership. Menu/background
+ownership neutralizes motion and releases mouse buttons; missing touch/sensor
+samples time out instead of leaving a drag or gyro movement running.
+
+`steam-motion` logs sensor initialization, source changes and calibration.
+`steam-pointer` logs ownership, valid motion, host sensor requests, angular
+velocity and mouse state once per second. `host_sensors=0` in Native mode means
+Steam has not requested motion; try Mouse mode if the game's Steam Input
+configuration does not expose gyro. Native sensor recognition, coordinate
+direction, drift and sensitivity still require real-host/Switch validation.
+This does not emulate a PlayStation touchpad.
+
+`python3 tests/steam_pointer_test.py` runs the production gesture/coordinate code
+under ASan/UBSan (taps, drag, scroll, UI fencing, menu edge, absolute positioning,
+aim gating and missing samples). The HID simulation also verifies sensor
+enable/disable requests and saturated gyro/accelerometer report bytes. Neither
+test substitutes for physical sensor calibration or a real Steam game session.
 
 ## Diagnostics and simulated verification
 
