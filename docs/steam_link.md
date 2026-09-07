@@ -44,6 +44,26 @@ probe parses the same discovery framing and status fields used by LunarNX.
 
 For authorization, `tools/steamlink_probe/authorize.c` is a small POSIX
 ihslib client. It must be compiled with the vendored ihslib sources and a
-desktop mbedTLS build, then run with the host security code as its only
+desktop mbedTLS build, then run with the four-digit pairing code as its only
 argument. Authorization should be performed only against a Steam host you
-control; the PIN is passed on the local command line and is not stored.
+control; the code is passed on the local command line and is not stored.
+
+## Desktop stream probe
+
+The desktop probe links the same ihslib session sources used by the eventual
+Switch adapter. It requests the host desktop, negotiates H.264 plus Opus, saves
+the received elementary streams, and opens H.264/HEVC video in `ffplay` when it
+is installed:
+
+```sh
+tools/steamlink_probe/build_desktop_stream_probe.sh
+build/steamlink-desktop-stream-probe --pin <remote-play-security-pin> --duration 60
+```
+
+`--pin` is the host's Remote Play security PIN and is separate from the
+four-digit pairing code. `--no-display` keeps the probe headless while still
+recording and counting media callbacks. A successful end-to-end run must show
+`streaming request success`, `session connected`, a negotiated `video start`,
+and non-zero video/audio packet summaries. A host with no running game may
+reject the request or require a security PIN; that is a host-state result, not
+evidence that the session transport works.
