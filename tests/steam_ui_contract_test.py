@@ -14,6 +14,9 @@ def source(path):
 platform = source("src/ui/platform_activity.cpp")
 assert "{{xbox_card, ps_card, steam_tile}, {about_tile}}" in platform
 assert "auto* steam_tile = makePlatformTile(" in platform
+assert '"img/platform/steam.png"' in platform
+assert "SteamPlatformMark" not in platform
+assert (root / "romfs/img/platform/steam.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 mapping = source("src/input/button_mapping.cpp")
 assert 'ButtonMappingProfile::Steam) return "steam_button_mapping"' in mapping
 settings = source("src/ui/steam_settings_activity.cpp")

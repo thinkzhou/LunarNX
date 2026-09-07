@@ -158,7 +158,8 @@ and repeated saves, commit/restore failures and backup recovery. It is not a
 Switch filesystem or UI test. `tests/steam_ui_contract_test.py` checks static
 wiring and locale keys only. Pointer/HID/runtime simulation tests also passed.
 
-Further emulator interaction is user-operated. Reopen the new NRO, change a
+Further emulator interaction is user-operated. The user confirmed saving works
+after restarting the fixed NRO. Reopen the new NRO, change a
 mode, save, reopen settings, then change and save again to verify persistence.
 One earlier emulator run exited in macOS CAMetalLayer/objc_release; this is
 recorded separately from guest behavior. No actual Steam media/input round trip
