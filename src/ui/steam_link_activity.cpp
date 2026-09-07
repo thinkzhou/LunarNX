@@ -7,6 +7,7 @@
 #include "../diagnostics.h"
 #include "../platform/network_worker.h"
 #include "stream_view.h"
+#include "steam_settings_activity.h"
 
 #include <switch/kernel/random.h>
 
@@ -46,13 +47,13 @@ brls::View* SteamLinkPairingActivity::createContentView() {
 
     auto* card = makeUiCard(brls::Axis::COLUMN);
     card->setWidth(760);
-    card->setHeight(630);
+    card->setHeight(550);
     card->setPadding(24, 36, 24, 36);
     card->setAlignItems(brls::AlignItems::CENTER);
 
     auto* details = new brls::Box(brls::Axis::COLUMN);
     details->setWidth(680);
-    details->setHeight(580);
+    details->setHeight(500);
     details->setJustifyContent(brls::JustifyContent::CENTER);
     details->setAlignItems(brls::AlignItems::CENTER);
     auto* title = new brls::Label();
@@ -91,39 +92,18 @@ brls::View* SteamLinkPairingActivity::createContentView() {
     security_pin_input_->setHeight(58);
     security_pin_input_->setMarginTop(10);
     security_pin_input_->init(
-        "Steam host security PIN",
+        brls::getStr("lunarnx/steam_ui/security_pin"),
         "",
         [this](std::string text) { security_pin_ = std::move(text); },
-        "The PIN configured in Steam Remote Play; leave empty to try without one",
-        "Example: 1234", 15, 0);
+        brls::getStr("lunarnx/steam_ui/security_help"),
+        brls::getStr("lunarnx/steam_ui/security_example"), 15, 0);
     details->addView(security_pin_input_);
-
-    auto* touch = new brls::Button();
-    touch->setWidth(560); touch->setHeight(44);
-    touch->setText("Touch: Trackpad");
-    touch->registerClickAction([this,touch](brls::View*) {
-        if(starting_stream_) return true;
-        touch_mode_=static_cast<steamlink::TouchMode>((int(touch_mode_)+1)%3);
-        const char* names[]={"Touch: Off","Touch: Trackpad","Touch: Absolute pointer"};
-        touch->setText(names[int(touch_mode_)]); return true;
-    });
-    details->addView(touch);
-    auto* gyro = new brls::Button();
-    gyro->setWidth(560); gyro->setHeight(44);
-    gyro->setText("Gyro: Native (keep still to calibrate)");
-    gyro->registerClickAction([this,gyro](brls::View*) {
-        if(starting_stream_) return true;
-        gyro_mode_=static_cast<steamlink::GyroMode>((int(gyro_mode_)+1)%3);
-        const char* names[]={"Gyro: Off","Gyro: Native (keep still to calibrate)","Gyro: Mouse (hold ZL to aim)"};
-        gyro->setText(names[int(gyro_mode_)]); return true;
-    });
-    details->addView(gyro);
 
     stream_button_ = new brls::Button();
     stream_button_->setWidth(300);
     stream_button_->setHeight(54);
     stream_button_->setMarginTop(12);
-    stream_button_->setText("Start Steam stream");
+    stream_button_->setText(brls::getStr("lunarnx/steam_ui/start"));
     stream_button_->setFocusable(false);
     stylePrimaryButton(stream_button_);
     stream_button_->registerClickAction([this](brls::View*) -> bool {
@@ -143,6 +123,12 @@ brls::View* SteamLinkPairingActivity::createContentView() {
 }
 
 void SteamLinkPairingActivity::onContentAvailable() {
+    if (client_->isAuthorized(host_.client_id)) {
+        pin_display_->setText(brls::getStr("lunarnx/steam_ui/paired"));
+        status_->setText(brls::getStr("lunarnx/steam_link/pair_success"));
+        stream_button_->setFocusable(true);
+        return;
+    }
     startAuthorization();
 }
 
@@ -178,10 +164,11 @@ void SteamLinkPairingActivity::startStream() {
     starting_stream_ = true;
     if (stream_button_) stream_button_->setFocusable(false);
     if (security_pin_input_) security_pin_input_->setFocusable(false);
-    if (status_) status_->setText("Requesting Steam stream...");
+    if (status_) status_->setText(brls::getStr("lunarnx/steam_ui/requesting"));
     auto runtime = std::make_shared<steamlink::SteamLinkStreamController>(
         client_, host_, security_pin_, 1280, 720);
-    runtime->configurePointer(touch_mode_,gyro_mode_);
+    const auto settings = loadSteamInputSettings();
+    runtime->configurePointer(settings.touch, settings.gyro);
     pending_runtime_ = runtime;
     auto alive = alive_;
     if (!lunar::platform::startNetworkWorker("steam-link-stream",
@@ -207,7 +194,8 @@ void SteamLinkPairingActivity::startStream() {
                     starting_stream_ = false;
                     pending_runtime_.reset();
                     if (!ok) {
-                        if (status_) status_->setText(error.empty() ? "Steam stream failed" : error);
+                        if (status_) status_->setText(brls::getStr("lunarnx/steam_ui/stream_failed") +
+                            (error.empty() ? "" : "\n" + error));
                         if (stream_button_) stream_button_->setFocusable(true);
                         if (security_pin_input_) security_pin_input_->setFocusable(true);
                         return;
@@ -221,7 +209,7 @@ void SteamLinkPairingActivity::startStream() {
         starting_stream_ = false;
         if (stream_button_) stream_button_->setFocusable(true);
         if (security_pin_input_) security_pin_input_->setFocusable(true);
-        if (status_) status_->setText("Could not start Steam stream worker");
+        if (status_) status_->setText(brls::getStr("lunarnx/steam_ui/worker_failed"));
     }
 }
 
@@ -262,6 +250,15 @@ brls::View* SteamLinkActivity::createContentView() {
     status_->setTextColor(p.text_muted);
     status_->setGrow(1.0f);
     toolbar->addView(status_);
+    auto* settings = new brls::Button();
+    settings->setText(brls::getStr("lunarnx/common/settings"));
+    settings->setWidth(160); settings->setHeight(50); settings->setMarginRight(16);
+    styleSecondaryButton(settings);
+    settings->registerClickAction([](brls::View*) {
+        brls::Application::pushActivity(new SteamSettingsActivity(loadSteamInputSettings()),
+            brls::TransitionAnimation::NONE); return true;
+    });
+    toolbar->addView(settings);
     refresh_button_ = new brls::Button();
     refresh_button_->setText(brls::getStr("lunarnx/steam_link/refresh"));
     refresh_button_->setWidth(160);
@@ -318,7 +315,7 @@ void SteamLinkActivity::rebuildHosts(
                           "  " + host.address + ":" + std::to_string(host.port));
             styleSecondaryButton(card);
             const bool paired = client_->isAuthorized(host.client_id);
-            if (paired) card->setText(card->getText() + "  [Paired]");
+            if (paired) card->setText(card->getText() + "  [" + brls::getStr("lunarnx/steam_ui/paired") + "]");
             card->registerClickAction([this, host](brls::View*) -> bool {
                 brls::Application::pushActivity(
                     new SteamLinkPairingActivity(client_, host),
