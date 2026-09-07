@@ -36,23 +36,23 @@ inline VideoJitterPolicy computeVideoJitterPolicy(
             ? path.observed_quality : path.quality;
     VideoJitterPolicy policy;
     if (mode == NetworkPathMode::Home) {
-        policy.frame_hold_ms = std::clamp<uint64_t>(
-            24 + rtt_ms / 4, 24, 48);
-        const uint64_t margin_ms =
-            deadline_quality == NetworkPathQuality::Good ? 24 :
-            deadline_quality == NetworkPathQuality::Fair ? 40 : 60;
-        const uint64_t cap_ms =
-            deadline_quality == NetworkPathQuality::Good ? 120 :
-            deadline_quality == NetworkPathQuality::Fair ? 160 : 200;
-        policy.missing_packet_hold_ms = std::max<uint64_t>(
-            policy.frame_hold_ms,
-            std::clamp<uint64_t>(deadline_rtt_ms + margin_ms, 24, cap_ms));
+        // Home includes remote consoles over the internet, not just LAN.
+        // Restore v0.2.0's bounded recovery/queued-frame budgets: the newer
+        // 120 ms HOL cap could discard a frame before its WAN retransmission.
+        // Complete frames still emit immediately; these are loss deadlines,
+        // not prebuffer targets. Use raw RTT on spikes as well as the EWMA.
+        const uint64_t bounded_rtt_ms = std::min<uint64_t>(deadline_rtt_ms, 2000);
+        policy.frame_hold_ms = bounded_rtt_ms > 0
+            ? std::clamp<uint64_t>(bounded_rtt_ms * 2 + 20, 60, 180)
+            : 120;
+        policy.missing_packet_hold_ms = policy.frame_hold_ms;
         policy.recovery_hold_ms = std::clamp<uint64_t>(
-            180 + deadline_rtt_ms / 2, 180, 250);
-        policy.max_head_blocked_frames = 3;
-        policy.head_blocked_hold_ms = std::min<uint64_t>(
-            policy.missing_packet_hold_ms,
-            std::clamp<uint64_t>(deadline_rtt_ms + 24, 32, 120));
+            bounded_rtt_ms + 150, 300, 800);
+        policy.max_head_blocked_frames = 8;
+        // drain() caps this against the current frame's deadline. Do not
+        // pre-cap it against an ordinary P-frame: recovery IDRs have a longer
+        // budget and must retain it even when later frames accumulate.
+        policy.head_blocked_hold_ms = std::max<uint64_t>(80, bounded_rtt_ms + 20);
         return policy;
     }
 

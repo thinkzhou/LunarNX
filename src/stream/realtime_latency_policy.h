@@ -7,9 +7,11 @@ namespace lunar::stream {
 
 // BufferedFifo preserves one decoded frame of elasticity. RealtimeAdaptive
 // only catches up when that frame has already crossed the stale threshold.
+// RealtimeLatest always selects the newest decoded frame at presentation.
 enum class VideoPresentationMode : uint8_t {
     BufferedFifo,
     RealtimeAdaptive,
+    RealtimeLatest,
 };
 
 inline const char* videoPresentationModeName(VideoPresentationMode mode) {
@@ -17,6 +19,7 @@ inline const char* videoPresentationModeName(VideoPresentationMode mode) {
         case VideoPresentationMode::BufferedFifo: return "buffered-fifo";
         case VideoPresentationMode::RealtimeAdaptive:
             return "realtime-adaptive";
+        case VideoPresentationMode::RealtimeLatest: return "realtime-latest";
     }
     return "unknown";
 }
@@ -26,9 +29,10 @@ inline constexpr uint64_t kRealtimePresentationStaleUs = 25'000;
 constexpr size_t stalePresentationFramesToDrop(VideoPresentationMode mode,
                                                 size_t pending_frames,
                                                 uint64_t oldest_wait_us) {
-    return mode == VideoPresentationMode::RealtimeAdaptive &&
-               pending_frames > 1 &&
-               oldest_wait_us >= kRealtimePresentationStaleUs
+    return pending_frames > 1 &&
+               (mode == VideoPresentationMode::RealtimeLatest ||
+                (mode == VideoPresentationMode::RealtimeAdaptive &&
+                 oldest_wait_us >= kRealtimePresentationStaleUs))
         ? pending_frames - 1
         : 0;
 }
