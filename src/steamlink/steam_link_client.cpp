@@ -256,7 +256,7 @@ bool SteamLinkClient::requestStreaming(const SteamLinkHost& host, const std::str
     request.maxResolution.x = width > 0 ? width : 1280;
     request.maxResolution.y = height > 0 ? height : 720;
     request.audioChannelCount = 2;
-    request.streamingInterface = IHS_StreamInterfaceDefault;
+    request.streamingInterface = IHS_StreamInterfaceBigPicture;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         streaming_callback_ = std::move(callback);
