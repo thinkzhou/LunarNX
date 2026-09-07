@@ -558,6 +558,21 @@
   "xbox_title": "Xbox",
     "xbox_desc": "Remote Play 与云游戏",
   "ps_title": "PlayStation",
-    "ps_desc": "PS4 / PS5 Remote Play"
+    "ps_desc": "PS4 / PS5 Remote Play",
+    "steam_title": "Steam Link",
+    "steam_desc": "局域网 Steam Remote Play"
+ },
+ "steam_link": {
+  "title": "Steam Link",
+  "subtitle": "搜索同一网络中运行 Steam 的电脑，然后使用 PIN 配对。",
+  "discovering": "正在搜索 Steam 主机…",
+  "refresh": "刷新",
+  "no_hosts": "没有找到 Steam 主机。请启动 Steam，并确认两台设备在同一网络。",
+  "pin_help": "请将此四位配对码输入 Mac Steam 的 Pair Steam Link 窗口。",
+  "backspace": "删除",
+  "pair": "配对",
+  "pairing": "等待 Steam 确认配对…",
+  "pair_success": "配对成功。下一步将接入流媒体传输。",
+  "pair_failed": "Steam Link 配对失败。"
  }
 }

@@ -4,6 +4,9 @@
 #include "main_activity.h"
 #include "ps_activity.h"
 #include "about_activity.h"
+#if LUNARNX_STEAMLINK
+#include "steam_link_activity.h"
+#endif
 #include "stream_settings_activity.h"
 #include "grid_navigation.h"
 #include "ui_style.h"
@@ -182,6 +185,16 @@ brls::View* PlatformActivity::createContentView() {
     ps_card->setMarginLeft(24);
     platforms->addView(ps_card);
     content->addView(platforms);
+#if LUNARNX_STEAMLINK
+    auto* steam_tile = makeUtilityTile(
+        brls::getStr("lunarnx/platform/steam_title"),
+        brls::getStr("lunarnx/platform/steam_desc"),
+        [this]() {
+            diagnosticLog("ui-platform", "Steam Link Open clicked");
+            openSteamLink();
+        });
+    content->addView(steam_tile);
+#endif
     auto* about_tile = makeUtilityTile(
         brls::getStr("lunarnx/about/home_entry_title"),
         brls::getStr("lunarnx/about/home_entry_desc"),
@@ -190,7 +203,11 @@ brls::View* PlatformActivity::createContentView() {
                 new AboutActivity(), brls::TransitionAnimation::NONE);
         });
     content->addView(about_tile);
+#if LUNARNX_STEAMLINK
+    wireVerticalGridNavigation({{xbox_card, ps_card}, {steam_tile}, {about_tile}});
+#else
     wireVerticalGridNavigation({{xbox_card, ps_card}, {about_tile}});
+#endif
     workspace->addView(content);
 
     workspace->registerAction(brls::getStr("lunarnx/common/exit"),
@@ -238,6 +255,15 @@ void PlatformActivity::openPlayStation() {
         brls::TransitionAnimation::NONE);
     diagnosticLog("ui-platform", "PlayStation navigation complete");
 }
+
+#if LUNARNX_STEAMLINK
+void PlatformActivity::openSteamLink() {
+    diagnosticLog("ui-platform", "Steam Link navigation begin");
+    brls::Application::pushActivity(
+        new SteamLinkActivity(), brls::TransitionAnimation::NONE);
+    diagnosticLog("ui-platform", "Steam Link navigation complete");
+}
+#endif
 
 } // namespace lunar::ui
 #endif

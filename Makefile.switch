@@ -39,6 +39,7 @@ APP_DIAG ?= 0
 DROP_DIAG ?= 1
 LATENCY_DIAG ?= 0
 PS_MOCK_REPLAY ?= 0
+STEAMLINK ?= 1
 IPV6 ?= 0
 CURL_PROVIDER ?= moonlight
 CURL_VERIFY ?= 0
@@ -87,6 +88,7 @@ $(error Unsupported CURL_PROVIDER=$(CURL_PROVIDER). Use wiliwili, devkitpro, or 
 endif
 
 DFLAGS = -D__SWITCH__ -DHAVE_LIBNX -DSWITCH -DSTBI_NO_THREAD_LOCALS \
+         -DLUNARNX_STEAMLINK=$(STEAMLINK) \
          -DBOREALIS_USE_DEKO3D -DYG_ENABLE_EVENTS -DBRLS_RESOURCES=\"romfs:/\" \
          -DCONFIG_USE_LWIP=0 $(IPV6_DFLAG) $(USRSCTP_CFLAGS) -DCONFIG_MBEDTLS_2_X=0 \
          -DMBEDTLS_NO_PLATFORM_ENTROPY -DMBEDTLS_ENTROPY_HARDWARE_ALT \
@@ -126,6 +128,13 @@ INCDIRS = -Isrc -Ilib -Ilib/switch/include \
     -I$(LIBPEER)/third_party/libsrtp/crypto/include \
     $(USRSCTP_INCLUDES) \
     $(if $(LIBPEER_COMPAT),-I$(LIBPEER_COMPAT))
+
+ifeq ($(STEAMLINK),1)
+INCDIRS += -Ivendor/ihslib/include -Ivendor/ihslib/src -Ivendor/protobuf-c \
+    -I$(PORTLIBS)/include/SDL2
+    # ihslib's timer source targets an older callback prototype.
+    CFLAGS += -Wno-incompatible-pointer-types
+endif
 
 LIBDIRS = $(MBEDTLS_LIBDIR) \
     -L$(LIBNX)/lib -L$(PORTLIBS)/lib \
@@ -188,6 +197,10 @@ CXX_SRCS = src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_proces
     src/stream/software_video_frame.cpp \
     src/stream/audio_player.cpp src/stream/av_sync.cpp
 
+ifeq ($(STEAMLINK),1)
+CXX_SRCS += src/steamlink/steam_link_client.cpp src/ui/steam_link_activity.cpp
+endif
+
 C_SRCS = lib/cJSON.c \
     src/platform/switch_wrapper.c \
     src/platform/switch_posix_stubs.c \
@@ -198,6 +211,23 @@ C_SRCS = lib/cJSON.c \
     $(LIBPEER)/src/sdp.c $(LIBPEER)/src/socket.c $(LIBPEER)/src/stun.c \
     $(LIBPEER)/src/ssl_transport.c $(LIBPEER)/src/utils.c \
     lib/stubs/dav1d_stubs.c
+
+ifeq ($(STEAMLINK),1)
+C_SRCS += vendor/ihslib/src/base.c vendor/ihslib/src/crc32.c vendor/ihslib/src/crc32c.c \
+    vendor/ihslib/src/ihs_arraylist.c vendor/ihslib/src/ihs_buffer.c \
+    vendor/ihslib/src/ihs_enumeration.c vendor/ihslib/src/ihs_enumeration_array.c \
+    vendor/ihslib/src/ihs_enumeration_ll.c vendor/ihslib/src/ihs_ip.c \
+    vendor/ihslib/src/ihs_queue.c vendor/ihslib/src/ihs_timer.c \
+    vendor/ihslib/src/client/authorization.c vendor/ihslib/src/client/client.c \
+    vendor/ihslib/src/client/discovery.c vendor/ihslib/src/client/streaming.c \
+    vendor/ihslib/src/crypto/impl_mbedtls.c \
+    vendor/ihslib/src/platforms/ihs_thread_sdl.c \
+    vendor/ihslib/src/protobuf/discovery.pb-c.c \
+    vendor/ihslib/src/protobuf/hiddevices.pb-c.c \
+    vendor/ihslib/src/protobuf/pb_utils.c \
+    vendor/ihslib/src/protobuf/remoteplay.pb-c.c \
+    vendor/protobuf-c/protobuf-c/protobuf-c.c
+endif
 
 CXX_OBJS = $(CXX_SRCS:%.cpp=$(BUILD)/%.o)
 C_OBJS   = $(C_SRCS:%.c=$(BUILD)/%.o)
