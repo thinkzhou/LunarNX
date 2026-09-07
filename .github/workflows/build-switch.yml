@@ -178,20 +178,24 @@ jobs:
 
       - name: Prepare release assets
         shell: bash
+        env:
+          APP_VERSION: ${{ needs.build-switch.outputs.app_version }}
         run: |
           set -euo pipefail
 
           release_root="$RUNNER_TEMP/release"
           package_dir="$release_root/LunarNX"
+          package_root="$release_root/LunarNX-$APP_VERSION"
           test -f "$package_dir/LunarNX.nro"
           test -f "$package_dir/LICENSE"
           test -f "$package_dir/THIRD_PARTY_NOTICES.md"
           test -f "$package_dir/licenses/AGPL-3.0.txt"
 
-          cp "$package_dir/LunarNX.nro" "$release_root/LunarNX.nro"
+          mv "$package_dir" "$package_root"
+          cp "$package_root/LunarNX.nro" "$release_root/LunarNX.nro"
           (
             cd "$release_root"
-            zip -qr "LunarNX.zip" "LunarNX"
+            zip -qr "LunarNX.zip" "LunarNX-$APP_VERSION"
             sha256sum \
               "LunarNX.nro" \
               "LunarNX.zip" > SHA256SUMS
