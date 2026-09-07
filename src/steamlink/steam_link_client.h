@@ -89,6 +89,7 @@ private:
     Identity identity_;
     IHS_Client* client_ = nullptr;
     bool ihs_initialized_ = false;
+    bool discovery_started_ = false; // Discovery lifecycle is owned by the UI thread.
     mutable std::mutex mutex_;
     std::unordered_map<uint64_t, IHS_HostInfo> host_infos_;
     std::vector<SteamLinkHost> hosts_;
