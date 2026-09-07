@@ -12,6 +12,27 @@
 
 namespace lunar::steamlink {
 
+// Monotonic deadlines, independent of media packet arrival. Receiving audio or
+// undecodable video must not keep the first rendered-frame wait alive forever.
+class StartupWatchdog {
+public:
+    enum class Timeout { None, Connection, FirstFrame };
+    void reset(uint64_t now_ns) { started_ = now_ns; connected_ = 0; }
+    void connected(uint64_t now_ns) {
+        uint64_t empty = 0;
+        connected_.compare_exchange_strong(empty, now_ns);
+    }
+    Timeout expired(uint64_t now_ns) const {
+        const auto connected = connected_.load();
+        const auto since = connected ? connected : started_.load();
+        const uint64_t limit = connected ? 20000000000ULL : 15000000000ULL;
+        if (now_ns < since || now_ns - since < limit) return Timeout::None;
+        return connected ? Timeout::FirstFrame : Timeout::Connection;
+    }
+private:
+    std::atomic<uint64_t> started_{0}, connected_{0};
+};
+
 // Caller owns the lifecycle mutex. Detach before invoking protocol callbacks;
 // repeated cleanup then cannot disconnect or free the same session twice.
 template<class Session, class Disconnect, class Join, class Destroy>

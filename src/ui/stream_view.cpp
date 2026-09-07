@@ -126,6 +126,58 @@ private:
     std::shared_ptr<app::IStreamRuntime> runtime_;
 };
 
+#if LUNARNX_STEAMLINK
+class SteamCursorView : public brls::View {
+public:
+    explicit SteamCursorView(std::shared_ptr<steamlink::SteamLinkStreamController> runtime)
+        : runtime_(std::move(runtime)) {}
+    ~SteamCursorView() override {
+        if (image_ > 0) nvgDeleteImage(brls::Application::getNVGContext(), image_);
+    }
+    void draw(NVGcontext* vg, float x, float y, float width, float height,
+              brls::Style, brls::FrameContext*) override {
+        if (runtime_->getState() != app::StreamState::Streaming ||
+            !runtime_->inputRouter().gameHasInput()) return;
+        const auto cursor = runtime_->cursorSnapshot();
+        if (!cursor.visible) return;
+        if (pixels_ != cursor.image) {
+            if (image_ > 0) nvgDeleteImage(vg, image_);
+            image_ = 0;
+            pixels_ = cursor.image;
+            if (pixels_) image_ = nvgCreateImageRGBA(vg, pixels_->width, pixels_->height,
+                                                    0, pixels_->rgba.data());
+        }
+        const float fit = std::min(width / cursor.video_width, height / cursor.video_height);
+        const float vw = cursor.video_width * fit, vh = cursor.video_height * fit;
+        const float vx = x + (width-vw)*0.5f, vy = y + (height-vh)*0.5f;
+        const float px = vx + cursor.x*vw, py = vy + cursor.y*vh;
+        nvgSave(vg);
+        nvgIntersectScissor(vg, vx, vy, vw, vh);
+        nvgBeginPath(vg);
+        if (pixels_ && image_ > 0) {
+            const float sx = vw / cursor.capture_width, sy = vh / cursor.capture_height;
+            const float ix = px-pixels_->hot_x*sx, iy = py-pixels_->hot_y*sy;
+            const float iw = pixels_->width*sx, ih = pixels_->height*sy;
+            nvgRect(vg, ix, iy, iw, ih);
+            nvgFillPaint(vg, nvgImagePattern(vg, ix, iy, iw, ih, 0, image_, 1));
+            nvgFill(vg);
+        } else {
+            // Visible fallback while fetching an unknown/rejected host image.
+            nvgMoveTo(vg, px, py); nvgLineTo(vg, px+5, py+20);
+            nvgLineTo(vg, px+9, py+12); nvgLineTo(vg, px+17, py+10);
+            nvgClosePath(vg);
+            nvgFillColor(vg, nvgRGBA(255,255,255,255)); nvgFill(vg);
+            nvgStrokeColor(vg, nvgRGBA(0,0,0,255)); nvgStrokeWidth(vg, 1.5f); nvgStroke(vg);
+        }
+        nvgRestore(vg);
+    }
+private:
+    std::shared_ptr<steamlink::SteamLinkStreamController> runtime_;
+    std::shared_ptr<const steamlink::CursorImage> pixels_;
+    int image_ = 0;
+};
+#endif
+
 class TouchpadFeedbackView : public brls::View {
 public:
     explicit TouchpadFeedbackView(std::shared_ptr<app::IStreamRuntime> runtime)
@@ -380,6 +432,17 @@ brls::View* StreamView::createContentView() {
         software_video->setDetachedPosition(0, 0);
         root->addView(software_video);
     }
+
+#if LUNARNX_STEAMLINK
+    if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+        auto* cursor = new SteamCursorView(
+            std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_));
+        cursor->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
+        cursor->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
+        cursor->setDetachedPosition(0, 0);
+        root->addView(cursor);
+    }
+#endif
 
     // Top status bar
     overlay_ = new StreamOverlay(&runtime_->getPerfStats(), runtime_->getStreamPlatform());
@@ -683,6 +746,12 @@ void StreamView::stopAndReturn() {
     auto runtime = runtime_;
     auto alive = alive_;
     const auto state = runtime_->getState();
+#if LUNARNX_STEAMLINK
+    if (state == app::StreamState::Error && runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+        const auto reason = std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_)->lastError();
+        if (!reason.empty()) brls::Application::notify(reason);
+    }
+#endif
     const bool report_disconnect =
         state != app::StreamState::Disconnected && state != app::StreamState::Error;
     const bool started = lunar::platform::startNetworkWorker(

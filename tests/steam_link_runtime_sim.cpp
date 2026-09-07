@@ -1,4 +1,5 @@
 #include "steamlink/stream_support.h"
+#include "steamlink/steam_cursor.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -8,6 +9,56 @@ using namespace lunar::steamlink;
 using namespace std::chrono_literals;
 
 int main(int argc, char** argv) {
+    {
+        SteamCursor cursor;
+        cursor.reset(1280,720);
+        assert(!cursor.select(7));
+        const uint8_t pixels[] = {255,0,0,255, 0,255,0,255};
+        assert(!cursor.image(7,2,1,2,0,pixels,sizeof(pixels)));
+        assert(!cursor.image(7,2,1,0,0,pixels,7));
+        assert(!cursor.image(7,2147483647,2147483647,0,0,pixels,8));
+        assert(!cursor.image(7,2,1,0,0,nullptr,8));
+        assert(cursor.image(7,2,1,1,0,pixels,8));
+        assert(cursor.select(7));
+        cursor.show(0.5f,0.5f);
+        auto snapshot = cursor.snapshot();
+        assert(snapshot.visible && snapshot.image->hot_x == 1);
+        assert(snapshot.image->rgba[0] == 255 && snapshot.image->rgba[5] == 255);
+        cursor.captureSize(1920,1080);
+        cursor.videoSize(960,540);
+        cursor.move(192,-108);
+        assert(std::abs(cursor.snapshot().x-0.6f)<0.0001f);
+        assert(std::abs(cursor.snapshot().y-0.4f)<0.0001f);
+        cursor.position(-1,2);
+        assert(cursor.snapshot().x == 0 && cursor.snapshot().y == 1);
+        cursor.show(NAN,0);
+        assert(cursor.snapshot().x == 0);
+        cursor.hide(); assert(!cursor.snapshot().visible);
+        cursor.erase(7); assert(!cursor.snapshot().image);
+        assert(snapshot.image->rgba[0] == 255); // UI snapshot survives deletion
+        assert(!cursor.select(99));
+        assert(cursor.image(7,2,1,0,0,pixels,8));
+        assert(!cursor.snapshot().image); // out-of-order image cannot change selection
+        for (int i=100;i<200;++i) assert(cursor.image(i,2,1,0,0,pixels,8));
+        int retained = cursor.select(7) ? 1 : 0;
+        for (int i=100;i<200;++i) retained += cursor.select(i) ? 1 : 0;
+        assert(retained <= 8);
+        cursor.reset(1280,720);
+        assert(!cursor.snapshot().visible && !cursor.snapshot().image);
+    }
+    {
+        StartupWatchdog watch;
+        watch.reset(100);
+        assert(watch.expired(15000000099ULL) == StartupWatchdog::Timeout::None);
+        assert(watch.expired(15000000100ULL) == StartupWatchdog::Timeout::Connection);
+        watch.connected(1000);
+        watch.connected(2000); // duplicate callbacks cannot extend a deadline
+        assert(watch.expired(20000000999ULL) == StartupWatchdog::Timeout::None);
+        assert(watch.expired(20000001000ULL) == StartupWatchdog::Timeout::FirstFrame);
+        watch.reset(30000000000ULL);
+        assert(watch.expired(30000000001ULL) == StartupWatchdog::Timeout::None);
+        assert(watch.expired(45000000000ULL) == StartupWatchdog::Timeout::Connection);
+    }
     {
         auto* session = new int(42);
         std::vector<int> events;
@@ -105,5 +156,5 @@ int main(int argc, char** argv) {
         std::ofstream file(argv[3], std::ios::binary);
         file.write(reinterpret_cast<const char*>(output.data()), output.size());
     }
-    std::cout << "PASS: cancellation, timeout, input pump, key retry/release, single session destruction, H264 config, log throttle\n";
+    std::cout << "PASS: cursor validation/cache/position/lifetime, startup deadlines, cancellation, input pump, key retry/release, single session destruction, H264 config, log throttle\n";
 }
