@@ -133,6 +133,8 @@ private:
     StreamCancellation cancellation_;
     InputPump input_pump_;
     StartupWatchdog startup_watchdog_;
+    MediaActivityWatchdog media_activity_;
+    VideoRecoveryFeedback video_recovery_;
     SessionDisconnectGate disconnect_gate_;
     LogThrottle hid_announce_log_;
     LogThrottle analog_log_;

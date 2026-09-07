@@ -33,6 +33,14 @@ int main() {
     p=SteamPointer{}; p.touch_mode=TouchMode::Absolute;
     step(finger(100,100),2990);
     r=step(finger(1279,719),3000); assert(r.absolute && r.x==1 && r.y==1);
+    p=SteamPointer{}; p.touch_mode=TouchMode::Absolute;
+    p.setVideoSize(960,720);
+    r=step(finger(320,360),3010);
+    assert(r.absolute && std::abs(r.x-160.f/959.f)<0.0001f);
+    step({},3060);
+    p=SteamPointer{}; p.touch_mode=TouchMode::Absolute; p.setVideoSize(960,720);
+    r=step(finger(100,300),3070); assert(!r.absolute && !r.left);
+    assert(!step({},3090).left); // black bar touch is not a game click
     step({},3100); p=SteamPointer{}; p.gyro_mode=GyroMode::Mouse;
     m={true,{1,1,0},{}};
     p.update({},m,true,false,4000);

@@ -10,6 +10,24 @@ using namespace std::chrono_literals;
 
 int main(int argc, char** argv) {
     {
+        VideoRecoveryFeedback recovery;
+        assert(!recovery.reportLost(true, false, 100));
+        assert(recovery.reportLost(true, true, 100)); // accepted but awaiting IDR
+        assert(!recovery.reportLost(true, true, 200)); // bounded request rate
+        assert(recovery.reportLost(true, true, 1000000100ULL)); // retry until recovered
+        assert(!recovery.reportLost(true, false, 3000000000ULL));
+        assert(recovery.reportLost(false, false, 3000000000ULL));
+        recovery.reset();
+        assert(recovery.reportLost(true, true, 1));
+        MediaActivityWatchdog watch;
+        watch.reset(100);
+        assert(!watch.expired(20000000099ULL));
+        assert(watch.expired(20000000100ULL));
+        watch.received(20000000100ULL);
+        watch.received(100); // delayed audio callback must not move time backwards
+        assert(!watch.expired(20000000101ULL));
+    }
+    {
         SteamCursor cursor;
         cursor.reset(1280,720);
         assert(!cursor.select(7));

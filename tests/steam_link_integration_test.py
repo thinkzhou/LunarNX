@@ -36,6 +36,14 @@ def main() -> None:
     assert "--pin SECURITY_PIN" in desktop_probe
     assert "--pair-code PAIRING_CODE" in desktop_probe
     assert "session/channels/video/ch_data_video.c" in desktop_build
+    for override in ("ihs_discovery.c", "ihs_negotiation.c", "ihs_timer.c"):
+        assert f"src/steamlink/{override}" in makefile
+        assert f"src/steamlink/{override}" in desktop_build
+    controller = read("src/steamlink/steam_link_stream_controller.cpp")
+    assert "self->media_->hasVideoRecoveryRequest()" in controller
+    assert "self->video_recovery_.reportLost(" in controller
+    assert "media_activity_.expired(" in controller
+    assert "pointer_.setVideoSize(" in controller
 
     print("steam link integration checks passed")
 

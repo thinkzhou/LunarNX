@@ -29,7 +29,9 @@ overrides = {ihs / "hid/device.c": ROOT / "src/steamlink/ihs_hid_device.c",
              ihs / "ihs_timer.c": ROOT / "src/steamlink/ihs_timer.c",
              ihs / "client/streaming.c": ROOT / "src/steamlink/ihs_streaming.c",
              ihs / "hid/manager.c": ROOT / "src/steamlink/ihs_hid_manager.c",
-             ihs / "session/session.c": ROOT / "src/steamlink/ihs_session.c"}
+             ihs / "session/session.c": ROOT / "src/steamlink/ihs_session.c",
+             ihs / "session/channels/ch_discovery.c": ROOT / "src/steamlink/ihs_discovery.c",
+             ihs / "session/channels/ch_control_negotiation.c": ROOT / "tests/steam_negotiation_capture.c"}
 sources = [overrides.get(source, source) for source in sources]
 sources += [ihs / "platforms/ihs_ip_posix.c", ihs / "platforms/ihs_udp_posix.c", ihs / "crypto/impl_mbedtls.c",
             ROOT / "vendor/protobuf-c/protobuf-c/protobuf-c.c", ROOT / "tools/steamlink_probe/posix_thread.c"]

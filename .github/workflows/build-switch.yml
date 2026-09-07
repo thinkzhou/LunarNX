@@ -52,6 +52,7 @@ jobs:
           python3 tests/steam_pointer_test.py
           python3 tests/steam_settings_file_test.py
           python3 tests/steam_ui_contract_test.py
+          python3 tests/steam_link_integration_test.py
 
       - name: Run Xbox input state-machine tests
         run: |

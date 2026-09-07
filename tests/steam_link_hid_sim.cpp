@@ -4,6 +4,7 @@
 extern "C" {
 #include "ihslib/session.h"
 #include "session/session_pri.h"
+#include "session/channels/ch_control.h"
 #include "hid/manager.h"
 #include "hid/device.h"
 #include "hid/report.h"
@@ -21,6 +22,52 @@ extern "C" {
 #include <thread>
 #include <chrono>
 using namespace lunar::steamlink;
+
+static bool negotiated = false, expected_hid = false;
+extern "C" bool CaptureNegotiationSend(IHS_SessionChannel*, EStreamControlMessage type,
+                                      const ProtobufCMessage* message, int32_t) {
+    assert(type == k_EStreamControlNegotiationSetConfig);
+    std::vector<uint8_t> bytes(protobuf_c_message_get_packed_size(message));
+    protobuf_c_message_pack(message, bytes.data());
+    auto* reply = cnegotiation_set_config_msg__unpack(nullptr, bytes.size(), bytes.data());
+    assert(reply && reply->config && reply->streaming_client_config);
+    assert(reply->config->has_enable_remote_hid);
+    assert(bool(reply->config->enable_remote_hid) == expected_hid);
+    assert(reply->config->selected_video_codec == k_EStreamVideoCodecH264);
+    assert(reply->config->selected_audio_codec == k_EStreamAudioCodecOpus);
+    assert(reply->config->n_available_video_modes == 1);
+    assert(reply->config->available_video_modes[0]->width == 1280);
+    assert(reply->config->available_video_modes[0]->height == 720);
+    assert(reply->streaming_client_config->maximum_resolution_x == 1280);
+    assert(reply->streaming_client_config->maximum_resolution_y == 720);
+    cnegotiation_set_config_msg__free_unpacked(reply, nullptr);
+    negotiated = true;
+    return true;
+}
+
+static void testNegotiation(IHS_Session* session, bool has_provider) {
+    for (bool host_hid : {false, true}) {
+        expected_hid = has_provider && host_hid; negotiated = false;
+        session->state.connectionState = IHS_SessionConnectionStateNegotiating;
+        CNegotiationInitMsg init = CNEGOTIATION_INIT_MSG__INIT;
+        EStreamAudioCodec audio = k_EStreamAudioCodecOpus;
+        EStreamVideoCodec video = k_EStreamVideoCodecH264;
+        init.n_supported_audio_codecs = 1; init.supported_audio_codecs = &audio;
+        init.n_supported_video_codecs = 1; init.supported_video_codecs = &video;
+        init.has_supports_remote_hid = true; init.supports_remote_hid = host_hid;
+        std::vector<uint8_t> bytes(protobuf_c_message_get_packed_size(&init.base));
+        protobuf_c_message_pack(&init.base, bytes.data());
+        IHS_Buffer buffer{};
+        IHS_BufferInit(&buffer, bytes.size(), bytes.size());
+        IHS_BufferWriteMem(&buffer, 0, bytes.data(), bytes.size());
+        IHS_SessionPacketHeader header{};
+        IHS_SessionChannelControlOnNegotiation(
+            IHS_SessionChannelFor(session, IHS_SessionChannelIdControl),
+            k_EStreamControlNegotiationInit, &buffer, &header);
+        assert(negotiated);
+        IHS_BufferClear(&buffer, true);
+    }
+}
 
 static void testSessionShutdown(const IHS_ClientConfig& config, const IHS_SessionInfo& info) {
     // Reserve an ephemeral loopback peer, never the local Steam installation.
@@ -48,6 +95,13 @@ static void testSessionShutdown(const IHS_ClientConfig& config, const IHS_Sessio
         auto disconnect = [&](IHS_Session* value) {
             context.gate.request([&] { ++requests; IHS_SessionDisconnect(value); });
         };
+        // Protocol errors can initiate disconnect before the owner's gate sees
+        // a callback. Exercise that real path, not just duplicate owner calls.
+        auto* control = IHS_SessionChannelFor(session, IHS_SessionChannelIdControl);
+        IHS_SessionPacket unexpected{};
+        unexpected.header.type = IHS_SessionPacketTypeUnreliable;
+        control->cls->received(control, &unexpected);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
         // The owner initiates exactly once even when cleanup is requested again.
         disconnect(session);
         disconnect(session);
@@ -184,9 +238,11 @@ int main() {
     info.address.port = 27031; info.sessionKeyLen = 16;
     testSessionShutdown(config, info);
     auto* session = IHS_SessionCreate(&config, &info);
+    testNegotiation(session, false);
     auto shared = std::make_shared<SteamPadState>();
     auto* provider = createSteamPadProvider(shared);
     IHS_SessionHIDAddProvider(session, provider);
+    testNegotiation(session, true);
     auto* enumeration = provider->cls->enumerateDevices(provider);
     assert(IHS_EnumerationCount(enumeration) == 1);
     IHS_HIDDeviceInfo device_info{};
