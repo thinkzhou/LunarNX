@@ -16,6 +16,8 @@ def main() -> None:
     client = read("src/steamlink/steam_link_client.cpp")
     activity = read("src/ui/steam_link_activity.cpp")
     platform = read("src/ui/platform_activity.cpp")
+    desktop_probe = read("tools/steamlink_probe/desktop_stream_probe.c")
+    desktop_build = read("tools/steamlink_probe/build_desktop_stream_probe.sh")
 
     assert "STEAMLINK ?= 1" in makefile
     assert "vendor/ihslib/src/client/discovery.c" in makefile
@@ -27,6 +29,12 @@ def main() -> None:
     assert "UDP" not in activity  # UI does not own the protocol transport.
     assert "new SteamLinkActivity()" in platform
     assert "steamlink_device.json" in read(".gitignore")
+    assert "IHS_ClientStreamingRequest" in desktop_probe
+    assert "IHS_SessionConnect" in desktop_probe
+    assert "video start codec" in desktop_probe
+    assert "audio start codec" in desktop_probe
+    assert "--pin SECURITY_PIN" in desktop_probe
+    assert "session/channels/video/ch_data_video.c" in desktop_build
 
     print("steam link integration checks passed")
 
