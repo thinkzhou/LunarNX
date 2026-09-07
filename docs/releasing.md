@@ -15,12 +15,12 @@ current stable version.
    `LunarNX.zip`, and `SHA256SUMS`. The release tag, not the asset filename,
    identifies the version.
 
-The ZIP is the preferred distribution because it contains a versioned top-level
-`LunarNX-<version>/` directory with `LunarNX-<version>/LunarNX.nro`, LunarNX's
-license, the third-party notices, and the AGPL-3.0 license required by the
-combined Xbox/PlayStation binary. The NRO filename and release asset filename
-remain stable; the versioned directory is required by the Sphaira/ForTheUsers
-package metadata used by the store.
+The ZIP is the preferred distribution because it contains the fixed compatibility
+directory `LunarNX-0.3.0/` with `LunarNX-0.3.0/LunarNX.nro`, LunarNX's license,
+the third-party notices, and the AGPL-3.0 license required by the combined
+Xbox/PlayStation binary. The NRO filename and release asset filename remain
+stable; the directory name intentionally stays fixed because the Sphaira/
+ForTheUsers package metadata currently matches that exact path.
 
 The About page uses two coordinated version mechanisms. The version shown
 beside the project identity is compiled from `version.txt` by `Makefile.switch`
@@ -34,9 +34,9 @@ not require a C++ edit. Add translations later when they are available.
 
 For the Sphaira/ForTheUsers package, keep the installed binary path stable at
 `/switch/LunarNX/LunarNX.nro`. Use the release ZIP as the single package asset
-and map `/LunarNX-*/**/*` into `/switch/LunarNX`; the store strips the
-versioned release directory while installing. Including both the standalone
-NRO and ZIP assets packages duplicate payloads.
+and map `/LunarNX-0.3.0/**/*` into `/switch/LunarNX`; the store strips the
+compatibility directory while installing. Including both the standalone NRO
+and ZIP assets packages duplicate payloads.
 
 Release Please chooses the version from Conventional Commit prefixes:
 
