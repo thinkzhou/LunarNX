@@ -45,6 +45,28 @@ SteamLinkStreamController::~SteamLinkStreamController() {
     stopStream(false);
 }
 
+void SteamLinkStreamController::configurePointer(TouchMode touch, GyroMode gyro) {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    if (cancellation_.requested()) return;
+    pointer_ = SteamPointer{};
+    pointer_.touch_mode = touch;
+    pointer_.gyro_mode = gyro;
+    pointer_.fenceTouches();
+    if (sensors_) {
+        sensors_.reset();
+        sensors_ = std::make_unique<SteamSensors>(gyro != GyroMode::Off);
+    }
+    lunar::diagnosticLog("steam-pointer", "settings applied touch=%d gyro=%d", int(touch), int(gyro));
+}
+std::pair<TouchMode, GyroMode> SteamLinkStreamController::pointerModes() const {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    return {pointer_.touch_mode, pointer_.gyro_mode};
+}
+void SteamLinkStreamController::reloadInputMapping() {
+    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    if (gamepad_) gamepad_->reloadButtonMapping();
+}
+
 std::string SteamLinkStreamController::lastError() const {
     std::lock_guard<std::mutex> lock(error_mutex_);
     return last_error_;
@@ -329,7 +351,7 @@ void SteamLinkStreamController::update() {
     if (!session_ || !session_connected_.load() || state_.load() == app::StreamState::Error ||
         state_.load() == app::StreamState::Disconnected) return;
     if (!gamepad_) {
-        gamepad_ = std::make_unique<input::GamepadReader>(input::ButtonMappingProfile::Xbox);
+        gamepad_ = std::make_unique<input::GamepadReader>(input::ButtonMappingProfile::Steam);
         if (!gamepad_->initialize()) {
             lunar::persistentEventLog("steam-input", "gamepad initialize failed");
             gamepad_.reset();

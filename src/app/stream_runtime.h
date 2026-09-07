@@ -27,6 +27,7 @@ enum class StreamState {
 enum class StreamPlatform {
     Xbox,
     PlayStation,
+    Steam,
 };
 
 enum class TouchpadFeedbackGesture : uint8_t {

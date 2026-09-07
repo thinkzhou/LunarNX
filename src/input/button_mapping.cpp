@@ -68,6 +68,7 @@ bool writeConfig(cJSON* root) {
 } // namespace
 
 const char* mappingConfigKey(ButtonMappingProfile profile) {
+    if (profile == ButtonMappingProfile::Steam) return "steam_button_mapping";
     return profile == ButtonMappingProfile::PlayStation
         ? "ps_button_mapping"
         : "xbox_button_mapping";

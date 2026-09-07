@@ -38,10 +38,9 @@ public:
     SteamLinkStreamController& operator=(const SteamLinkStreamController&) = delete;
 
     bool startStream();
-    // Configure before starting the worker; not mutated during a session.
-    void configurePointer(TouchMode touch, GyroMode gyro) {
-        pointer_.touch_mode = touch; pointer_.gyro_mode = gyro;
-    }
+    void configurePointer(TouchMode touch, GyroMode gyro);
+    std::pair<TouchMode, GyroMode> pointerModes() const;
+    void reloadInputMapping();
     std::string lastError() const;
 
     void requestStop() override;
@@ -53,9 +52,7 @@ public:
     stream::VideoBackend getDefaultVideoBackend() const override { return video_backend_; }
     stream::VideoCodec getVideoCodec() const override { return stream::VideoCodec::H264; }
     app::StreamPlatform getStreamPlatform() const override {
-        // Keep the existing Steam View UI/input mapping until a dedicated
-        // Steam button-label profile is added. The wire protocol is not Xbox.
-        return app::StreamPlatform::Xbox;
+        return app::StreamPlatform::Steam;
     }
     input::StreamInputRouter& inputRouter() override { return input_router_; }
     void requestPlatformHomeButton() override { guide_requested_ = true; }
