@@ -20,7 +20,7 @@ set -- \
   "$ihs_src/ihs_queue.c" "$ihs_src/ihs_arraylist.c" "$ihs_src/ihs_enumeration.c" \
   "$ihs_src/ihs_enumeration_ll.c" "$ihs_src/ihs_enumeration_array.c" \
   "$ihs_src/client/client.c" "$ihs_src/client/discovery.c" \
-  "$ihs_src/client/authorization.c" "$ihs_src/client/streaming.c" \
+  "$root_dir/src/steamlink/ihs_authorization.c" "$root_dir/src/steamlink/ihs_streaming.c" \
   "$root_dir/src/steamlink/ihs_session.c" "$ihs_src/session/packet.c" "$ihs_src/session/frame.c" \
   "$ihs_src/session/window.c" "$ihs_src/session/frame_crypto.c" \
   "$ihs_src/session/frame_stats.c" "$ihs_src/session/callbacks.c" \

@@ -13,6 +13,8 @@ extern "C" {
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <thread>
+#include <condition_variable>
 
 namespace lunar::steamlink {
 
@@ -53,6 +55,7 @@ public:
 
     bool startDiscovery(HostCallback callback);
     void stopDiscovery();
+    bool discoverAddress(const std::string& address);
     bool authorize(const SteamLinkHost& host, const std::string& pin,
                    AuthorizationCallback callback);
     bool requestStreaming(const SteamLinkHost& host, const std::string& pin,
@@ -93,12 +96,19 @@ private:
     bool discovery_started_ = false; // Discovery lifecycle is owned by the UI thread.
     mutable std::mutex mutex_;
     std::mutex streaming_operation_mutex_;
+    std::mutex authorization_operation_mutex_;
+    std::mutex host_publish_mutex_;
+    std::mutex discovery_wait_mutex_;
+    std::condition_variable discovery_wait_;
+    std::thread discovery_worker_;
+    bool discovery_stop_ = false;
+    std::string manual_address_;
+    std::unordered_map<uint64_t, uint64_t> last_seen_ms_;
     std::unordered_map<uint64_t, IHS_HostInfo> host_infos_;
     std::vector<SteamLinkHost> hosts_;
     HostCallback host_callback_;
     AuthorizationCallback authorization_callback_;
     StreamingCallback streaming_callback_;
-    uint64_t authorized_client_id_ = 0;
     std::unordered_map<uint64_t, uint64_t> authorized_steam_ids_;
     std::string last_error_;
 };

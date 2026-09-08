@@ -563,6 +563,16 @@
   "steam_desc": "Steam Remote Play on your local network"
  },
   "steam_ui": {
+        "audio_missing": "No Steam audio received. Check host audio capture; reconnect if sound is missing.",
+        "audio_decode": "Steam audio is not decoding. Reconnect to retry audio.",
+        "audio_output": "Steam audio output is failing. Reconnect to retry audio.",
+        "audio_format": "Steam sent an unsupported audio format. Check host stereo audio settings and reconnect.",
+        "retry_pair": "Pair again",
+        "manual_address": "Host IPv4 address",
+        "manual_search": "Searching this address. If no host appears, check Steam Remote Play and the host firewall.",
+        "manual_help": "Enter the computer’s LAN IPv4 address. Steam Remote Play must be enabled.",
+        "search_help": "No response yet. Check Remote Play, network and firewall, or enter the host IP.",
+        "select_host": "Select a computer",
     "discard": "Discard and return",
    "settings_title": "Steam streaming settings",
    "input_title": "Steam input",

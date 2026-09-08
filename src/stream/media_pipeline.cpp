@@ -86,6 +86,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
         const uint32_t generation = generation_.fetch_add(1) + 1;
         video_ready_notified_ = false;
         successful_video_presents_ = 0;
+        successful_audio_outputs_ = 0;
         audio_latency_mode_.store(options.audio_latency_mode,
                                   std::memory_order_release);
         audio_start_gate_open_.store(
@@ -1604,6 +1605,7 @@ void MediaPipeline::handleAudioFrame(const AudioFrame& frame,
         std::memory_order_release);
     if (!audio_player_ || !av_sync_) return;
     if (!audio_player_->play(frame)) return;
+    successful_audio_outputs_.fetch_add(1);
 
     const uint64_t playback_timestamp = estimateAudioPlaybackTimestamp(
         frame.timestamp,
@@ -1620,6 +1622,7 @@ bool MediaPipeline::submitDecodedAudio(const AudioFrame& frame,
         source_epoch != audio_source_epoch_.load(std::memory_order_acquire) ||
         !audio_player_ || !av_sync_) return false;
     if (!audio_player_->play(frame)) return false;
+    successful_audio_outputs_.fetch_add(1);
     if (auto* perf = perfStats()) perf->recordAudioFrame();
     const uint64_t playback_ts = estimateAudioPlaybackTimestamp(
         frame.timestamp, frame.sample_count, frame.sample_rate,

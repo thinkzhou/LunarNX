@@ -12,6 +12,35 @@
 
 namespace lunar::steamlink {
 
+// Warnings only: a silent host must not terminate otherwise playable video.
+class AudioProgressMonitor {
+public:
+    enum class Status { Healthy, Missing, Decode, Output, Unsupported };
+    void reset() { initialized_ = false; }
+    Status observe(uint64_t now, uint64_t received, uint64_t decoded,
+                   uint64_t output, bool unsupported, bool suspended) {
+        if (!initialized_ || suspended) {
+            initialized_ = true;
+            received_ = received; decoded_ = decoded; output_ = output;
+            receive_at_ = decode_at_ = output_at_ = now;
+            return Status::Healthy;
+        }
+        if (received_ != received) { received_ = received; receive_at_ = now; }
+        if (decoded_ != decoded) { decoded_ = decoded; decode_at_ = now; }
+        if (output_ != output) { output_ = output; output_at_ = now; }
+        if (unsupported) return Status::Unsupported;
+        auto expired = [now](uint64_t since) { return now >= since && now - since >= 20000000000ULL; };
+        if (expired(receive_at_)) return Status::Missing;
+        if (expired(decode_at_)) return Status::Decode;
+        if (expired(output_at_)) return Status::Output;
+        return Status::Healthy;
+    }
+private:
+    bool initialized_ = false;
+    uint64_t received_ = 0, decoded_ = 0, output_ = 0;
+    uint64_t receive_at_ = 0, decode_at_ = 0, output_at_ = 0;
+};
+
 // Input-pump owned; audio traffic cannot reset any of these deadlines.
 class VideoProgressWatchdog {
 public:
