@@ -4,6 +4,10 @@
 #include "stream_overlay.h"
 #include "perf_overlay.h"
 #include "ps_settings_activity.h"
+#if LUNARNX_STEAMLINK
+#include "steam_settings_activity.h"
+#include "../steamlink/steam_link_stream_controller.h"
+#endif
 #include "stream_settings_activity.h"
 #include "ui_style.h"
 #include "../diagnostics.h"
@@ -126,6 +130,58 @@ private:
     std::shared_ptr<app::IStreamRuntime> runtime_;
     std::shared_ptr<std::atomic<bool>> terminal_stop_;
 };
+
+#if LUNARNX_STEAMLINK
+class SteamCursorView : public brls::View {
+public:
+    explicit SteamCursorView(std::shared_ptr<steamlink::SteamLinkStreamController> runtime)
+        : runtime_(std::move(runtime)) {}
+    ~SteamCursorView() override {
+        if (image_ > 0) nvgDeleteImage(brls::Application::getNVGContext(), image_);
+    }
+    void draw(NVGcontext* vg, float x, float y, float width, float height,
+              brls::Style, brls::FrameContext*) override {
+        if (runtime_->getState() != app::StreamState::Streaming ||
+            !runtime_->inputRouter().gameHasInput()) return;
+        const auto cursor = runtime_->cursorSnapshot();
+        if (!cursor.visible) return;
+        if (pixels_ != cursor.image) {
+            if (image_ > 0) nvgDeleteImage(vg, image_);
+            image_ = 0;
+            pixels_ = cursor.image;
+            if (pixels_) image_ = nvgCreateImageRGBA(vg, pixels_->width, pixels_->height,
+                                                    0, pixels_->rgba.data());
+        }
+        const float fit = std::min(width / cursor.video_width, height / cursor.video_height);
+        const float vw = cursor.video_width * fit, vh = cursor.video_height * fit;
+        const float vx = x + (width-vw)*0.5f, vy = y + (height-vh)*0.5f;
+        const float px = vx + cursor.x*vw, py = vy + cursor.y*vh;
+        nvgSave(vg);
+        nvgIntersectScissor(vg, vx, vy, vw, vh);
+        nvgBeginPath(vg);
+        if (pixels_ && image_ > 0) {
+            const float sx = vw / cursor.capture_width, sy = vh / cursor.capture_height;
+            const float ix = px-pixels_->hot_x*sx, iy = py-pixels_->hot_y*sy;
+            const float iw = pixels_->width*sx, ih = pixels_->height*sy;
+            nvgRect(vg, ix, iy, iw, ih);
+            nvgFillPaint(vg, nvgImagePattern(vg, ix, iy, iw, ih, 0, image_, 1));
+            nvgFill(vg);
+        } else {
+            // Visible fallback while fetching an unknown/rejected host image.
+            nvgMoveTo(vg, px, py); nvgLineTo(vg, px+5, py+20);
+            nvgLineTo(vg, px+9, py+12); nvgLineTo(vg, px+17, py+10);
+            nvgClosePath(vg);
+            nvgFillColor(vg, nvgRGBA(255,255,255,255)); nvgFill(vg);
+            nvgStrokeColor(vg, nvgRGBA(0,0,0,255)); nvgStrokeWidth(vg, 1.5f); nvgStroke(vg);
+        }
+        nvgRestore(vg);
+    }
+private:
+    std::shared_ptr<steamlink::SteamLinkStreamController> runtime_;
+    std::shared_ptr<const steamlink::CursorImage> pixels_;
+    int image_ = 0;
+};
+#endif
 
 class TouchpadFeedbackView : public brls::View {
 public:
@@ -270,6 +326,7 @@ void StreamView::handleWindowFocusChanged(bool focused) {
     lunar::diagnosticLog("stream-view", "window focus changed focused=%s",
                          focused ? "true" : "false");
     if (!focused) {
+        runtime_->setVideoPresentationSuspended(true);
         backgrounded_ = true;
         updateInputOwnership();
         return;
@@ -277,8 +334,10 @@ void StreamView::handleWindowFocusChanged(bool focused) {
 
     if (!backgrounded_.load()) return;
     if (terminal_stop_->load() || stop_started_.load()) return;
-    if (foreground_recovery_running_.exchange(true)) return;
+    const bool recovery_pending = foreground_recovery_running_.exchange(true);
     backgrounded_ = false;
+    updateInputOwnership();
+    if (recovery_pending) return;
 
     auto runtime = runtime_;
     auto alive = alive_;
@@ -297,8 +356,9 @@ void StreamView::handleWindowFocusChanged(bool focused) {
                 if (!alive->load() || cancelled()) return;
                 foreground_recovery_running_ = false;
                 if (recovered) {
+                    runtime->setVideoPresentationSuspended(backgrounded_.load() || child_activity_visible_);
                     updateInputOwnership();
-                    brls::Application::notify(
+                    if (!backgrounded_.load()) brls::Application::notify(
                         brls::getStr("lunarnx/stream/resumed"));
                     return;
                 }
@@ -347,6 +407,10 @@ brls::View* StreamView::createContentView() {
     // Minus + Plus: stop with double-press confirmation. Keep single Minus as Xbox View.
     auto stop_handler = [this](brls::View*) -> bool {
         if (!isExitComboPressed()) return false;
+        if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+            setQuickMenuVisible(true); // Idempotent if both button events arrive together.
+            return true;
+        }
         auto now = std::chrono::steady_clock::now();
         const bool confirmed = exit_pending_.load() &&
             std::chrono::duration_cast<std::chrono::seconds>(
@@ -362,9 +426,11 @@ brls::View* StreamView::createContentView() {
         if (confirm_box_) confirm_box_->setVisibility(brls::Visibility::VISIBLE);
         return true;
     };
-    root->registerAction(brls::getStr("lunarnx/stream/stop_action_plus"),
+    root->registerAction(brls::getStr(runtime_->getStreamPlatform() == app::StreamPlatform::Steam
+        ? "lunarnx/stream/menu_open" : "lunarnx/stream/stop_action_plus"),
         brls::ControllerButton::BUTTON_START, stop_handler);
-    root->registerAction(brls::getStr("lunarnx/stream/stop_action_minus"),
+    root->registerAction(brls::getStr(runtime_->getStreamPlatform() == app::StreamPlatform::Steam
+        ? "lunarnx/stream/menu_open" : "lunarnx/stream/stop_action_minus"),
         brls::ControllerButton::BUTTON_BACK, stop_handler);
 
     if (stream::usesZeroCopyRender(runtime_->getDefaultVideoBackend())) {
@@ -380,6 +446,35 @@ brls::View* StreamView::createContentView() {
         software_video->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
         software_video->setDetachedPosition(0, 0);
         root->addView(software_video);
+    }
+
+#if LUNARNX_STEAMLINK
+    if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+        auto* cursor = new SteamCursorView(
+            std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_));
+        cursor->detach();
+        cursor->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
+        cursor->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
+        cursor->setDetachedPosition(0, 0);
+        root->addView(cursor);
+    }
+#endif
+
+    if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+        connecting_overlay_ = new brls::Box(brls::Axis::COLUMN);
+        connecting_overlay_->detach();
+        connecting_overlay_->setWidth(640);
+        connecting_overlay_->setHeight(120);
+        connecting_overlay_->setDetachedPosition(320, 270);
+        connecting_overlay_->setPadding(20);
+        connecting_overlay_->setBackgroundColor(p.card);
+        auto* message = makeMutedLabel(brls::getStr("lunarnx/steam_ui/waiting_video"), 20);
+        message->setSingleLine(false);
+        message->setIsWrapping(true);
+        message->setHeight(80);
+        connecting_overlay_->addView(message);
+        root->addView(connecting_overlay_);
+        updateConnectionStatus();
     }
 
     // Top status bar
@@ -429,7 +524,8 @@ brls::View* StreamView::createContentView() {
     quick_menu_->addView(menu_title);
 
     auto* menu_hint = new brls::Label();
-    menu_hint->setText(brls::getStr("lunarnx/stream/menu_hint"));
+    menu_hint->setText(brls::getStr(runtime_->getStreamPlatform() == app::StreamPlatform::Steam
+        ? "lunarnx/steam_ui/menu_hint" : "lunarnx/stream/menu_hint"));
     menu_hint->setFontSize(13);
     menu_hint->setTextColor(p.text_muted);
     menu_hint->setHeight(58);
@@ -462,7 +558,18 @@ brls::View* StreamView::createContentView() {
             brls::Application::pushActivity(
                 new PsSettingsActivity(loadPsSettings()),
                 brls::TransitionAnimation::NONE);
-        } else {
+        }
+#if LUNARNX_STEAMLINK
+        else if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+            auto steam = std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_);
+            const auto modes = steam->pointerModes();
+            brls::Application::pushActivity(new SteamSettingsActivity({modes.first, modes.second},
+                [steam](const SteamInputSettings& settings) {
+                    steam->configurePointer(settings.touch, settings.gyro);
+                }), brls::TransitionAnimation::NONE);
+        }
+#endif
+        else {
             brls::Application::pushActivity(
                 new StreamSettingsActivity(nullptr, loadStreamSettings(), {},
                     StreamSettingsScope::Xbox),
@@ -485,7 +592,9 @@ brls::View* StreamView::createContentView() {
         brls::Application::pushActivity(new ButtonMappingActivity(
             runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation
                 ? input::ButtonMappingProfile::PlayStation
-                : input::ButtonMappingProfile::Xbox),
+                : runtime_->getStreamPlatform() == app::StreamPlatform::Steam
+                    ? input::ButtonMappingProfile::Steam
+                    : input::ButtonMappingProfile::Xbox),
             brls::TransitionAnimation::NONE);
         return true;
     });
@@ -499,7 +608,9 @@ brls::View* StreamView::createContentView() {
     platform_button->setText(brls::getStr(
         runtime_->getStreamPlatform() == app::StreamPlatform::PlayStation
             ? "lunarnx/stream/menu_ps_button"
-            : "lunarnx/stream/menu_xbox_button"));
+            : runtime_->getStreamPlatform() == app::StreamPlatform::Steam
+                ? "lunarnx/steam_ui/menu_button"
+                : "lunarnx/stream/menu_xbox_button"));
     platform_button->registerClickAction([this](brls::View*) -> bool {
         setQuickMenuVisible(false);
         runtime_->requestPlatformHomeButton();
@@ -669,6 +780,15 @@ void StreamView::stopAndReturn() {
     auto runtime = runtime_;
     auto alive = alive_;
     const auto state = runtime_->getState();
+#if LUNARNX_STEAMLINK
+    if (state == app::StreamState::Error && runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+        const auto reason = std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_)->lastError();
+        if (!reason.empty()) brls::Application::notify(reason);
+    } else if (state == app::StreamState::Disconnected &&
+               runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+        brls::Application::notify(brls::getStr("lunarnx/steam_ui/disconnected"));
+    }
+#endif
     const bool report_disconnect =
         state != app::StreamState::Disconnected && state != app::StreamState::Error;
     const bool started = lunar::platform::startNetworkWorker(
@@ -712,6 +832,7 @@ void StreamView::stopAndReturn() {
 void StreamView::setQuickMenuVisible(bool visible) {
     if (!quick_menu_ || quick_menu_visible_ == visible) return;
     quick_menu_visible_ = visible;
+    updateConnectionStatus();
     quick_menu_->setVisibility(
         visible ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
     updateInputOwnership();
@@ -744,6 +865,10 @@ void StreamView::onPause() {
 }
 
 void StreamView::onResume() {
+#if LUNARNX_STEAMLINK
+    if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam)
+        std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_)->reloadInputMapping();
+#endif
     child_activity_visible_ = false;
     runtime_->setVideoPresentationSuspended(false);
     updateInputOwnership();
@@ -755,6 +880,14 @@ void StreamView::onResume() {
         return;
     }
     if (content_root_) brls::Application::giveFocus(content_root_);
+}
+
+void StreamView::updateConnectionStatus() {
+    if (!connecting_overlay_) return;
+    const bool waiting = runtime_->getState() == app::StreamState::Connecting ||
+        foreground_recovery_running_.load();
+    connecting_overlay_->setVisibility(waiting && !quick_menu_visible_ && !child_activity_visible_
+        ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
 }
 
 void StreamView::updatePerformanceVisibility() {
@@ -799,6 +932,25 @@ void StreamView::runLoop() {
         std::this_thread::sleep_for(milliseconds(500));
         const auto now = steady_clock::now();
 
+#if LUNARNX_STEAMLINK
+        if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+            auto alive = alive_;
+            brls::sync([this, alive]() {
+                if (!alive->load() || backgrounded_.load() || child_activity_visible_) return;
+                const auto warning = std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_)->consumeAudioWarning();
+                using AudioStatus = steamlink::AudioProgressMonitor::Status;
+                const char* key = nullptr;
+                switch (warning) {
+                    case AudioStatus::Missing: key = "lunarnx/steam_ui/audio_missing"; break;
+                    case AudioStatus::Decode: key = "lunarnx/steam_ui/audio_decode"; break;
+                    case AudioStatus::Output: key = "lunarnx/steam_ui/audio_output"; break;
+                    case AudioStatus::Unsupported: key = "lunarnx/steam_ui/audio_format"; break;
+                    default: break;
+                }
+                if (key) brls::Application::notify(brls::getStr(key));
+            });
+        }
+#endif
         auto& p = runtime_->getPerfStats();
         uint32_t frames = p.video_frames.load();
         float sec = duration<float>(now - last_stats).count();
@@ -851,6 +1003,7 @@ void StreamView::runLoop() {
         auto alive = alive_;
         brls::sync([alive, this, fps, res, video_backend, video_codec]() {
             if (!alive->load()) return;
+            updateConnectionStatus();
             if (overlay_) overlay_->update(fps, res, video_codec);
             if (perf_overlay_) {
                 perf_overlay_->update(fps, res, video_backend, video_codec);

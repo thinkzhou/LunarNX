@@ -17,6 +17,9 @@ private:
     std::chrono::steady_clock::time_point exit_navigation_ready_at_{};
     void openXbox();
     void openPlayStation();
+#if LUNARNX_STEAMLINK
+    void openSteamLink();
+#endif
 };
 
 } // namespace lunar::ui

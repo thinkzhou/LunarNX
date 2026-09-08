@@ -13,6 +13,10 @@ libpeer_nested_patch_dir="$libpeer_patch_dir/nested"
 borealis_commit="240223f372731949e04cba943c453dc45b69faa1"
 libpeer_commit="9319aa434cb9e893faed0293ba9d2a21eca59c8b"
 
+# actions/checkout does not initialize root submodules by default. Keep this
+# in the shared setup path so local clean checkouts and CI behave identically.
+bash "$project_root/scripts/setup_steamlink_dependencies.sh"
+
 clone_at_commit() {
     local url="$1"
     local destination="$2"

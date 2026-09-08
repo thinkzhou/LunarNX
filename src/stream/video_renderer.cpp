@@ -22,6 +22,8 @@
 namespace lunar::stream {
 namespace {
 
+std::atomic<bool> renderer_restart_required{false};
+
 uint64_t rendererMonotonicNowNs() {
   return static_cast<uint64_t>(std::chrono::duration_cast<
       std::chrono::nanoseconds>(
@@ -29,6 +31,8 @@ uint64_t rendererMonotonicNowNs() {
 }
 
 }
+
+bool VideoRenderer::restartRequired() { return renderer_restart_required.load(); }
 }
 
 #ifdef __SWITCH__
@@ -1536,6 +1540,7 @@ void VideoRenderer::setVideoBackend(VideoBackend backend){
 }
 
 bool VideoRenderer::initialize(const char*,int w,int h){
+  if (restartRequired()) return false;
   setRenderStage(VideoRenderStage::Idle);
   pending_render_fault_.store(static_cast<uint8_t>(RenderFault::None),
                               std::memory_order_release);
@@ -2195,7 +2200,8 @@ void VideoRenderer::shutdown(){
     // A timed-out command fence means the queue may never become idle.  Do not
     // block the cleanup worker and do not destroy resources still referenced
     // by the GPU.  Losing this one context is preferable to hanging or causing
-    // a use-after-free; a later stream creates a fresh renderer context.
+    // a use-after-free. Further initialization requires an application restart.
+    renderer_restart_required.store(true);
     lunar::persistentEventLog(
         "video-render",
         "shutdown phase=gpu-quarantine action=retain-unsafe-context "
