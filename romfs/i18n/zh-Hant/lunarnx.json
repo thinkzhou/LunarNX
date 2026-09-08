@@ -563,6 +563,16 @@
   "steam_desc": "區域網路 Steam Remote Play"
  },
   "steam_ui": {
+        "audio_missing": "未收到 Steam 音訊。若遊戲無聲，請檢查電腦音訊擷取並重新連線。",
+        "audio_decode": "Steam 音訊解碼未恢復。請重新連線以重試音訊。",
+        "audio_output": "Steam 音訊輸出失敗。請重新連線以重試音訊。",
+        "audio_format": "不支援 Steam 音訊格式。請檢查電腦的立體聲音訊設定並重新連線。",
+        "retry_pair": "重新配對",
+        "manual_address": "主機 IPv4 位址",
+        "manual_search": "正在搜尋此位址。若找不到主機，請檢查 Steam 遠端暢玩及主機防火牆。",
+        "manual_help": "輸入電腦的區域網路 IPv4 位址，並啟用 Steam 遠端暢玩。",
+        "search_help": "尚未收到回覆。請檢查遠端暢玩、網路及防火牆，或輸入主機 IP。",
+        "select_host": "請選擇電腦",
     "discard": "不儲存並返回",
    "settings_title": "Steam 串流設定",
    "input_title": "Steam 輸入",

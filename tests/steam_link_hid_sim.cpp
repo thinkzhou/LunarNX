@@ -245,6 +245,74 @@ static void testStreamingCancellation(const IHS_ClientConfig& config) {
     std::cout << "PASS: 100 loopback request/cancel/retry cycles, stale IDs, concurrent callbacks drained\n";
 }
 
+extern "C" void ExpireSteamAuthorization(IHS_Client*);
+static void testAuthorization(const IHS_ClientConfig& config) {
+    IHS_Client client{};
+    IHS_BaseInit(&client.base, &config, nullptr, false);
+    client.base.socket = IHS_UDPSocketOpen(false);
+    client.timers = IHS_TimerCreate();
+    IHS_HostInfo host{};
+    host.clientId = 123;
+    host.universe = IHS_SteamUniversePublic;
+    host.address.ip.family = IHS_IPAddressFamilyIPv4;
+    host.address.ip.v4.data[0] = 127; host.address.ip.v4.data[3] = 1;
+    // Unbound loopback port, never send authorization to a user's Steam host.
+    host.address.port = 9;
+    struct Counts { std::atomic<unsigned> success{0}, timeout{0}; } counts;
+    IHS_ClientAuthorizationCallbacks callbacks{};
+    callbacks.success = [](IHS_Client*, const IHS_HostInfo*, uint64_t id, void* p) {
+        assert(id == 456); ++static_cast<Counts*>(p)->success;
+    };
+    callbacks.failed = [](IHS_Client*, const IHS_HostInfo*, IHS_AuthorizationResult result, void* p) {
+        assert(result == IHS_AuthorizationTimedOut); ++static_cast<Counts*>(p)->timeout;
+    };
+    IHS_ClientSetAuthorizationCallbacks(&client, &callbacks, &counts);
+    CMsgRemoteClientBroadcastHeader header = CMSG_REMOTE_CLIENT_BROADCAST_HEADER__INIT;
+    header.has_client_id = true; header.client_id = host.clientId;
+    header.msg_type = k_ERemoteDeviceAuthorizationResponse;
+    CMsgRemoteDeviceAuthorizationResponse response = CMSG_REMOTE_DEVICE_AUTHORIZATION_RESPONSE__INIT;
+    response.result = k_ERemoteDeviceAuthorizationSuccess;
+    response.has_steamid = true; response.steamid = 456;
+    for (int cycle = 0; cycle < 100; ++cycle) {
+        assert(IHS_ClientAuthorizationRequest(&client, &host, "1234"));
+        assert(!IHS_ClientAuthorizationRequest(&client, &host, "5678"));
+        const auto before = counts.success.load();
+        auto other = host.address; ++other.port;
+        IHS_ClientAuthorizationCallback(&client, &other, &header, &response.base);
+        ++header.client_id;
+        IHS_ClientAuthorizationCallback(&client, &host.address, &header, &response.base);
+        --header.client_id;
+        IHS_ClientAuthorizationCallback(&client, &host.address, &header, nullptr);
+        assert(counts.success == before);
+        std::thread incoming([&] {
+            for (int i=0; i<100; ++i)
+                IHS_ClientAuthorizationCallback(&client, &host.address, &header, &response.base);
+        });
+        IHS_ClientAuthorizationCancel(&client);
+        const auto drained = counts.success.load();
+        incoming.join();
+        assert(counts.success == drained && drained <= before + 1);
+        assert(!client.taskHandles.authorization);
+        assert(IHS_ClientAuthorizationRequest(&client, &host, "5678"));
+        IHS_ClientAuthorizationCallback(&client, &host.address, &header, &response.base);
+        assert(counts.success == drained + 1 && !client.taskHandles.authorization);
+    }
+    assert(IHS_ClientAuthorizationRequest(&client, &host, "1234"));
+    ExpireSteamAuthorization(&client);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!counts.timeout && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    assert(counts.timeout == 1);
+    IHS_ClientAuthorizationCancel(&client); // drains completion/cleanup
+    assert(!client.taskHandles.authorization);
+    assert(IHS_ClientAuthorizationRequest(&client, &host, "5678"));
+    IHS_ClientAuthorizationCancel(&client);
+    IHS_TimerDestroy(client.timers);
+    IHS_UDPSocketClose(client.base.socket);
+    IHS_BaseDestroy(&client.base);
+    std::cout << "PASS: authorization deadline/retry, wrong host and null replies, 100 cancel/success races drained\n";
+}
+
 int main() {
     lunar::input::GamepadState state;
     state.a = true; state.guide = true; state.menu = true;
@@ -277,6 +345,7 @@ int main() {
     uint8_t secret[32]{};
     IHS_ClientConfig config{};
     config.deviceId = 100; config.secretKey = secret; config.deviceName = "LunarNX HID simulation";
+    testAuthorization(config);
     testStreamingCancellation(config);
     IHS_SessionInfo info{};
     info.address.ip.family = IHS_IPAddressFamilyIPv4;

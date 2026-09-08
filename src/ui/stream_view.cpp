@@ -887,6 +887,25 @@ void StreamView::runLoop() {
         std::this_thread::sleep_for(milliseconds(500));
         const auto now = steady_clock::now();
 
+#if LUNARNX_STEAMLINK
+        if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+            auto alive = alive_;
+            brls::sync([this, alive]() {
+                if (!alive->load() || backgrounded_.load() || child_activity_visible_) return;
+                const auto warning = std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_)->consumeAudioWarning();
+                using AudioStatus = steamlink::AudioProgressMonitor::Status;
+                const char* key = nullptr;
+                switch (warning) {
+                    case AudioStatus::Missing: key = "lunarnx/steam_ui/audio_missing"; break;
+                    case AudioStatus::Decode: key = "lunarnx/steam_ui/audio_decode"; break;
+                    case AudioStatus::Output: key = "lunarnx/steam_ui/audio_output"; break;
+                    case AudioStatus::Unsupported: key = "lunarnx/steam_ui/audio_format"; break;
+                    default: break;
+                }
+                if (key) brls::Application::notify(brls::getStr(key));
+            });
+        }
+#endif
         auto& p = runtime_->getPerfStats();
         uint32_t frames = p.video_frames.load();
         float sec = duration<float>(now - last_stats).count();

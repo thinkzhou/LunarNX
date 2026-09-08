@@ -46,6 +46,8 @@ public:
 
     brls::View* createContentView() override;
     void onContentAvailable() override;
+    void onPause() override;
+    void onResume() override;
 
 private:
     std::shared_ptr<steamlink::SteamLinkClient> client_;
@@ -55,6 +57,14 @@ private:
     brls::Box* host_list_ = nullptr;
     brls::Button* refresh_button_ = nullptr;
 
+    struct HostRow {
+        brls::Button* button;
+        std::shared_ptr<steamlink::SteamLinkHost> host;
+    };
+    std::unordered_map<uint64_t, HostRow> host_rows_;
+    std::vector<steamlink::SteamLinkHost> latest_hosts_;
+    brls::Label* empty_label_ = nullptr;
+    bool paused_ = false;
     void startDiscovery();
     void rebuildHosts(const std::vector<steamlink::SteamLinkHost>& hosts);
 };

@@ -21,7 +21,7 @@ def main() -> None:
 
     assert "STEAMLINK ?= 1" in makefile
     assert "vendor/ihslib/src/client/discovery.c" in makefile
-    assert "vendor/ihslib/src/client/authorization.c" in makefile
+    assert "src/steamlink/ihs_authorization.c" in makefile
     assert "vendor/protobuf-c/protobuf-c/protobuf-c.c" in makefile
     assert "IHS_ClientStartDiscovery(client_, 2500)" in client
     assert "IHS_ClientAuthorizationRequest(client_, &protocol_host, pin.c_str())" in client

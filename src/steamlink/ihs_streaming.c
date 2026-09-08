@@ -49,3 +49,15 @@ void LunarIHSStreamingCancel(IHS_Client *client) {
         LunarIHSTimerRemoveLocked(client->taskHandles.streaming);
     LunarIHSTimerUnlock(client->timers);
 }
+
+
+bool LunarIHSDiscoverAddress(IHS_Client *client, const char *text) {
+    IHS_SocketAddress address = {0};
+    address.port = 27036;
+    if (!IHS_IPAddressFromString(&address.ip, text) || address.ip.family != IHS_IPAddressFamilyIPv4)
+        return false;
+    CMsgRemoteClientBroadcastDiscovery message = CMSG_REMOTE_CLIENT_BROADCAST_DISCOVERY__INIT;
+    message.has_seq_num = true;
+    message.seq_num = 0;
+    return IHS_ClientSend(client, address, k_ERemoteClientBroadcastMsgDiscovery, &message.base);
+}

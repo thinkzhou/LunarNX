@@ -118,6 +118,10 @@ bool SteamLinkStreamController::startStream() {
     logged_hid_open_ = false;
     media_activity_.reset(steadyNowNs());
     audio_samples_ = 0;
+    audio_progress_.reset();
+    audio_status_ = AudioProgressMonitor::Status::Healthy;
+    audio_warning_ = AudioProgressMonitor::Status::Healthy;
+    audio_unsupported_ = false;
     audio_sequence_ = 0;
     rumble_generation_ = 0;
     guide_until_ns_ = 0;
@@ -404,6 +408,18 @@ void SteamLinkStreamController::update() {
         if (!health_error && media_activity_.expired(health_now))
             health_error = "Steam media timed out (20s); check host/network and reconnect";
     }
+    if (state_.load() == app::StreamState::Streaming) {
+        const auto audio = audio_progress_.observe(health_now, audio_samples_.load(),
+            perf_.audio_frames.load(), media_ ? media_->successfulAudioOutputCount() : 0,
+            audio_unsupported_.load(), presentation_suspended_);
+        if (audio != audio_status_) {
+            audio_status_ = audio;
+            audio_warning_ = audio;
+            lunar::persistentEventLog("steam-audio", "health=%d rx=%u decoded=%u output=%llu",
+                int(audio), audio_samples_.load(), perf_.audio_frames.load(),
+                (unsigned long long)(media_ ? media_->successfulAudioOutputCount() : 0));
+        }
+    }
     if (!health_error && input_availability_.expired(health_now, hid_open))
         health_error = "Steam did not open the gamepad (20s); check Remote HID support and host input logs";
     // Keep essential phase/counter evidence in release builds, not per-frame logs.
@@ -565,8 +581,10 @@ int SteamLinkStreamController::onAudioStart(IHS_Session*, const IHS_StreamAudioC
     lunar::diagnosticLog("steam-audio", "start codec=%d rate=%u channels=%u codec_data=%zu",
                          static_cast<int>(config->codec), config->frequency,
                          config->channels, config->codecDataLen);
+    self->audio_unsupported_ = false;
     if (config->codec != IHS_StreamAudioCodecOpus || config->frequency != 48000 ||
         config->channels != 2) {
+        self->audio_unsupported_ = true;
         lunar::persistentEventLog("steam-audio", "unsupported format codec=%d rate=%u channels=%u",
                                   static_cast<int>(config->codec), config->frequency,
                                   config->channels);

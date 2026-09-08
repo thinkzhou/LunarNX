@@ -104,6 +104,67 @@ test substitutes for physical sensor calibration or a real Steam game session.
 
 ## Diagnostics and simulated verification
 
+### Pairing, discovery and audio recovery (2026-09-08)
+
+- Pairing now has a local two-minute deadline even when the host never replies.
+  The same page offers **Pair again** after failure, generates a new PIN, and
+  keeps the host-side PIN entry instructions visible during the wait.
+- `ihs_authorization.c` is a tracked adapter of the pinned client authorization
+  implementation. Requests, responses, timer cleanup and cancellation share the
+  timer lock; cancellation drains the old task before a retry. Responses must
+  match the host ID and source endpoint, and successful responses require a
+  nonzero Steam ID. The protocol has no per-attempt authorization request ID;
+  a delayed response from the same host across attempts cannot be distinguished
+  as reliably as the streaming protocol's request-ID replies.
+- A streaming Unauthorized response invalidates only that host's in-memory
+  authorization. The failed-start button then offers pairing again. A wrong
+  host security PIN does not discard pairing. Multiple hosts retain independent
+  authorization within this client instance. Cross-launch authorization
+  restoration remains unimplemented.
+- Discovery updates existing buttons by host ID instead of clearing the list.
+  Updates that delete rows wait until the host page resumes and Borealis has
+  restored its focus stack. An expired selected row transfers focus to Refresh.
+  Hosts expire after 15 seconds without a status reply; reappearing hosts update
+  their endpoint without losing their in-memory authorization.
+- The host page accepts a manual IPv4 address and periodically sends unicast
+  discovery to port 27036. A real status response is still required before
+  pairing; this helps where broadcasts fail but the computer is directly
+  reachable. It does not add NAT traversal or Wake-on-LAN. Clearing the address
+  stops the unicast retries. Discovery reports troubleshooting guidance rather
+  than leaving an unexplained permanent searching state.
+- Audio health is independent of video health. After 20 seconds without receive,
+  decode or accepted playback submissions, the user receives a nonfatal warning
+  with reconnect guidance. An unsupported format also produces a warning.
+  Normal host silence does not terminate video. Recovered stages clear the
+  warning state; intentional presentation suspension grants a new grace period.
+  A successful audio submission is not proof of sound at the physical speaker.
+
+`steam_link_hid_sim_test.py` now also runs 100 authorization cancel/success races,
+wrong-host/null response replay, local deadline expiry and immediate retry under
+ASan/UBSan. A production-client simulation substitutes only libnx random generation
+and exercises host expiry/reappearance/address changes, per-host authorization,
+revocation, re-pairing and invalid manual addresses. All files are temporary;
+these simulations do not contact a real Steam host. `steam_link_runtime_sim_test.py`
+checks independent audio warnings and recovery in addition to its existing video,
+input, cancellation and H.264 cases. UI source contracts verify retained rows and
+deferred focus restoration, not actual Borealis focus or layout on hardware.
+
+The Docker Switch build uses `devkitpro/devkita64:20251117` with the combined
+Xbox/PlayStation/Steam configuration and moonlight curl. The NRO BSS guard passed
+at 20.4 MiB. The desktop stream probe also builds with the same authorization
+and streaming adapters.
+
+The runtime, HID/client, pointer, settings, release-log and UI/integration checks
+passed. The Xbox session-order, DTLS-loop and PPID regressions passed; the existing
+SCTP UDP-drain assertion still fails identically in the unchanged main workspace.
+No emulator was operated for this follow-up: the available Xbox mock does not
+exercise Steam pairing/discovery/media, and emulator interaction remains
+user-operated as documented above. Real Steam/Switch tests are still required:
+leave a selected host highlighted through several discoveries; cancel/retry
+pairing; revoke authorization on the host; try direct-IP discovery; verify
+picture, sound and controls, then disconnect and reconnect.
+
+
 ### Independent video liveness, host confirmation and release logs (2026-09-08)
 
 After a session connects, the Steam controller now waits for a successful

@@ -25,7 +25,8 @@ sources = list(ihs.glob("*.c"))
 for sub in ("client", "session", "protobuf"):
     sources += list((ihs / sub).rglob("*.c"))
 sources += list((ihs / "hid").glob("*.c"))
-overrides = {ihs / "hid/device.c": ROOT / "src/steamlink/ihs_hid_device.c",
+overrides = {ihs / "client/authorization.c": ROOT / "tests/steam_authorization_capture.c",
+             ihs / "hid/device.c": ROOT / "src/steamlink/ihs_hid_device.c",
              ihs / "ihs_timer.c": ROOT / "src/steamlink/ihs_timer.c",
              ihs / "client/streaming.c": ROOT / "src/steamlink/ihs_streaming.c",
              ihs / "hid/manager.c": ROOT / "src/steamlink/ihs_hid_manager.c",
@@ -49,3 +50,22 @@ with tempfile.TemporaryDirectory(prefix="lunarnx-hid-sim-") as directory:
          "src/steamlink/steam_hid.cpp", "tests/steam_link_hid_sim.cpp", *objects,
          f"-L{mbed / 'build_host/library'}", "-lmbedcrypto", "-lmbedtls", "-lmbedx509", "-o", exe])
     print(run([exe]).strip())
+
+    # Production client state, without a Switch runtime or any live host contact.
+    (tmp / "switch.h").write_text("#pragma once\n#include <cstring>\ninline void randomGet(void* p, size_t n) { std::memset(p, 42, n); }\n")
+    cjson = tmp / "cjson.o"
+    run(["clang", *cflags, *san, "-Ilib", "-c", "lib/cJSON.c", "-o", cjson])
+    client_exe = tmp / "client-sim"
+    # The negotiation capture object calls a test hook defined by the HID sim.
+    # This test never negotiates, so a separate stub satisfies that link only.
+    (tmp / "negotiation-stub.c").write_text('#include "session/channels/ch_control.h"\nbool CaptureNegotiationSend(IHS_SessionChannel* a, EStreamControlMessage b, const ProtobufCMessage* c, int32_t d) { return false; }\n')
+    stub = tmp / "negotiation-stub.o"
+    run(["clang", *cflags, *san, *includes, "-c", tmp / "negotiation-stub.c", "-o", stub])
+    run(["clang++", *cppflags, *san, *includes, "-Ilib", f"-I{tmp}", "-D__SWITCH__",
+         "-std=c++20", "-pthread", "tests/steam_client_state_sim.cpp", *objects, cjson, stub,
+         f"-L{mbed / 'build_host/library'}", "-lmbedcrypto", "-lmbedtls", "-lmbedx509", "-o", client_exe])
+    result = subprocess.run([str(client_exe)], cwd=tmp, capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        print(result.stdout + result.stderr, file=sys.stderr)
+        result.check_returncode()
+    print(result.stdout.strip())

@@ -62,6 +62,9 @@ public:
     void update() override;
     void presentVideoFrame() override;
     void setVideoPresentationSuspended(bool suspended) override;
+    AudioProgressMonitor::Status consumeAudioWarning() {
+        return audio_warning_.exchange(AudioProgressMonitor::Status::Healthy);
+    }
 
 private:
     struct StreamWaitState {
@@ -135,6 +138,10 @@ private:
     StartupWatchdog startup_watchdog_;
     MediaActivityWatchdog media_activity_;
     VideoProgressWatchdog video_progress_;
+    AudioProgressMonitor audio_progress_;
+    AudioProgressMonitor::Status audio_status_ = AudioProgressMonitor::Status::Healthy;
+    std::atomic<AudioProgressMonitor::Status> audio_warning_{AudioProgressMonitor::Status::Healthy};
+    std::atomic<bool> audio_unsupported_{false};
     bool presentation_suspended_ = false;
     uint64_t status_log_at_ns_ = 0;
     bool logged_hid_open_ = false;

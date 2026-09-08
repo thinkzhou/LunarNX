@@ -55,3 +55,14 @@ for locale in ("en-US", "zh-Hans", "zh-Hant"):
     assert keys <= data["steam_ui"].keys(), (locale, keys - data["steam_ui"].keys())
     assert all(data["steam_ui"][key].strip() for key in keys)
 print("Steam static UI contracts passed (not end-to-end validation)")
+
+# Discovery preserves existing row objects and waits until the focus stack has resumed.
+rebuild = hosts.split("void SteamLinkActivity::rebuildHosts", 1)[1]
+assert "clearViews" not in rebuild
+assert "host_rows_.find(host.client_id)" in rebuild
+assert "if (!host_list_ || paused_) return" in rebuild
+assert "giveFocus(refresh_button_)" in rebuild
+resume = hosts.split("void SteamLinkActivity::onResume", 1)[1].split("void SteamLinkActivity::rebuildHosts", 1)[0]
+assert "brls::sync" in resume
+assert '"lunarnx/steam_ui/retry_pair"' in hosts
+assert "client_->discoverAddress(address)" in hosts

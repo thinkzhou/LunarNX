@@ -17,6 +17,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <system_error>
 
 namespace lunar::steamlink {
 namespace {
@@ -195,12 +196,58 @@ bool SteamLinkClient::startDiscovery(HostCallback callback) {
         return false;
     }
     discovery_started_ = true;
+    discovery_stop_ = false;
+    try {
+        discovery_worker_ = std::thread([this]() {
+            std::unique_lock<std::mutex> lock(discovery_wait_mutex_);
+            while (!discovery_wait_.wait_for(lock, std::chrono::seconds(1),
+                                             [this] { return discovery_stop_; })) {
+                const auto manual = manual_address_;
+                lock.unlock();
+                if (!manual.empty()) LunarIHSDiscoverAddress(client_, manual.c_str());
+                emitHosts();
+                lock.lock();
+            }
+        });
+    } catch (const std::system_error&) {
+        stopDiscovery();
+        last_error_ = "Could not start Steam discovery worker; reopen Steam and retry";
+        return false;
+    }
     emitHosts();
     lunar::diagnosticLog("steam-link", "discovery started interval_ms=2500");
     return true;
 }
 
+bool SteamLinkClient::discoverAddress(const std::string& address) {
+    if (address.empty()) {
+        std::lock_guard<std::mutex> lock(discovery_wait_mutex_);
+        manual_address_.clear();
+        return true;
+    }
+    IHS_IPAddress parsed{};
+    if (!IHS_IPAddressFromString(&parsed, address.c_str()) ||
+        parsed.family != IHS_IPAddressFamilyIPv4) {
+        last_error_ = "Enter an IPv4 address, for example 192.168.1.10";
+        return false;
+    }
+    if (!ensureClient()) return false;
+    if (!LunarIHSDiscoverAddress(client_, address.c_str())) {
+        last_error_ = "Could not send Steam discovery request; check network";
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(discovery_wait_mutex_);
+    manual_address_ = address;
+    return true;
+}
+
 void SteamLinkClient::stopDiscovery() {
+    {
+        std::lock_guard<std::mutex> lock(discovery_wait_mutex_);
+        discovery_stop_ = true;
+    }
+    discovery_wait_.notify_all();
+    if (discovery_worker_.joinable()) discovery_worker_.join();
     if (client_) IHS_ClientStopDiscovery(client_);
     discovery_started_ = false;
     lunar::diagnosticLog("steam-link", "discovery stopped");
@@ -219,12 +266,15 @@ bool SteamLinkClient::findHost(uint64_t client_id, IHS_HostInfo* result) const {
 
 bool SteamLinkClient::authorize(const SteamLinkHost& host, const std::string& pin,
                                 AuthorizationCallback callback) {
+    std::lock_guard<std::mutex> operation(authorization_operation_mutex_);
     if (pin.size() != 4 || !std::all_of(pin.begin(), pin.end(),
                                         [](char c) { return c >= '0' && c <= '9'; })) {
         last_error_ = "Steam Link pairing code must contain four digits";
         return false;
     }
     if (!ensureClient()) return false;
+    // Drain before installing a new callback, outside mutex_ (callbacks take it).
+    IHS_ClientAuthorizationCancel(client_);
     IHS_HostInfo protocol_host{};
     if (!findHost(host.client_id, &protocol_host)) {
         last_error_ = "Steam Link host is no longer in the discovery list";
@@ -307,6 +357,7 @@ void SteamLinkClient::cancelStreaming() {
 }
 
 void SteamLinkClient::cancelAuthorization() {
+    std::lock_guard<std::mutex> operation(authorization_operation_mutex_);
     if (client_) IHS_ClientAuthorizationCancel(client_);
     std::lock_guard<std::mutex> lock(mutex_);
     authorization_callback_ = {};
@@ -314,7 +365,7 @@ void SteamLinkClient::cancelAuthorization() {
 
 bool SteamLinkClient::isAuthorized(uint64_t client_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return authorized_client_id_ == client_id;
+    return authorized_steam_ids_.count(client_id) != 0;
 }
 
 uint64_t SteamLinkClient::authorizedSteamId(uint64_t client_id) const {
@@ -332,10 +383,15 @@ bool SteamLinkClient::getSessionClientConfig(IHS_ClientConfig* config) const {
 }
 
 void SteamLinkClient::updateHost(const IHS_HostInfo& host) {
+    // Network replies and expiry polling must enqueue UI snapshots in order.
+    std::lock_guard<std::mutex> publish(host_publish_mutex_);
     HostCallback callback;
     std::vector<SteamLinkHost> snapshot;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        last_seen_ms_[host.clientId] = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
         host_infos_[host.clientId] = host;
         auto it = std::find_if(hosts_.begin(), hosts_.end(),
             [&host](const SteamLinkHost& item) { return item.client_id == host.clientId; });
@@ -360,10 +416,19 @@ void SteamLinkClient::updateHost(const IHS_HostInfo& host) {
 }
 
 void SteamLinkClient::emitHosts() {
+    std::lock_guard<std::mutex> publish(host_publish_mutex_);
     HostCallback callback;
     std::vector<SteamLinkHost> snapshot;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        const auto now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+        hosts_.erase(std::remove_if(hosts_.begin(), hosts_.end(), [&](const SteamLinkHost& host) {
+            if (now - last_seen_ms_[host.client_id] < 15000) return false;
+            host_infos_.erase(host.client_id);
+            last_seen_ms_.erase(host.client_id);
+            return true;
+        }), hosts_.end());
         callback = host_callback_;
         snapshot = hosts_;
     }
@@ -388,7 +453,6 @@ void SteamLinkClient::onAuthorizationSuccess(IHS_Client*, const IHS_HostInfo* ho
     AuthorizationCallback callback;
     {
         std::lock_guard<std::mutex> lock(self->mutex_);
-        self->authorized_client_id_ = host->clientId;
         self->authorized_steam_ids_[host->clientId] = steam_id;
         callback = self->authorization_callback_;
         self->authorization_callback_ = {};
@@ -434,6 +498,8 @@ void SteamLinkClient::onStreamingFailed(IHS_Client*, const IHS_HostInfo* host,
     const std::string error = streamingError(result);
     {
         std::lock_guard<std::mutex> lock(self->mutex_);
+        if (result == IHS_StreamingUnauthorized && host)
+            self->authorized_steam_ids_.erase(host->clientId);
         callback = self->streaming_callback_;
         self->streaming_callback_ = {};
     }
@@ -449,7 +515,7 @@ std::string SteamLinkClient::authorizationError(IHS_AuthorizationResult result) 
         case IHS_AuthorizationNotLoggedIn: return "Steam is not signed in on the host";
         case IHS_AuthorizationOffline: return "Steam host is offline";
         case IHS_AuthorizationBusy: return "Steam host is busy";
-        case IHS_AuthorizationTimedOut: return "Steam PIN request timed out";
+        case IHS_AuthorizationTimedOut: return "Steam pairing timed out (2 minutes). Check the host and pair again";
         case IHS_AuthorizationCanceled: return "Steam PIN request canceled";
         default: return "Steam Link authorization failed";
     }

@@ -172,6 +172,21 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(10ms);
         assert(sends == stopped);
     }
+    {
+        AudioProgressMonitor audio;
+        using S = AudioProgressMonitor::Status;
+        const uint64_t second = 1000000000ULL;
+        assert(audio.observe(0, 0, 0, 0, false, false) == S::Healthy);
+        assert(audio.observe(20*second, 0, 0, 0, false, false) == S::Missing);
+        assert(audio.observe(21*second, 1, 0, 0, false, false) == S::Decode);
+        assert(audio.observe(22*second, 2, 1, 0, false, false) == S::Output);
+        assert(audio.observe(23*second, 3, 2, 1, false, false) == S::Healthy);
+        assert(audio.observe(24*second, 3, 2, 1, true, false) == S::Unsupported);
+        assert(audio.observe(100*second, 3, 2, 1, false, true) == S::Healthy);
+        assert(audio.observe(101*second, 3, 2, 1, false, false) == S::Healthy);
+        for (uint64_t i=102; i<402; ++i)
+            assert(audio.observe(i*second, i, i, i, false, false) == S::Healthy);
+    }
     std::vector<uint8_t> params;
     const uint8_t avcc[] = {1, 66, 0, 30, 255, 225, 0, 2, 0x67, 1, 1, 0, 2, 0x68, 2};
     assert(h264Parameters(avcc, sizeof(avcc), params));
@@ -205,5 +220,5 @@ int main(int argc, char** argv) {
         std::ofstream file(argv[3], std::ios::binary);
         file.write(reinterpret_cast<const char*>(output.data()), output.size());
     }
-    std::cout << "PASS: cursor validation/cache/position/lifetime, startup deadlines, cancellation, input pump, key retry/release, single session destruction, H264 config, log throttle\n";
+    std::cout << "PASS: cursor validation/cache/position/lifetime, startup/audio deadlines, cancellation, input pump, key retry/release, single session destruction, H264 config, log throttle\n";
 }
