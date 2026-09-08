@@ -123,20 +123,46 @@ private:
 class StartupWatchdog {
 public:
     enum class Timeout { None, Connection, FirstFrame };
-    void reset(uint64_t now_ns) { started_ = now_ns; connected_ = 0; }
+    void reset(uint64_t now_ns) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        started_ = now_ns; connected_ = paused_since_ = paused_total_ = 0;
+        suspended_ = false;
+    }
     void connected(uint64_t now_ns) {
-        uint64_t empty = 0;
-        connected_.compare_exchange_strong(empty, now_ns);
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (connected_) return;
+        connected_ = now_ns;
+        paused_total_ = 0;
+        if (suspended_) paused_since_ = now_ns;
+    }
+    void setPresentationSuspended(bool suspended, uint64_t now_ns) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (suspended_ == suspended) return;
+        if (suspended) paused_since_ = now_ns;
+        else if (connected_ && now_ns >= paused_since_)
+            paused_total_ += now_ns - paused_since_;
+        suspended_ = suspended;
     }
     Timeout expired(uint64_t now_ns) const {
-        const auto connected = connected_.load();
-        const auto since = connected ? connected : started_.load();
-        const uint64_t limit = connected ? 20000000000ULL : 15000000000ULL;
-        if (now_ns < since || now_ns - since < limit) return Timeout::None;
-        return connected ? Timeout::FirstFrame : Timeout::Connection;
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto since = connected_ ? connected_ : started_;
+        if (now_ns < since) return Timeout::None;
+        uint64_t elapsed = now_ns - since;
+        if (connected_) {
+            // Connection still has its wall-clock deadline. Only presentation
+            // time deliberately withheld by the UI is excluded from first frame.
+            uint64_t paused = paused_total_;
+            if (suspended_ && now_ns >= paused_since_) paused += now_ns - paused_since_;
+            elapsed -= std::min(elapsed, paused);
+        }
+        const uint64_t limit = connected_ ? 20000000000ULL : 15000000000ULL;
+        if (elapsed < limit) return Timeout::None;
+        return connected_ ? Timeout::FirstFrame : Timeout::Connection;
     }
 private:
-    std::atomic<uint64_t> started_{0}, connected_{0};
+    mutable std::mutex mutex_;
+    uint64_t started_ = 0, connected_ = 0, paused_since_ = 0, paused_total_ = 0;
+    bool suspended_ = false;
 };
 
 // Protocol disconnect initiation is separate from the user-visible Error state.

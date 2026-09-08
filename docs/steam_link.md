@@ -570,3 +570,20 @@ released Plus followed by L/R from synthesizing Guide or swallowing L/R. The
 production mapping replay covers default and custom chords at 0/8/39/40/48 ms
 after release, checks pulse expiry and confirms subsequent real chords still
 work. Existing input, pointer, UI and platform-button regressions remain covered.
+
+### First-frame deadline during settings
+
+The first-frame watchdog excludes time when the UI deliberately suspends video
+presentation, such as opening settings before the first frame. Resume continues
+the remaining 20-second active-presentation budget; it does not grant a fresh
+budget on each toggle. Repeated suspension requests are idempotent, and connecting
+while already suspended starts the first-frame budget paused. The 15-second
+connection deadline remains wall-clock based even while presentation is paused.
+Watchdog callback/observation state is serialized by an internal mutex with no
+calls into the UI or session while held.
+
+Runtime regressions cover long settings visits, repeated suspend/resume, connect
+while suspended, duplicate connected callbacks and unchanged connection timeout.
+No new Ryubing run was performed: emulator interaction remains user-operated and
+the available Xbox mock does not exercise Steam. Real-host/Switch end-to-end
+verification remains outstanding.

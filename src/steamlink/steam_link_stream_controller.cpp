@@ -364,6 +364,7 @@ void SteamLinkStreamController::update() {
     std::unique_lock<std::mutex> lock(lifecycle_mutex_, std::try_to_lock);
     if (!lock.owns_lock() || cancellation_.requested()) return;
     const bool suspended = requested_suspension_.load();
+    startup_watchdog_.setPresentationSuspended(suspended, steadyNowNs());
     if (presentation_suspended_ != suspended) {
         presentation_suspended_ = suspended;
         video_progress_.reset();
