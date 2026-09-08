@@ -432,6 +432,22 @@ void MediaPipeline::prepareForNewVideoSource(const char* reason) {
     beginHardVideoRecovery(reason ? reason : "new video source", true);
 }
 
+void MediaPipeline::prepareForNewAudioSource() {
+    {
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
+        if (!running_.load()) return;
+        std::lock_guard<std::mutex> audio_lock(audio_queue_mutex_);
+        audio_source_epoch_.fetch_add(1, std::memory_order_acq_rel);
+        audio_source_reset_pending_.store(true, std::memory_order_release);
+        audio_queue_.clear();
+        decoded_audio_queue_.clear();
+        queued_audio_bytes_ = 0;
+        queued_decoded_audio_bytes_ = 0;
+        last_decoded_audio_end_ns_.store(0, std::memory_order_release);
+    }
+    audio_queue_cv_.notify_one();
+}
+
 void MediaPipeline::prepareForNewMediaSource(const char* reason) {
     {
         std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);

@@ -25,7 +25,12 @@ sources = list(ihs.glob("*.c"))
 for sub in ("client", "session", "protobuf"):
     sources += list((ihs / sub).rglob("*.c"))
 sources += list((ihs / "hid").glob("*.c"))
-overrides = {ihs / "client/authorization.c": ROOT / "tests/steam_authorization_capture.c",
+overrides = {ihs / "session/channels/ch_data.c": ROOT / "src/steamlink/ihs_data.c",
+             ihs / "session/channels/video/ch_data_video.c": ROOT / "src/steamlink/ihs_data_video.c",
+             ihs / "session/channels/ch_data_audio.c": ROOT / "src/steamlink/ihs_data_audio.c",
+             ihs / "session/channels/channel.c": ROOT / "src/steamlink/ihs_channel.c",
+             ihs / "client/client.c": ROOT / "src/steamlink/ihs_client.c",
+             ihs / "client/authorization.c": ROOT / "tests/steam_authorization_capture.c",
              ihs / "hid/device.c": ROOT / "src/steamlink/ihs_hid_device.c",
              ihs / "ihs_timer.c": ROOT / "src/steamlink/ihs_timer.c",
              ihs / "client/streaming.c": ROOT / "src/steamlink/ihs_streaming.c",
@@ -34,7 +39,7 @@ overrides = {ihs / "client/authorization.c": ROOT / "tests/steam_authorization_c
              ihs / "session/channels/ch_discovery.c": ROOT / "src/steamlink/ihs_discovery.c",
              ihs / "session/channels/ch_control_negotiation.c": ROOT / "tests/steam_negotiation_capture.c"}
 sources = [overrides.get(source, source) for source in sources]
-sources += [ihs / "platforms/ihs_ip_posix.c", ihs / "platforms/ihs_udp_posix.c", ihs / "crypto/impl_mbedtls.c",
+sources += [ihs / "platforms/ihs_ip_posix.c", ROOT / "tests/steam_udp_fault.c", ihs / "crypto/impl_mbedtls.c",
             ROOT / "vendor/protobuf-c/protobuf-c/protobuf-c.c", ROOT / "tools/steamlink_probe/posix_thread.c"]
 with tempfile.TemporaryDirectory(prefix="lunarnx-hid-sim-") as directory:
     tmp = Path(directory)

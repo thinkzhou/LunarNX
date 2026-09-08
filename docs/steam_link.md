@@ -406,3 +406,50 @@ callbacks. A successful end-to-end run must show
 and non-zero video/audio packet summaries. A host with no running game may
 reject the request or require a security PIN; that is a host-state result, not
 evidence that the session transport works.
+
+### Teardown, media metadata and foreground recovery audit
+
+The tracked adapters now detach a removed channel from the session table before
+joining/destroying its worker, decrement the table count for every position and
+clear the vacant slot. Duplicate/capacity-rejected channels are stopped and
+released. Table mutations and disconnect use the session timer mutex; worker
+joins occur outside it. Disconnect acquires timer before base, matching timer
+callbacks. A receive failure interrupts all workers before joining the sender.
+Overlapping `SteamLinkClient` instances share a synchronized process runtime
+lease, keeping the global timer service alive until the last client is gone.
+
+The controller serializes start/stop separately from the mutex used by drawing
+and settings. The host-response wait releases that UI-facing mutex. Drawing
+skips busy lifecycle work, suspension is submitted atomically, and background /
+foreground transitions reset progress deadlines. Failed partial startup is
+cleaned up on the network worker before posting its result to Borealis.
+
+Unsupported audio is discarded with a warning while video and input continue.
+Audio channel restart resets audio queues, reorder, decoder and playback state
+without resetting video. The audio callback receives the real 16-bit frame ID,
+including gaps and rollover. Audio and assembled video retain the host's
+1/65536-second timestamps; a synchronized shared clock unwraps them into a
+common nanosecond timeline. Video uses the first assembled fragment's timestamp.
+Metadata accessors are valid only synchronously inside their respective callback
+and use thread-local storage, avoiding a process-global active-session pointer.
+
+Malformed broadcast protobuf payloads and status messages without a hostname
+are discarded before dispatch. Data-worker startup failure releases its temporary
+frame buffer. A timed-out GPU context remains quarantined because the GPU may
+still reference its resources; once quarantined, renderer initialization is
+blocked for the process and Steam startup asks the user to restart LunarNX.
+This bounds repeated quarantine accumulation rather than freeing unsafe memory.
+
+The ASan/UBSan production-protocol replay now covers middle-channel deletion,
+base/timer lock order, malformed status datagrams, audio ID gaps/rollover, video
+fragment timestamp retention, injected receive failure and overlapping client
+lifetimes. Portable tests cover host-clock rollover/reordered A/V timestamps,
+reconstructed H.264 output, audio reorder/timing and A/V sync. The Switch Docker
+build and BSS guard, desktop probe build, foreground/media/renderer contracts and
+whitespace check are required for these changes. The pre-existing libpeer SCTP
+UDP-drain assertion remains a separate failing check.
+
+No new emulator smoke test was performed: interaction remains user-operated,
+and the Xbox mock cannot exercise this Steam transport. These local replays do
+not verify physical audio output, actual host timestamp behavior, real Switch
+GPU fault recovery or prolonged Steam streaming; those remain hardware checks.

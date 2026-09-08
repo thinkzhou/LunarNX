@@ -146,9 +146,12 @@ static void OnUnconnected(IHS_SessionChannel *channel, const IHS_SessionPacket *
 static void OnDisconnect(IHS_SessionChannel *channel) {
     IHS_Session *session = channel->session;
     assert(session != NULL);
+    // Timer callbacks already hold this mutex: always acquire timer before base.
+    LunarIHSTimerLock(session->timers);
     IHS_BaseLock((IHS_Base *) session);
     if (session->base.interrupted) {
         IHS_BaseUnlock((IHS_Base *) session);
+        LunarIHSTimerUnlock(session->timers);
         return;
     }
     if (session->callbacks.session && session->callbacks.session->disconnected) {
@@ -160,6 +163,7 @@ static void OnDisconnect(IHS_SessionChannel *channel) {
     IHS_HIDManagerCloseAll(session->hidManager);
     IHS_SessionInterrupt(session);
     IHS_BaseUnlock((IHS_Base *) session);
+    LunarIHSTimerUnlock(session->timers);
 }
 
 static void OnPingRequest(IHS_SessionChannel *channel, const IHS_SessionPacket *packet,

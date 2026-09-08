@@ -198,6 +198,8 @@ public:
     // Treat a new WebRTC association as a complete media source change. This
     // resets both video and audio RTP/decode/playback state.
     void prepareForNewMediaSource(const char* reason);
+    // Audio channel restart: reset sequence/decoder state without interrupting video.
+    void prepareForNewAudioSource();
     uint64_t successfulAudioOutputCount() const { return successful_audio_outputs_.load(); }
     void presentVideoFrame();
     // Always available, including release builds with latency logging disabled.

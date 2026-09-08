@@ -9,6 +9,12 @@ extern "C" {
 #include "hid/device.h"
 #include "hid/report.h"
 #include "ihs_buffer.h"
+#include "ihs_buffer_ext.h"
+#include "session/channels/ch_data_audio.h"
+#include "session/channels/video/ch_data_video.h"
+void FailNextSteamReceive(void);
+#include "session/channels/ch_data.h"
+#include "steamlink/ihs_media_metadata.h"
 #include "ihs_enumeration.h"
 #include "client/client_pri.h"
 #include "steamlink/ihs_streaming_support.h"
@@ -313,6 +319,149 @@ static void testAuthorization(const IHS_ClientConfig& config) {
     std::cout << "PASS: authorization deadline/retry, wrong host and null replies, 100 cancel/success races drained\n";
 }
 
+
+static void testChannelRemoval(const IHS_ClientConfig& config, const IHS_SessionInfo& info) {
+    auto* session = IHS_SessionCreate(&config, &info);
+    IHS_SessionChannelClass cls{};
+    cls.instanceSize = sizeof(IHS_SessionChannel);
+    for (int id : {3, 4}) IHS_SessionChannelAdd(session,
+        IHS_SessionChannelCreate(&cls, session, IHS_SessionChannelTypeDataAudio, static_cast<IHS_SessionChannelId>(id), nullptr));
+    IHS_SessionChannelRemove(session, static_cast<IHS_SessionChannelId>(3));
+    assert(session->numChannels == 4 && session->channels[4] == nullptr);
+    assert(IHS_SessionChannelFor(session, static_cast<IHS_SessionChannelId>(4)) == session->channels[3]);
+    IHS_SessionChannelRemove(session, static_cast<IHS_SessionChannelId>(3)); // duplicate stop is harmless
+    IHS_SessionInterrupt(session);
+    IHS_SessionDestroy(session); // ASan catches duplicate ownership / UAF
+}
+
+static void testDisconnectLockOrder(const IHS_ClientConfig& config, const IHS_SessionInfo& info) {
+    auto* session = IHS_SessionCreate(&config, &info);
+    auto* discovery = IHS_SessionChannelFor(session, IHS_SessionChannelIdDiscovery);
+    std::atomic<bool> started{false}, base_available{false};
+    LunarIHSTimerLock(session->timers);
+    std::thread network([&] {
+        started = true;
+        IHS_SessionPacket packet{};
+        packet.header.type = IHS_SessionPacketTypeDisconnect;
+        discovery->cls->received(discovery, &packet);
+    });
+    while (!started) std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    std::thread timer_callback([&] {
+        IHS_BaseLock(&session->base);
+        base_available = true;
+        IHS_BaseUnlock(&session->base);
+    });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
+    while (!base_available && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+    const bool available = base_available;
+    LunarIHSTimerUnlock(session->timers);
+    network.join(); timer_callback.join();
+    assert(available); // receiver must not own base while blocked on timer
+    IHS_SessionDestroy(session);
+}
+
+static void testAudioMetadata(const IHS_ClientConfig& config, const IHS_SessionInfo& info) {
+    auto* session = IHS_SessionCreate(&config, &info);
+    IHS_StreamAudioCallbacks callbacks{};
+    std::vector<uint16_t> ids;
+    callbacks.submit = [](IHS_Session*, IHS_Buffer*, void* p) {
+        static_cast<std::vector<uint16_t>*>(p)->push_back(LunarIHSAudioSequence());
+        assert(LunarIHSAudioTimestamp() == 123456);
+        return 0;
+    };
+    IHS_SessionSetAudioCallbacks(session, &callbacks, &ids);
+    CStartAudioDataMsg msg = CSTART_AUDIO_DATA_MSG__INIT;
+    msg.channel = 3; msg.channels = 2; msg.frequency = 48000;
+    auto* channel = IHS_SessionChannelDataAudioCreate(session, &msg);
+    IHS_SessionChannelAdd(session, channel);
+    auto* cls = reinterpret_cast<const IHS_SessionChannelDataClass*>(channel->cls);
+    IHS_Buffer body{};
+    for (uint16_t id : {65534, 1, 3}) {
+        IHS_SessionDataFrameHeader header{};
+        header.id = id; header.timestamp = 123456;
+        cls->dataFrame(channel, &header, &body);
+    }
+    assert((ids == std::vector<uint16_t>{65534, 1, 3})); // loss and wrap reach reorder/PLC
+    IHS_SessionInterrupt(session);
+    IHS_SessionDestroy(session);
+}
+
+static void testReceiveFailure(const IHS_ClientConfig& config, const IHS_SessionInfo& info) {
+    auto* session = IHS_SessionCreate(&config, &info);
+    std::atomic<bool> ready{false};
+    IHS_StreamSessionCallbacks callbacks{};
+    callbacks.initialized = [](IHS_Session*, void* p) { *static_cast<std::atomic<bool>*>(p) = true; };
+    IHS_SessionSetSessionCallbacks(session, &callbacks, &ready);
+    assert(IHS_SessionConnect(session));
+    while (!ready) std::this_thread::yield();
+    FailNextSteamReceive();
+    IHS_SessionThreadedJoin(session); // Previously blocked joining an unwoken sender.
+    assert(session->base.interrupted);
+    IHS_SessionDestroy(session);
+}
+
+static void testVideoMetadata(const IHS_ClientConfig& config, const IHS_SessionInfo& info) {
+    auto* session = IHS_SessionCreate(&config, &info);
+    unsigned received = 0;
+    IHS_StreamVideoCallbacks callbacks{};
+    callbacks.submit = [](IHS_Session*, IHS_Buffer* data, IHS_StreamVideoFrameFlag, void* p) {
+        ++*static_cast<unsigned*>(p);
+        assert(LunarIHSVideoTimestamp() == 65536);
+        assert(data->size == 4);
+        return IHS_StreamVideoSubmitOK;
+    };
+    IHS_SessionSetVideoCallbacks(session, &callbacks, &received);
+    CStartVideoDataMsg msg = CSTART_VIDEO_DATA_MSG__INIT;
+    msg.channel = 4; msg.codec = static_cast<EStreamVideoCodec>(IHS_StreamVideoCodecH264);
+    auto* channel = IHS_SessionChannelDataVideoCreate(session, &msg);
+    IHS_SessionChannelAdd(session, channel);
+    auto* cls = reinterpret_cast<const IHS_SessionChannelDataClass*>(channel->cls);
+    for (int i = 0; i < 2; ++i) {
+        IHS_SessionDataFrameHeader header{};
+        header.id = i; header.timestamp = 65536 + i * 100;
+        IHS_Buffer body;
+        IHS_BufferInit(&body, 32, 32);
+        IHS_BufferAppendUInt16LE(&body, i);
+        IHS_BufferAppendUInt8(&body, i == 0 ? VideoFrameFlagKeyFrame : VideoFrameFlagFrameFinish);
+        IHS_BufferAppendUInt16LE(&body, 0);
+        IHS_BufferAppendUInt16LE(&body, 0);
+        IHS_BufferAppendUInt16LE(&body, 0x1234);
+        cls->dataFrame(channel, &header, &body);
+        IHS_BufferClear(&body, true);
+    }
+    assert(received == 1); // assembled frame uses first fragment's PTS, not the last arrival
+    IHS_SessionInterrupt(session);
+    IHS_SessionDestroy(session);
+}
+
+static void testMalformedBroadcast(const IHS_ClientConfig& config) {
+    auto* client = IHS_ClientCreate(&config);
+    unsigned discovered = 0;
+    IHS_ClientDiscoveryCallbacks callbacks{};
+    callbacks.discovered = [](IHS_Client*, const IHS_HostInfo*, void* p) { ++*static_cast<unsigned*>(p); };
+    IHS_ClientSetDiscoveryCallbacks(client, &callbacks, &discovered);
+    CMsgRemoteClientBroadcastHeader header = CMSG_REMOTE_CLIENT_BROADCAST_HEADER__INIT;
+    header.has_msg_type = true; header.msg_type = k_ERemoteClientBroadcastMsgStatus;
+    const uint8_t magic[] = {0xff,0xff,0xff,0xff,0x21,0x4c,0x5f,0xa0};
+    for (bool malformed : {true, false}) {
+        IHS_Buffer packet;
+        IHS_BufferInit(&packet, 64, 1024);
+        IHS_BufferAppendMem(&packet, magic, sizeof(magic));
+        IHS_BufferAppendUInt32LE(&packet, cmsg_remote_client_broadcast_header__get_packed_size(&header));
+        IHS_BufferAppendMessage(&packet, &header.base);
+        IHS_BufferAppendUInt32LE(&packet, malformed ? 1 : 0);
+        if (malformed) IHS_BufferAppendUInt8(&packet, 0xff); // invalid protobuf; empty status has no hostname
+        IHS_SocketAddress address{};
+        client->base.callbacks.received(&client->base, &address, &packet);
+        IHS_BufferClear(&packet, true);
+    }
+    assert(discovered == 0);
+    IHS_ClientStop(client);
+    IHS_ClientThreadedJoin(client);
+    IHS_ClientDestroy(client);
+}
+
 int main() {
     lunar::input::GamepadState state;
     state.a = true; state.guide = true; state.menu = true;
@@ -345,12 +494,19 @@ int main() {
     uint8_t secret[32]{};
     IHS_ClientConfig config{};
     config.deviceId = 100; config.secretKey = secret; config.deviceName = "LunarNX HID simulation";
+    testMalformedBroadcast(config);
     testAuthorization(config);
     testStreamingCancellation(config);
     IHS_SessionInfo info{};
     info.address.ip.family = IHS_IPAddressFamilyIPv4;
     info.address.ip.v4.data[0] = 127; info.address.ip.v4.data[3] = 1;
     info.address.port = 27031; info.sessionKeyLen = 16;
+    testChannelRemoval(config, info);
+    testDisconnectLockOrder(config, info);
+    testAudioMetadata(config, info);
+    testVideoMetadata(config, info);
+    testReceiveFailure(config, info);
+    std::cout << "PASS: channel removal, disconnect lock order, malformed discovery, original media metadata and receive-error teardown\n";
     testSessionShutdown(config, info);
     testHostConfig(config, info);
     auto* session = IHS_SessionCreate(&config, &info);

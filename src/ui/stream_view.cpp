@@ -321,6 +321,7 @@ void StreamView::handleWindowFocusChanged(bool focused) {
     lunar::diagnosticLog("stream-view", "window focus changed focused=%s",
                          focused ? "true" : "false");
     if (!focused) {
+        runtime_->setVideoPresentationSuspended(true);
         backgrounded_ = true;
         updateInputOwnership();
         return;
@@ -348,6 +349,7 @@ void StreamView::handleWindowFocusChanged(bool focused) {
                 if (!alive->load() || cancelled()) return;
                 foreground_recovery_running_ = false;
                 if (recovered) {
+                    runtime->setVideoPresentationSuspended(false);
                     updateInputOwnership();
                     brls::Application::notify(
                         brls::getStr("lunarnx/stream/resumed"));

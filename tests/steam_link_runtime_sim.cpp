@@ -1,4 +1,5 @@
 #include "steamlink/stream_support.h"
+#include "steamlink/media_clock.h"
 #include "steamlink/steam_cursor.h"
 #include <cassert>
 #include <fstream>
@@ -9,6 +10,16 @@ using namespace lunar::steamlink;
 using namespace std::chrono_literals;
 
 int main(int argc, char** argv) {
+    {
+        MediaClock clock;
+        assert(clock.map(0xffff0000u) == 1000000000ULL);
+        assert(clock.map(0u) == 2000000000ULL); // 32-bit host timestamp wraps
+        assert(clock.map(32768u) == 2500000000ULL);
+        assert(clock.map(16384u) == 2250000000ULL); // delayed other track retains its PTS
+        assert(clock.map(65536u) == 3000000000ULL);
+        clock.reset();
+        assert(clock.map(12345u) == 1000000000ULL);
+    }
     {
         using Timeout = VideoProgressWatchdog::Timeout;
         VideoProgressWatchdog watch;

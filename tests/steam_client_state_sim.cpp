@@ -20,6 +20,16 @@
 int main() {
     using namespace lunar::steamlink;
     std::filesystem::create_directories("sdmc:/switch/LunarNX");
+    // A page being destroyed must not shut down another page's timer service.
+    {
+        auto first = std::make_unique<SteamLinkClient>();
+        auto second = std::make_unique<SteamLinkClient>();
+        assert(first->ensureClient());
+        assert(second->ensureClient());
+        first.reset();
+        assert(second->discoverAddress(""));
+        second.reset();
+    }
     SteamLinkClient client;
     IHS_HostInfo a{}, b{};
     a.clientId = 1; b.clientId = 2;
