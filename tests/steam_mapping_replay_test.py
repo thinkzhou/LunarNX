@@ -43,6 +43,7 @@ struct Resolver {
  MenuChordFilter menu_chord_;
  GamepadState read(uint64_t btns,uint64_t ms) {
  GamepadState state{};
+ uint64_t replayed_buttons=0;
 '''+resolve+r'''
  return state;
  }
@@ -80,6 +81,26 @@ int main(){
   s=r.read(menu_key,180); assert(!s.menu && !s.view);
   r.read(0,200);
  }
+ // Released menu taps cannot form phantom chords with later physical inputs.
+ for(auto menu_key:{plus,minus}) {
+  for(auto gap:{0,8,39,40,48}) {
+   Resolver r;
+   r.button_mapping_[size_t(RemoteButton::Guide)]=HidNpadButton_A|menu_key;
+   r.read(menu_key,100); r.read(0,140);
+   auto s=r.read(HidNpadButton_A,140+gap);
+   assert(!s.guide && s.b);
+   assert(menu_key==plus ? s.menu==(gap<40) : s.view==(gap<40));
+   s=r.read(0,200); assert(!s.menu && !s.view && !s.b);
+   s=r.read(HidNpadButton_A|menu_key,220);
+   assert(s.guide && !s.b && !s.menu && !s.view);
+  }
+ }
+ Resolver sequence;
+ sequence.read(plus,100); sequence.read(0,140);
+ auto next=sequence.read(HidNpadButton_L|HidNpadButton_R,148);
+ assert(next.menu && next.lb && next.rb && !next.guide);
+ next=sequence.read(HidNpadButton_L|HidNpadButton_R,181);
+ assert(!next.menu && next.lb && next.rb && !next.guide);
  Resolver reserved;
  auto s=reserved.read(guide|minus,100);
  assert(!s.guide && !s.menu && !s.view);

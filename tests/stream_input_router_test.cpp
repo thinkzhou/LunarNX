@@ -18,9 +18,9 @@ int main() {
     }
     MenuChordFilter tap;
     assert(tap.update(1,3,100)==0);
-    assert(tap.update(0,3,150)==1);
-    assert(tap.update(0,3,180)==1);
-    assert(tap.update(0,3,191)==0);
+    assert(tap.update(0,3,150)==0 && tap.replayedButtons()==1);
+    assert(tap.update(0,3,180)==0 && tap.replayedButtons()==1);
+    assert(tap.update(0,3,191)==0 && tap.replayedButtons()==0);
     MenuChordFilter hold;
     assert(hold.update(2,3,100)==0);
     assert(hold.update(2,3,220)==2);
@@ -32,8 +32,8 @@ int main() {
         MenuChordFilter delayed;
         assert(delayed.update(2,3,100)==0);
         assert(delayed.update(2,3,212)==0);
-        assert(delayed.update(0,3,100+release)==2);
-        assert(delayed.update(0,3,141+release)==0);
+        assert(delayed.update(0,3,100+release)==0 && delayed.replayedButtons()==2);
+        assert(delayed.update(0,3,141+release)==0 && delayed.replayedButtons()==0);
     }
     StreamInputRouter input_router(true);
     GamepadState menu_input;
