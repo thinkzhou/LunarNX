@@ -329,8 +329,10 @@ void StreamView::handleWindowFocusChanged(bool focused) {
 
     if (!backgrounded_.load()) return;
     if (terminal_stop_->load() || stop_started_.load()) return;
-    if (foreground_recovery_running_.exchange(true)) return;
+    const bool recovery_pending = foreground_recovery_running_.exchange(true);
     backgrounded_ = false;
+    updateInputOwnership();
+    if (recovery_pending) return;
 
     auto runtime = runtime_;
     auto alive = alive_;
@@ -349,9 +351,9 @@ void StreamView::handleWindowFocusChanged(bool focused) {
                 if (!alive->load() || cancelled()) return;
                 foreground_recovery_running_ = false;
                 if (recovered) {
-                    runtime->setVideoPresentationSuspended(false);
+                    runtime->setVideoPresentationSuspended(backgrounded_.load() || child_activity_visible_);
                     updateInputOwnership();
-                    brls::Application::notify(
+                    if (!backgrounded_.load()) brls::Application::notify(
                         brls::getStr("lunarnx/stream/resumed"));
                     return;
                 }
@@ -400,6 +402,10 @@ brls::View* StreamView::createContentView() {
     // Minus + Plus: stop with double-press confirmation. Keep single Minus as Xbox View.
     auto stop_handler = [this](brls::View*) -> bool {
         if (!isExitComboPressed()) return false;
+        if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+            setQuickMenuVisible(true); // Idempotent if both button events arrive together.
+            return true;
+        }
         auto now = std::chrono::steady_clock::now();
         const bool confirmed = exit_pending_.load() &&
             std::chrono::duration_cast<std::chrono::seconds>(
@@ -415,9 +421,11 @@ brls::View* StreamView::createContentView() {
         if (confirm_box_) confirm_box_->setVisibility(brls::Visibility::VISIBLE);
         return true;
     };
-    root->registerAction(brls::getStr("lunarnx/stream/stop_action_plus"),
+    root->registerAction(brls::getStr(runtime_->getStreamPlatform() == app::StreamPlatform::Steam
+        ? "lunarnx/stream/menu_open" : "lunarnx/stream/stop_action_plus"),
         brls::ControllerButton::BUTTON_START, stop_handler);
-    root->registerAction(brls::getStr("lunarnx/stream/stop_action_minus"),
+    root->registerAction(brls::getStr(runtime_->getStreamPlatform() == app::StreamPlatform::Steam
+        ? "lunarnx/stream/menu_open" : "lunarnx/stream/stop_action_minus"),
         brls::ControllerButton::BUTTON_BACK, stop_handler);
 
     if (stream::usesZeroCopyRender(runtime_->getDefaultVideoBackend())) {
@@ -446,6 +454,23 @@ brls::View* StreamView::createContentView() {
         root->addView(cursor);
     }
 #endif
+
+    if (runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+        connecting_overlay_ = new brls::Box(brls::Axis::COLUMN);
+        connecting_overlay_->detach();
+        connecting_overlay_->setWidth(640);
+        connecting_overlay_->setHeight(120);
+        connecting_overlay_->setDetachedPosition(320, 270);
+        connecting_overlay_->setPadding(20);
+        connecting_overlay_->setBackgroundColor(p.card);
+        auto* message = makeMutedLabel(brls::getStr("lunarnx/steam_ui/waiting_video"), 20);
+        message->setSingleLine(false);
+        message->setIsWrapping(true);
+        message->setHeight(80);
+        connecting_overlay_->addView(message);
+        root->addView(connecting_overlay_);
+        updateConnectionStatus();
+    }
 
     // Top status bar
     overlay_ = new StreamOverlay(&runtime_->getPerfStats(), runtime_->getStreamPlatform());
@@ -494,7 +519,8 @@ brls::View* StreamView::createContentView() {
     quick_menu_->addView(menu_title);
 
     auto* menu_hint = new brls::Label();
-    menu_hint->setText(brls::getStr("lunarnx/stream/menu_hint"));
+    menu_hint->setText(brls::getStr(runtime_->getStreamPlatform() == app::StreamPlatform::Steam
+        ? "lunarnx/steam_ui/menu_hint" : "lunarnx/stream/menu_hint"));
     menu_hint->setFontSize(13);
     menu_hint->setTextColor(p.text_muted);
     menu_hint->setHeight(58);
@@ -798,6 +824,7 @@ void StreamView::stopAndReturn() {
 void StreamView::setQuickMenuVisible(bool visible) {
     if (!quick_menu_ || quick_menu_visible_ == visible) return;
     quick_menu_visible_ = visible;
+    updateConnectionStatus();
     quick_menu_->setVisibility(
         visible ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
     updateInputOwnership();
@@ -845,6 +872,14 @@ void StreamView::onResume() {
         return;
     }
     if (content_root_) brls::Application::giveFocus(content_root_);
+}
+
+void StreamView::updateConnectionStatus() {
+    if (!connecting_overlay_) return;
+    const bool waiting = runtime_->getState() == app::StreamState::Connecting ||
+        foreground_recovery_running_.load();
+    connecting_overlay_->setVisibility(waiting && !quick_menu_visible_ && !child_activity_visible_
+        ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
 }
 
 void StreamView::updatePerformanceVisibility() {
@@ -960,6 +995,7 @@ void StreamView::runLoop() {
         auto alive = alive_;
         brls::sync([alive, this, fps, res, video_backend, video_codec]() {
             if (!alive->load()) return;
+            updateConnectionStatus();
             if (overlay_) overlay_->update(fps, res, video_codec);
             if (perf_overlay_) {
                 perf_overlay_->update(fps, res, video_backend, video_codec);

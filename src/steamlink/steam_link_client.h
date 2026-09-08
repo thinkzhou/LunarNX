@@ -110,6 +110,7 @@ private:
     AuthorizationCallback authorization_callback_;
     StreamingCallback streaming_callback_;
     std::unordered_map<uint64_t, uint64_t> authorized_steam_ids_;
+    std::unordered_map<uint64_t, IHS_HostInfo> authorized_hosts_;
     std::string last_error_;
 };
 

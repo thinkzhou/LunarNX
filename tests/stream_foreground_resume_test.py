@@ -46,4 +46,8 @@ background_clear = view.index("backgrounded_ = false")
 require(recovery_claim < background_clear,
         "foreground recovery must be claimed before disconnect handling resumes")
 
+require(view.index("backgrounded_ = false") < view.index("if (recovery_pending) return"),
+        "a coalesced foreground event must clear stale background state")
+require("setVideoPresentationSuspended(backgrounded_.load() || child_activity_visible_)" in view,
+        "recovery completion must respect current focus and child activity")
 print("stream foreground resume regression checks passed")

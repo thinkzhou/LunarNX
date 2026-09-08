@@ -68,8 +68,12 @@ brls::View* SteamSettingsActivity::createContentView() {
     auto* root = new brls::Box(brls::Axis::COLUMN);
     root->setPadding(20, 52, 28, 52);
     scroll->setContentView(root);
-    root->addView(makeSectionHeader(brls::getStr("lunarnx/steam_ui/input_title"),
-        brls::getStr("lunarnx/steam_ui/settings_help")));
+    root->addView(makeSectionHeader(brls::getStr("lunarnx/steam_ui/input_title"), ""));
+    auto* save_help = makeMutedLabel(brls::getStr("lunarnx/steam_ui/settings_help"), 14);
+    save_help->setSingleLine(false);
+    save_help->setIsWrapping(true);
+    save_help->setHeight(72);
+    root->addView(save_help);
     auto* card = makeUiCard();
     auto* touch = new brls::SelectorCell();
     touch->init(brls::getStr("lunarnx/steam_ui/touch"),
