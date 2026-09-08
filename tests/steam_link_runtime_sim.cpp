@@ -115,6 +115,26 @@ int main(int argc, char** argv) {
         watch.connected(2000); // duplicate callbacks cannot extend a deadline
         assert(watch.expired(20000000999ULL) == StartupWatchdog::Timeout::None);
         assert(watch.expired(20000001000ULL) == StartupWatchdog::Timeout::FirstFrame);
+        constexpr uint64_t second = 1000000000ULL;
+        watch.reset(second);
+        watch.connected(2*second);
+        watch.setPresentationSuspended(true, 7*second); // Five active seconds.
+        watch.setPresentationSuspended(true, 20*second); // Repeated request is idempotent.
+        assert(watch.expired(100*second) == StartupWatchdog::Timeout::None);
+        watch.setPresentationSuspended(false, 100*second);
+        assert(watch.expired(114*second) == StartupWatchdog::Timeout::None);
+        assert(watch.expired(115*second) == StartupWatchdog::Timeout::FirstFrame);
+        watch.reset(second);
+        watch.setPresentationSuspended(true, 2*second);
+        assert(watch.expired(16*second) == StartupWatchdog::Timeout::Connection);
+        watch.connected(17*second); // Connect while settings are still open.
+        assert(watch.expired(100*second) == StartupWatchdog::Timeout::None);
+        watch.connected(99*second); // Duplicate callback cannot extend the budget.
+        watch.setPresentationSuspended(false, 100*second);
+        watch.setPresentationSuspended(true, 105*second);
+        watch.setPresentationSuspended(false, 110*second);
+        assert(watch.expired(124*second) == StartupWatchdog::Timeout::None);
+        assert(watch.expired(125*second) == StartupWatchdog::Timeout::FirstFrame);
         watch.reset(30000000000ULL);
         assert(watch.expired(30000000001ULL) == StartupWatchdog::Timeout::None);
         assert(watch.expired(45000000000ULL) == StartupWatchdog::Timeout::Connection);
