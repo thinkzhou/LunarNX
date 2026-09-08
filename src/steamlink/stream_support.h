@@ -12,6 +12,53 @@
 
 namespace lunar::steamlink {
 
+// Input-pump owned; audio traffic cannot reset any of these deadlines.
+class VideoProgressWatchdog {
+public:
+    enum class Timeout { None, Receive, Decode, Present, Recovery };
+    void reset() { initialized_ = false; recovering_ = false; }
+    Timeout observe(uint64_t now, uint64_t received, uint64_t decoded,
+                    uint64_t presented, bool recovery, bool suspended) {
+        if (!initialized_ || suspended) {
+            initialized_ = true;
+            received_ = received; decoded_ = decoded; presented_ = presented;
+            receive_at_ = decode_at_ = present_at_ = now;
+            recovering_ = false;
+            return Timeout::None;
+        }
+        if (received != received_) { received_ = received; receive_at_ = now; }
+        if (decoded != decoded_) { decoded_ = decoded; decode_at_ = now; }
+        if (presented != presented_) { presented_ = presented; present_at_ = now; }
+        if (recovery && !recovering_) recovery_at_ = now;
+        recovering_ = recovery;
+        const auto expired = [now](uint64_t since) {
+            return now >= since && now-since >= 20000000000ULL;
+        };
+        if (recovering_ && expired(recovery_at_)) return Timeout::Recovery;
+        if (expired(receive_at_)) return Timeout::Receive;
+        if (expired(decode_at_)) return Timeout::Decode;
+        if (expired(present_at_)) return Timeout::Present;
+        return Timeout::None;
+    }
+private:
+    bool initialized_ = false, recovering_ = false;
+    uint64_t received_=0, decoded_=0, presented_=0;
+    uint64_t receive_at_=0, decode_at_=0, present_at_=0, recovery_at_=0;
+};
+
+class InputAvailabilityWatchdog {
+public:
+    void reset() { waiting_ = false; }
+    bool expired(uint64_t now, bool opened) {
+        if (opened) { waiting_ = false; return false; }
+        if (!waiting_) { waiting_ = true; since_ = now; }
+        return now >= since_ && now-since_ >= 20000000000ULL;
+    }
+private:
+    bool waiting_ = false;
+    uint64_t since_ = 0;
+};
+
 // Queue acceptance is not decoder success. An asynchronous recovery request
 // must reach Steam even while the pipeline intentionally drops dependent frames.
 class VideoRecoveryFeedback {

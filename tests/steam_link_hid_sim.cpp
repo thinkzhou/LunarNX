@@ -24,8 +24,13 @@ extern "C" {
 using namespace lunar::steamlink;
 
 static bool negotiated = false, expected_hid = false;
+static bool completed = false, complete_send_ok = true;
 extern "C" bool CaptureNegotiationSend(IHS_SessionChannel*, EStreamControlMessage type,
                                       const ProtobufCMessage* message, int32_t) {
+    if (type == k_EStreamControlNegotiationComplete) {
+        completed = true;
+        return complete_send_ok;
+    }
     assert(type == k_EStreamControlNegotiationSetConfig);
     std::vector<uint8_t> bytes(protobuf_c_message_get_packed_size(message));
     protobuf_c_message_pack(message, bytes.data());
@@ -67,6 +72,47 @@ static void testNegotiation(IHS_Session* session, bool has_provider) {
         assert(negotiated);
         IHS_BufferClear(&buffer, true);
     }
+}
+
+static void testHostConfig(const IHS_ClientConfig& config, const IHS_SessionInfo& info) {
+    // Accepted, rejected, absent HID flag, missing config, input veto, send failure.
+    for (int scenario=0; scenario<6; ++scenario) {
+        auto* session = IHS_SessionCreate(&config, &info);
+        auto* provider = createSteamPadProvider(std::make_shared<SteamPadState>());
+        IHS_SessionHIDAddProvider(session, provider);
+        session->state.connectionState = IHS_SessionConnectionStateNegotiating;
+        CNegotiatedConfig selected = CNEGOTIATED_CONFIG__INIT;
+        selected.has_enable_remote_hid = scenario != 2;
+        selected.enable_remote_hid = scenario != 1;
+        CStreamingClientConfig client = CSTREAMING_CLIENT_CONFIG__INIT;
+        client.has_enable_input_streaming = scenario == 4;
+        client.enable_input_streaming = false;
+        CNegotiationSetConfigMsg message = CNEGOTIATION_SET_CONFIG_MSG__INIT;
+        message.config = scenario == 3 ? nullptr : &selected;
+        message.streaming_client_config = &client;
+        std::vector<uint8_t> bytes(protobuf_c_message_get_packed_size(&message.base));
+        protobuf_c_message_pack(&message.base, bytes.data());
+        // Required message fields pack nullptr as an empty message. Use raw
+        // wire bytes to truly omit required field 1 (only client config remains).
+        if (scenario == 3) bytes = {0x12, 0x00};
+        IHS_Buffer payload{};
+        IHS_BufferInit(&payload, bytes.size(), bytes.size());
+        IHS_BufferWriteMem(&payload, 0, bytes.data(), bytes.size());
+        IHS_SessionPacketHeader header{};
+        completed = false; complete_send_ok = scenario != 5;
+        IHS_SessionChannelControlOnNegotiation(
+            IHS_SessionChannelFor(session, IHS_SessionChannelIdControl),
+            k_EStreamControlNegotiationSetConfig, &payload, &header);
+        const bool accepted = scenario == 0 || scenario == 2;
+        assert((session->state.connectionState == IHS_SessionConnectionStateConnected) == accepted);
+        assert(completed == (accepted || scenario == 5));
+        IHS_BufferClear(&payload, true);
+        IHS_SessionInterrupt(session);
+        IHS_SessionDestroy(session);
+        destroySteamPadProvider(provider);
+    }
+    complete_send_ok = true;
+    std::cout << "PASS: host final HID accept/reject/absent, missing config, input veto and send failure\n";
 }
 
 static void testSessionShutdown(const IHS_ClientConfig& config, const IHS_SessionInfo& info) {
@@ -237,6 +283,7 @@ int main() {
     info.address.ip.v4.data[0] = 127; info.address.ip.v4.data[3] = 1;
     info.address.port = 27031; info.sessionKeyLen = 16;
     testSessionShutdown(config, info);
+    testHostConfig(config, info);
     auto* session = IHS_SessionCreate(&config, &info);
     testNegotiation(session, false);
     auto shared = std::make_shared<SteamPadState>();

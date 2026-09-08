@@ -10,6 +10,37 @@ using namespace std::chrono_literals;
 
 int main(int argc, char** argv) {
     {
+        using Timeout = VideoProgressWatchdog::Timeout;
+        VideoProgressWatchdog watch;
+        assert(watch.observe(1,1,1,1,false,false)==Timeout::None);
+        // Continuous audio is intentionally absent from this interface.
+        assert(watch.observe(20000000001ULL,1,1,1,false,false)==Timeout::Receive);
+        watch.reset(); watch.observe(1,1,1,1,false,false);
+        assert(watch.observe(20000000001ULL,2,1,1,false,false)==Timeout::Decode);
+        watch.reset(); watch.observe(1,1,1,1,false,false);
+        assert(watch.observe(20000000001ULL,2,2,1,false,false)==Timeout::Present);
+        watch.reset(); watch.observe(1,1,1,1,false,false);
+        watch.observe(2,2,2,2,true,false);
+        assert(watch.observe(20000000002ULL,3,3,3,true,false)==Timeout::Recovery);
+        assert(watch.observe(20000000003ULL,4,4,4,false,false)==Timeout::None);
+        assert(watch.observe(60000000000ULL,4,4,4,false,true)==Timeout::None);
+        assert(watch.observe(60000000001ULL,4,4,4,false,false)==Timeout::None);
+        assert(watch.observe(80000000000ULL,4,4,4,false,false)==Timeout::Receive);
+        watch.reset(); watch.observe(1,0,0,0,false,false);
+        for (uint64_t n=1;n<300;++n)
+            assert(watch.observe(n*1000000000ULL,n,n,n,false,false)==Timeout::None);
+    }
+    {
+        InputAvailabilityWatchdog watch;
+        assert(!watch.expired(1,false));
+        assert(watch.expired(20000000001ULL,false));
+        assert(!watch.expired(20000000002ULL,true));
+        assert(!watch.expired(40000000000ULL,false)); // close gets a grace period
+        assert(watch.expired(60000000000ULL,false));
+        watch.reset();
+        assert(!watch.expired(90000000000ULL,false));
+    }
+    {
         VideoRecoveryFeedback recovery;
         assert(!recovery.reportLost(true, false, 100));
         assert(recovery.reportLost(true, true, 100)); // accepted but awaiting IDR

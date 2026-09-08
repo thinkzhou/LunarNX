@@ -104,6 +104,47 @@ test substitutes for physical sensor calibration or a real Steam game session.
 
 ## Diagnostics and simulated verification
 
+### Independent video liveness, host confirmation and release logs (2026-09-08)
+
+After a session connects, the Steam controller now waits for a successful
+renderer presentation before entering Streaming. Decode/renderer enqueue alone
+does not satisfy the startup deadline.
+
+During streaming, independent 20-second deadlines cover video receive, decoded
+frame output, successful presentation and continuous keyframe recovery.
+Audio cannot extend these deadlines. Intentional presentation suspension pauses
+the video checks; resuming starts a fresh grace period. Persistent frame counts
+are read atomically without taking the media pipeline lock. These checks
+diagnose a pipeline that stops making progress while the input/UI loops still
+run; they cannot guarantee recovery from an indefinitely blocked driver or UI.
+
+The final host configuration is parsed before NegotiationComplete/Connected.
+Explicit Remote HID or input disable is rejected, malformed configuration is
+disconnected, and a failed completion send cannot mark the session connected.
+An omitted HID flag remains provisional for older hosts rather than being
+treated as false. In all cases, the host must actually open our device within
+20 seconds. A later device close gets another bounded grace period.
+Host rejection is recorded in `SteamNegotiation`; early disconnect and missing
+device-open produce user-visible errors instead of an apparently usable stream.
+
+With `APP_DIAG=0`, `steam-health` still records video receive/decode/present counts,
+audio count, recovery/suspension state, HID open state and report count every
+five seconds and when HID open state changes. Negotiation requests and final
+configuration are persistent events, independent of the global Info throttle.
+No PIN, credential or individual controller input is added to these summaries.
+`tests/steam_release_log_test.py` verifies actual release-mode log output in a
+temporary directory, and runs in CI. Final-host protobuf replay covers accept,
+reject, absent fields, missing required configuration, input veto and failed
+NegotiationComplete send. Runtime simulations cover independent deadlines,
+recovery expiry, five minutes of healthy progress, suspension/resume and HID
+open/close grace periods.
+
+No emulator was operated for this follow-up. Host HID acceptance, real Steam
+recovery timing and Switch rendering/audio still need user-operated validation.
+Long deliberate host video pauses may require reconnecting after the 20-second
+video deadline; this initial policy favors an actionable failure over an
+indefinitely frozen game screen.
+
 ### Stream recovery and protocol-error cleanup follow-up (2026-09-07)
 
 - `ihs_discovery.c` is a tracked copy of the pinned discovery channel with

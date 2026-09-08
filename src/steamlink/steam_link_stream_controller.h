@@ -134,6 +134,11 @@ private:
     InputPump input_pump_;
     StartupWatchdog startup_watchdog_;
     MediaActivityWatchdog media_activity_;
+    VideoProgressWatchdog video_progress_;
+    bool presentation_suspended_ = false;
+    uint64_t status_log_at_ns_ = 0;
+    bool logged_hid_open_ = false;
+    InputAvailabilityWatchdog input_availability_;
     VideoRecoveryFeedback video_recovery_;
     SessionDisconnectGate disconnect_gate_;
     LogThrottle hid_announce_log_;

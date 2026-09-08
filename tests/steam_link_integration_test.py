@@ -44,6 +44,11 @@ def main() -> None:
     assert "self->video_recovery_.reportLost(" in controller
     assert "media_activity_.expired(" in controller
     assert "pointer_.setVideoSize(" in controller
+    assert "video_progress_.observe(" in controller
+    assert "input_availability_.expired(" in controller
+    assert 'persistentEventLog("steam-health"' in controller
+    assert "successfulVideoPresentCount()" in controller
+    assert "level <= IHS_LogLevelWarn || negotiation" in client
 
     print("steam link integration checks passed")
 
