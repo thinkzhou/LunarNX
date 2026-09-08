@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <chrono>
 
 #ifdef __SWITCH__
 #include <switch.h>
@@ -83,7 +84,11 @@ GamepadState GamepadReader::read() {
 
     const bool quick_menu_chord =
         (btns & HidNpadButton_Minus) && (btns & HidNpadButton_Plus);
-    if (quick_menu_chord) {
+    if (mapping_profile_ == ButtonMappingProfile::Steam) {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        btns = menu_chord_.update(btns, HidNpadButton_Minus | HidNpadButton_Plus, ms);
+    } else if (quick_menu_chord) {
         btns &= ~(HidNpadButton_Minus | HidNpadButton_Plus);
     }
 

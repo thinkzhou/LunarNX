@@ -7,6 +7,26 @@ using lunar::input::StreamInputOwner;
 using lunar::input::StreamInputRouter;
 
 int main() {
+    using lunar::input::MenuChordFilter;
+    for (uint64_t first : {uint64_t{1}, uint64_t{2}}) {
+        MenuChordFilter chord;
+        assert(chord.update(first | 4, 3, 100) == 4);
+        assert(chord.update(3 | 4, 3, 180) == 4);
+        assert(chord.update(first, 3, 200) == 0); // Release one key first.
+        assert(chord.update(0, 3, 210) == 0);
+        assert(chord.update(0, 3, 260) == 0);
+    }
+    MenuChordFilter tap;
+    assert(tap.update(1,3,100)==0);
+    assert(tap.update(0,3,150)==1);
+    assert(tap.update(0,3,180)==1);
+    assert(tap.update(0,3,191)==0);
+    MenuChordFilter hold;
+    assert(hold.update(2,3,100)==0);
+    assert(hold.update(2,3,220)==2);
+    assert(hold.update(2,3,1000)==2);
+    assert(hold.update(0,3,1001)==0);
+
     StreamInputRouter input_router(true);
     GamepadState menu_input;
     menu_input.a = true;

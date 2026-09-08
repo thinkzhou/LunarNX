@@ -80,6 +80,7 @@ public:
                     }
                 }
             }
+            applyGyro(out, m, aim, dt);
             return out;
         }
         if (touch_mode == TouchMode::Absolute && t.valid && t.count>0 && !count_ &&
@@ -95,6 +96,11 @@ public:
                 if (count_ && !moved_ && !drag_ && ms-start_ms_ < 300) {
                     click_until_ = ms + 40;
                     right_click_ = multi_;
+                    if (multi_ && touch_mode == TouchMode::Absolute) {
+                        out.absolute = true;
+                        out.x = std::clamp((tap_x_-video_x_)/std::max(1.f,video_w_-1.f),0.f,1.f);
+                        out.y = std::clamp((tap_y_-video_y_)/std::max(1.f,video_h_-1.f),0.f,1.f);
+                    }
                 }
                 count_ = 0; drag_ = false; multi_ = false;
             } else {
@@ -112,6 +118,7 @@ public:
                 count_ = count;
                 if (std::hypot(x-start_x_, y-start_y_) > 10) moved_ = true;
                 if (count == 2) {
+                    tap_x_ = x; tap_y_ = y;
                     scroll_ += y-prev_y_;
                     out.wheel = std::clamp(int(scroll_/32), -4, 4);
                     scroll_ -= out.wheel*32;
@@ -126,6 +133,13 @@ public:
                 prev_x_ = x; prev_y_ = y;
             }
         }
+        applyGyro(out, m, aim, dt);
+        out.left = drag_ || (ms < click_until_ && !right_click_);
+        out.right = ms < click_until_ && right_click_;
+        return out;
+    }
+private:
+    void applyGyro(PointerOutput& out, const MotionSample& m, bool aim, float dt) {
         if (gyro_mode == GyroMode::Mouse && aim && m.valid && !out.absolute) {
             const auto deadzone = [](float v) {
                 return !std::isfinite(v) || std::abs(v) < 0.015f ? 0.f : std::clamp(v,-35.f,35.f);
@@ -136,11 +150,7 @@ public:
         rx_=std::clamp(rx_,-512.f,512.f); ry_=std::clamp(ry_,-512.f,512.f);
         out.dx = int(rx_); out.dy = int(ry_);
         rx_ -= out.dx; ry_ -= out.dy;
-        out.left = drag_ || (ms < click_until_ && !right_click_);
-        out.right = ms < click_until_ && right_click_;
-        return out;
     }
-private:
     float video_x_=0, video_y_=0, video_w_=1280, video_h_=720;
     void cancel() { edge_pending_=false; count_=0; drag_=false; multi_=false; click_until_=0; rx_=ry_=scroll_=0; }
     bool edge_pending_=false, edge_moved_=false;
@@ -148,6 +158,7 @@ private:
     uint64_t edge_ms_=0;
     int count_=0, id_=0;
     bool blocked_=false, moved_=false, multi_=false, drag_=false, right_click_=false;
+    float tap_x_=0, tap_y_=0;
     float start_x_=0,start_y_=0,prev_x_=0,prev_y_=0,rx_=0,ry_=0,scroll_=0;
     uint64_t start_ms_=0,last_ms_=0,last_touch_ms_=0,click_until_=0;
 };

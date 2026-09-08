@@ -2,6 +2,7 @@
 
 #include "../common.h"
 #include "button_mapping.h"
+#include "menu_chord_filter.h"
 #include <cstdint>
 
 namespace lunar::input {
@@ -45,6 +46,7 @@ private:
     ButtonMapping button_mapping_ =
         defaultButtonMapping(ButtonMappingProfile::Xbox);
     bool capture_button_acquired_ = false;
+    MenuChordFilter menu_chord_;
 #endif
     bool initialized_ = false;
 #ifdef __SWITCH__
