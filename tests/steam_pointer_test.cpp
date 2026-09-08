@@ -67,5 +67,24 @@ int main() {
     assert(!step({},6150).left); // held Start-button touch cannot leak into Steam
     step(finger(640,600),6200);
     assert(step({},6250).left);
+    p=SteamPointer{}; p.touch_mode=TouchMode::Absolute;
+    p.setVideoSize(960,720);
+    two.x={800,900}; two.y={400,400};
+    step(two,7000); r=step({},7050);
+    assert(r.right && r.absolute && std::abs(r.x-690.f/959.f)<0.0001f);
+    // Lifting fingers separately must retain the two-finger target.
+    p=SteamPointer{}; p.touch_mode=TouchMode::Absolute;
+    step(two,7100); step(finger(800,400),7120); r=step({},7150);
+    assert(r.right && r.absolute && std::abs(r.x-850.f/1279.f)<0.0001f);
+    for (auto mode : {TouchMode::Off, TouchMode::Trackpad, TouchMode::Absolute}) {
+        p=SteamPointer{}; p.touch_mode=mode; p.gyro_mode=GyroMode::Mouse;
+        p.update({},m,true,true,8000);
+        r=p.update(finger(1240,300),m,true,true,8016);
+        assert(r.dx!=0 && !r.left);
+        r=p.update(finger(1240,300),m,true,true,8032);
+        assert(r.dx!=0 && !r.left);
+        r=p.update(finger(1240,300),m,false,true,8048);
+        assert(r.dx==0 && !r.left);
+    }
     std::cout<<"PASS: motion units/axes, tap, pan, drag, right tap, wheel, UI fence, absolute pointer, aim gating, missing samples\n";
 }

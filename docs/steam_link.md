@@ -514,3 +514,27 @@ localization structure, PS/Xbox virtual-button checks, Xbox session ordering,
 DTLS-loop and PPID checks passed. The existing SCTP UDP-drain assertion still
 fails. No new Ryubing run: emulator interaction remains user-operated and the
 Xbox mock does not exercise Steam. This does not replace real-host/Switch testing.
+
+### Menu chord and pointer follow-up
+
+Steam buffers an initial Minus/Plus press for 120 ms to recognize the menu chord
+before forwarding either key. A short standalone tap is preserved as a 40 ms
+pulse; a standalone hold is forwarded after the recognition window. Once the
+chord is seen, both keys remain suppressed until both are released. Xbox and
+PlayStation retain their existing behavior. Press the two keys together: a
+second press after the recognition window cannot undo an already forwarded
+standalone press.
+
+Absolute-mode two-finger taps position the pointer at the two-finger center
+before the right-button event, including staggered finger release and letterboxed
+video coordinates. Edge gesture detection continues gyro mouse updates while
+waiting for a tap/swipe, even when touch mouse input is Off. UI ownership still
+suppresses all physical pointer and motion output.
+
+ASan/UBSan input/gesture regressions cover both menu-key orders, staggered chord
+release, standalone taps/holds, absolute right-click position, letterboxing,
+staggered finger lift, and edge-touch gyro behavior in every touch mode. The
+production UI replay and Steam UI/integration plus PS/Xbox button regressions
+also pass. No new Ryubing smoke run was performed: emulator interaction remains
+user-operated, and the available Xbox mock cannot validate the Steam transport.
+Real Switch/Steam control feel and picture/audio remain device validation items.
