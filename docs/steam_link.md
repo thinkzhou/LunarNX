@@ -538,3 +538,27 @@ production UI replay and Steam UI/integration plus PS/Xbox button regressions
 also pass. No new Ryubing smoke run was performed: emulator interaction remains
 user-operated, and the available Xbox mock cannot validate the Steam transport.
 Real Switch/Steam control feel and picture/audio remain device validation items.
+
+### Mapping-aware menu recognition and Capture hot reload
+
+A complete configured chord containing Minus or Plus bypasses the single-key
+recognition delay. The mapping resolver consumes its component buttons together;
+staggered release suppresses the remaining components until released. This keeps
+the default L + R + Plus Guide shortcut and custom menu-key chords intact. The
+reserved Minus + Plus menu shortcut takes precedence. Standalone keys retain the
+120 ms recognition window, and a release emits a short pulse if no press was
+actually forwarded, even when sampling straddles that deadline.
+
+Reloading mappings now reconciles Capture input ownership: acquire when Capture
+is newly assigned, retain a single lease on repeated reload, and release when it
+is removed or the reader is destroyed. Initialization uses the same path.
+
+`tests/steam_mapping_replay_test.py` executes production default mappings, chord
+resolution and Capture reload/destruction with platform stand-ins under
+ASan/UBSan. It covers default and custom chords, both menu-key variants, menu
+precedence, staggered releases, repeat actions and Capture ownership transitions.
+The router regression covers releases before/at/after 120 ms, including delayed
+sampling. These tests run in CI alongside pointer and UI handler replays. They
+are not rendered UI or real Switch/Steam verification; no new Ryubing run was
+performed because emulator interaction remains user-operated and the available
+Xbox mock does not exercise Steam.
