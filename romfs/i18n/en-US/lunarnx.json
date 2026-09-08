@@ -250,7 +250,7 @@
   "ps_title": "PlayStation button mapping",
   "detail": "Choose a remote function, then press one Switch button or a button combination. This mapping only affects streams for the selected platform. Minus + Plus remains reserved for LunarNX's safe disconnect shortcut.",
   "capture_title": "Press a Switch button or combination",
-  "capture_hint": "Release the buttons to save",
+  "capture_hint": "Release buttons to save. Press Minus + Plus together to cancel without saving.",
   "wait_release": "Release all buttons...",
   "press_buttons": "Ready for input",
   "reserved_chord": "Minus + Plus is reserved for safe disconnect. Try another combination.",
@@ -564,6 +564,7 @@
   "steam_desc": "Steam Remote Play on your local network"
  },
   "steam_ui": {
+  "disconnected": "Steam connection ended. Check your PC and network, then select the host and Start streaming to reconnect.",
         "audio_missing": "No Steam audio received. Check host audio capture; reconnect if sound is missing.",
         "audio_decode": "Steam audio is not decoding. Reconnect to retry audio.",
         "audio_output": "Steam audio output is failing. Reconnect to retry audio.",

@@ -174,6 +174,8 @@ brls::View* ButtonMappingActivity::createContentView() {
         brls::getStr("lunarnx/button_mapping/capture_hint"), 14);
     capture_hint->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     capture_hint->setMarginTop(20);
+    capture_hint->setSingleLine(false);
+    capture_hint->setIsWrapping(true);
     capture_content_->addView(capture_hint);
 
     refreshRows();
@@ -206,6 +208,11 @@ void ButtonMappingActivity::pollCaptureInput() {
     if (input::isCaptureButtonPressed()) {
         buttons |= input::kButtonMappingCapture;
     }
+    const uint64_t cancel_chord = HidNpadButton_Minus | HidNpadButton_Plus;
+    if (!waiting_for_release_ && (buttons & cancel_chord) == cancel_chord) {
+        cancelCapture();
+        return;
+    }
     if (waiting_for_release_) {
         if (buttons == 0) {
             waiting_for_release_ = false;
@@ -224,6 +231,16 @@ void ButtonMappingActivity::pollCaptureInput() {
     if (saw_button_ && ++release_frames_ >= kCaptureReleaseFrames) {
         finishCapture();
     }
+}
+
+void ButtonMappingActivity::cancelCapture() {
+    capturing_ = false;
+    peak_buttons_ = 0;
+    saw_button_ = false;
+    release_frames_ = 0;
+    capture_content_->setVisibility(brls::Visibility::GONE);
+    mapping_content_->setVisibility(brls::Visibility::VISIBLE);
+    if (capture_index_ < rows_.size()) brls::Application::giveFocus(rows_[capture_index_]);
 }
 
 void ButtonMappingActivity::finishCapture() {

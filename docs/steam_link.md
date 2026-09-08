@@ -489,3 +489,28 @@ flush failure preservation. These tests are not a rendered Borealis UI run.
 No new Ryubing smoke run was performed: emulator interaction remains user-operated
 and the available Xbox mock does not validate Steam. Docked interaction, visual
 layout with many hosts and real Steam picture/audio still require device testing.
+
+### Menu release, recording cancellation and disconnect feedback
+
+Steam waits for released buttons/triggers and centered sticks after closing its
+menu, leaving settings or recovering foreground input. Small stick drift is
+accepted. Repeated resume calls cannot remove this fence, and a neutral sample
+from an older UI visit cannot unlock a newer visit. Explicit Steam menu commands
+still send their virtual Home pulse. Xbox/PlayStation keep their existing routing
+contract because they inject their virtual buttons before routing.
+
+During mapping capture, press Minus + Plus together to cancel without changing
+or saving the mapping. B remains assignable. The capture instructions explain the
+shortcut in all three locales. An unexpected session disconnect now displays a
+localized notice directing the user to check the PC/network, select the host and
+Start streaming again; authorization is retained within the current client.
+
+Validation: final combined Docker Switch build and BSS guard passed (20.4 MiB).
+ASan/UBSan input routing tests cover held buttons/triggers/sticks, repeated UI
+transitions, drift and unchanged legacy routing. Production handler replay covers
+cancellation through the polling handler, unchanged saved mapping and assigning B.
+Steam HID/client and runtime replays, pointer/settings regressions, UI contracts,
+localization structure, PS/Xbox virtual-button checks, Xbox session ordering,
+DTLS-loop and PPID checks passed. The existing SCTP UDP-drain assertion still
+fails. No new Ryubing run: emulator interaction remains user-operated and the
+Xbox mock does not exercise Steam. This does not replace real-host/Switch testing.

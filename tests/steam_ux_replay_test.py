@@ -13,6 +13,8 @@ def extract(text,sig):
 source=(r/'src/ui/stream_view.cpp').read_text()
 method=extract(source,'void StreamView::handleWindowFocusChanged(bool focused)')
 method += extract((r/'src/ui/button_mapping_activity.cpp').read_text(), 'void ButtonMappingActivity::finishCapture()')
+method += extract((r/'src/ui/button_mapping_activity.cpp').read_text(), 'void ButtonMappingActivity::cancelCapture()')
+method += extract((r/'src/ui/button_mapping_activity.cpp').read_text(), 'void ButtonMappingActivity::pollCaptureInput()')
 pre=r'''
 #include <atomic>
 #include <array>
@@ -40,7 +42,15 @@ struct Application {
 };
 }
 constexpr uint64_t HidNpadButton_Minus=1, HidNpadButton_Plus=2;
+constexpr int kCaptureReleaseFrames=6;
+constexpr uint64_t kSupportedButtons=255;
+uint64_t physical_buttons=0;
+void padUpdate(int*) {}
+uint64_t padGetButtons(int*) { return physical_buttons; }
 namespace input {
+ constexpr uint64_t kButtonMappingCapture=128;
+ bool isCaptureButtonPressed() {return false;}
+ const char* formatHidButtonMask(uint64_t) {return "buttons";}
  bool writes_succeed=false;
  bool saveButtonMapping(int,const std::array<uint64_t,2>&) { return writes_succeed; }
 }
@@ -50,7 +60,8 @@ struct Element {
 };
 struct ButtonMappingActivity {
  std::array<uint64_t,2> mapping_{4,8};
- int profile_=0, release_frames_=0, refreshed=0;
+ int capture_pad_=0, profile_=0, release_frames_=0, refreshed=0;
+ bool waiting_for_release_=false;
  size_t capture_index_=0;
  uint64_t peak_buttons_=16;
  bool saw_button_=true, capturing_=true;
@@ -59,6 +70,8 @@ struct ButtonMappingActivity {
  std::vector<Element*> rows_{&element};
  void refreshRows() {++refreshed;}
  void finishCapture();
+ void cancelCapture();
+ void pollCaptureInput();
 };
 struct Runtime {
  bool suspended=false;
@@ -89,6 +102,18 @@ int main() {
  assert(mapping.mapping_[0]==16 && !mapping.capturing_);
  std::cout << "PASS: mapping save failure preserves old mapping, remains navigable and retries successfully\n";
 
+ mapping.capturing_=true;
+ const auto saved=mapping.mapping_;
+ physical_buttons=HidNpadButton_Minus | HidNpadButton_Plus;
+ mapping.pollCaptureInput();
+ assert(!mapping.capturing_ && mapping.mapping_==saved && mapping.peak_buttons_==0);
+ std::cout << "PASS: cancel preserves saved mapping\n";
+ mapping.capturing_=true; mapping.waiting_for_release_=true;
+ physical_buttons=0; mapping.pollCaptureInput();
+ physical_buttons=4; mapping.pollCaptureInput(); // B remains assignable.
+ physical_buttons=0;
+ for(int i=0;i<kCaptureReleaseFrames;++i) mapping.pollCaptureInput();
+ assert(!mapping.capturing_ && mapping.mapping_[0]==4);
  StreamView view;
  view.handleWindowFocusChanged(false);
  view.handleWindowFocusChanged(true);
