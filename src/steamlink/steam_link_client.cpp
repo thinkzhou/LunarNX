@@ -103,6 +103,18 @@ bool loadIdentity(SteamLinkClient::Identity* identity) {
     return valid && identity->device_id != 0;
 }
 
+// ihslib owns one process-wide timer service. Async page cleanup can overlap
+// the next page's client, so each native client holds a lease until destruction.
+std::mutex ihs_runtime_mutex;
+unsigned ihs_runtime_users = 0;
+void acquireIhsRuntime() {
+    std::lock_guard<std::mutex> lock(ihs_runtime_mutex);
+    if (ihs_runtime_users++ == 0) IHS_Init();
+}
+void releaseIhsRuntime() {
+    std::lock_guard<std::mutex> lock(ihs_runtime_mutex);
+    if (--ihs_runtime_users == 0) IHS_Quit();
+}
 } // namespace
 
 SteamLinkClient::SteamLinkClient() {
@@ -128,7 +140,7 @@ SteamLinkClient::~SteamLinkClient() {
         client_ = nullptr;
     }
     if (ihs_initialized_) {
-        IHS_Quit();
+        releaseIhsRuntime();
         ihs_initialized_ = false;
     }
 }
@@ -148,7 +160,7 @@ bool SteamLinkClient::ensureClient() {
         last_error_ = "Steam Link device identity is unavailable";
         return false;
     }
-    IHS_Init();
+    acquireIhsRuntime();
     ihs_initialized_ = true;
     IHS_ClientConfig config{};
     config.deviceId = identity_.device_id;
@@ -157,7 +169,7 @@ bool SteamLinkClient::ensureClient() {
     client_ = IHS_ClientCreate(&config);
     if (!client_) {
         last_error_ = "IHS client allocation failed";
-        IHS_Quit();
+        releaseIhsRuntime();
         ihs_initialized_ = false;
         return false;
     }

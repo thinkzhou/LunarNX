@@ -1,4 +1,5 @@
 #pragma once
+#include "media_clock.h"
 
 #ifdef __SWITCH__
 
@@ -108,7 +109,6 @@ private:
     bool initializeSession(const SteamLinkStreamInfo& info);
     void setState(app::StreamState state, const std::string& detail = {});
     void setLastError(std::string error);
-    uint64_t mediaTimestampNs();
 
     std::shared_ptr<SteamLinkClient> client_;
     SteamLinkHost host_;
@@ -143,6 +143,7 @@ private:
     std::atomic<AudioProgressMonitor::Status> audio_warning_{AudioProgressMonitor::Status::Healthy};
     std::atomic<bool> audio_unsupported_{false};
     bool presentation_suspended_ = false;
+    std::atomic<bool> requested_suspension_{false};
     uint64_t status_log_at_ns_ = 0;
     bool logged_hid_open_ = false;
     InputAvailabilityWatchdog input_availability_;
@@ -153,10 +154,10 @@ private:
     std::vector<uint8_t> video_parameters_;
     std::atomic<bool> session_connected_{false};
     std::atomic<bool> guide_requested_{false};
-    std::atomic<uint64_t> media_epoch_ns_{0};
     std::atomic<uint32_t> video_samples_{0};
     std::atomic<uint32_t> audio_samples_{0};
-    std::atomic<uint16_t> audio_sequence_{0};
+    MediaClock media_clock_;
+    std::mutex operation_mutex_; // Serialize start/stop without blocking UI during network waits.
     mutable std::mutex lifecycle_mutex_;
     mutable std::mutex error_mutex_;
     std::string last_error_;

@@ -5,6 +5,7 @@
 #include "../../vendor/ihslib/src/session/session.c"
 #undef IHS_SessionDestroy
 #undef IHS_SessionConnect
+#include "ihs_streaming_support.h"
 
 static void LunarSessionInitialized(IHS_Base *base, void *context) {
     // The POSIX socket defaults to a blocking receive. Unlike the discovery
@@ -15,10 +16,20 @@ static void LunarSessionInitialized(IHS_Base *base, void *context) {
     SessionInitialized(base, context);
 }
 
+static void LunarSessionFinalized(IHS_Base *base, void *context) {
+    // Receive errors can exit without a discovery disconnect. Wake the sender
+    // before joining it, using the same timer -> base order as disconnect.
+    IHS_Session *session = (IHS_Session *) base;
+    LunarIHSTimerLock(session->timers);
+    IHS_SessionInterrupt(session);
+    LunarIHSTimerUnlock(session->timers);
+    SessionFinalized(base, context);
+}
+
 bool IHS_SessionConnect(IHS_Session *session) {
     static const IHS_BaseRunCallbacks callbacks = {
         .initialized = LunarSessionInitialized,
-        .finalized = SessionFinalized,
+        .finalized = LunarSessionFinalized,
     };
     IHS_BaseSetRunCallbacks(&session->base, &callbacks, NULL);
     return IHS_OriginalSessionConnect(session);

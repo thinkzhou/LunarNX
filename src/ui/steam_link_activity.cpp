@@ -194,6 +194,7 @@ void SteamLinkPairingActivity::startStream() {
                     error = "Unexpected Steam stream exception";
                     lunar::persistentEventLog("steam-link-ui", "stream unknown exception");
                 }
+                if (!ok) runtime->stopStream(false); // Drain partial startup on the worker.
                 brls::sync([this, alive, runtime, ok, error]() {
                     if (!alive->load()) {
                         if (ok) lunar::platform::startNetworkWorker(

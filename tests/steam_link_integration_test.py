@@ -35,8 +35,7 @@ def main() -> None:
     assert "audio start codec" in desktop_probe
     assert "--pin SECURITY_PIN" in desktop_probe
     assert "--pair-code PAIRING_CODE" in desktop_probe
-    assert "session/channels/video/ch_data_video.c" in desktop_build
-    for override in ("ihs_discovery.c", "ihs_negotiation.c", "ihs_timer.c"):
+    for override in ("ihs_discovery.c", "ihs_negotiation.c", "ihs_timer.c", "ihs_client.c", "ihs_channel.c", "ihs_data.c", "ihs_data_audio.c", "ihs_data_video.c"):
         assert f"src/steamlink/{override}" in makefile
         assert f"src/steamlink/{override}" in desktop_build
     controller = read("src/steamlink/steam_link_stream_controller.cpp")

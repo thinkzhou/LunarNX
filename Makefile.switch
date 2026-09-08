@@ -222,7 +222,7 @@ C_SRCS += vendor/ihslib/src/base.c vendor/ihslib/src/crc32.c vendor/ihslib/src/c
     vendor/ihslib/src/ihs_enumeration.c vendor/ihslib/src/ihs_enumeration_array.c \
     vendor/ihslib/src/ihs_enumeration_ll.c vendor/ihslib/src/ihs_ip.c \
     vendor/ihslib/src/ihs_queue.c src/steamlink/ihs_timer.c \
-    src/steamlink/ihs_authorization.c vendor/ihslib/src/client/client.c \
+    src/steamlink/ihs_authorization.c src/steamlink/ihs_client.c \
     vendor/ihslib/src/client/discovery.c src/steamlink/ihs_streaming.c \
     src/steamlink/ihs_hid_device.c vendor/ihslib/src/hid/provider.c \
     src/steamlink/ihs_hid_manager.c vendor/ihslib/src/hid/report.c \
@@ -230,7 +230,7 @@ C_SRCS += vendor/ihslib/src/base.c vendor/ihslib/src/crc32.c vendor/ihslib/src/c
     vendor/ihslib/src/session/frame.c vendor/ihslib/src/session/window.c \
     vendor/ihslib/src/session/frame_crypto.c vendor/ihslib/src/session/frame_stats.c \
     vendor/ihslib/src/session/callbacks.c vendor/ihslib/src/session/retransmission.c \
-    vendor/ihslib/src/session/channels/channel.c \
+    src/steamlink/ihs_channel.c \
     src/steamlink/ihs_discovery.c \
     vendor/ihslib/src/session/channels/ch_control.c \
     vendor/ihslib/src/session/channels/ch_control_authentication.c \
@@ -239,8 +239,8 @@ C_SRCS += vendor/ihslib/src/base.c vendor/ihslib/src/crc32.c vendor/ihslib/src/c
     vendor/ihslib/src/session/channels/ch_control_audio.c \
     vendor/ihslib/src/session/channels/ch_control_microphone.c \
     vendor/ihslib/src/session/channels/ch_control_video.c \
-    vendor/ihslib/src/session/channels/ch_data.c \
-    vendor/ihslib/src/session/channels/ch_data_audio.c \
+    src/steamlink/ihs_data.c \
+    src/steamlink/ihs_data_audio.c \
     vendor/ihslib/src/session/channels/ch_data_microphone.c \
     vendor/ihslib/src/session/channels/ch_stats.c \
     vendor/ihslib/src/session/channels/control/control_cursor.c \
@@ -251,7 +251,7 @@ C_SRCS += vendor/ihslib/src/base.c vendor/ihslib/src/crc32.c vendor/ihslib/src/c
     vendor/ihslib/src/session/channels/video/frame_h264.c \
     vendor/ihslib/src/session/channels/video/frame_hevc.c \
     vendor/ihslib/src/session/channels/video/partial_frames.c \
-    vendor/ihslib/src/session/channels/video/ch_data_video.c \
+    src/steamlink/ihs_data_video.c \
     vendor/ihslib/src/crypto/impl_mbedtls.c \
     vendor/ihslib/src/platforms/ihs_ip_posix.c \
     vendor/ihslib/src/platforms/ihs_udp_posix.c \

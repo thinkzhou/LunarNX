@@ -1,6 +1,8 @@
 #ifdef __SWITCH__
 
 #include "steam_link_stream_controller.h"
+#include "ihs_media_metadata.h"
+#include "../stream/video_renderer.h"
 
 #include "../diagnostics.h"
 #include "../stream/video_codec.h"
@@ -84,21 +86,15 @@ void SteamLinkStreamController::setState(app::StreamState state, const std::stri
     if (state == app::StreamState::Error && !detail.empty()) setLastError(detail);
 }
 
-uint64_t SteamLinkStreamController::mediaTimestampNs() {
-    const uint64_t now = steadyNowNs();
-    uint64_t epoch = media_epoch_ns_.load(std::memory_order_acquire);
-    if (epoch == 0 && media_epoch_ns_.compare_exchange_strong(
-            epoch, now, std::memory_order_acq_rel, std::memory_order_acquire)) {
-        epoch = now;
-        lunar::diagnosticLog("steam-media", "media clock anchored");
-    }
-    return now >= epoch ? now - epoch : 0;
-}
-
 bool SteamLinkStreamController::startStream() {
-    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    std::lock_guard<std::mutex> operation(operation_mutex_);
+    std::unique_lock<std::mutex> lock(lifecycle_mutex_);
     if (state_.load() != app::StreamState::Idle) {
         setLastError("Steam Link stream is already active");
+        return false;
+    }
+    if (stream::VideoRenderer::restartRequired()) {
+        setState(app::StreamState::Error, "GPU recovery requires restarting LunarNX");
         return false;
     }
     if (!client_) {
@@ -108,7 +104,6 @@ bool SteamLinkStreamController::startStream() {
     if (cancellation_.requested()) return false;
     session_connected_ = false;
     disconnect_gate_.reset();
-    media_epoch_ns_ = 0;
     video_samples_ = 0;
     video_recovery_.reset();
     video_progress_.reset();
@@ -122,7 +117,7 @@ bool SteamLinkStreamController::startStream() {
     audio_status_ = AudioProgressMonitor::Status::Healthy;
     audio_warning_ = AudioProgressMonitor::Status::Healthy;
     audio_unsupported_ = false;
-    audio_sequence_ = 0;
+    media_clock_.reset();
     rumble_generation_ = 0;
     guide_until_ns_ = 0;
     hid_announced_ = false;
@@ -139,6 +134,7 @@ bool SteamLinkStreamController::startStream() {
         "steam-stream", "start host=%s profile=%dx%d security_pin_len=%zu",
         host_.address.c_str(), width_, height_, security_pin_.size());
 
+    lock.unlock(); // No session/media exists yet; UI settings and drawing remain responsive.
     auto wait = std::make_shared<StreamWaitState>();
     if (!client_->requestStreaming(host_, security_pin_, width_, height_,
             [wait](bool success, const SteamLinkStreamInfo& info,
@@ -189,6 +185,8 @@ bool SteamLinkStreamController::startStream() {
         }
     }
 
+    lock.lock();
+    if (cancellation_.requested()) return false;
     if (!initializeMedia()) {
         setState(app::StreamState::Error, "Failed to initialize Steam media pipeline");
         return false;
@@ -315,6 +313,7 @@ void SteamLinkStreamController::requestStop() {
 }
 
 void SteamLinkStreamController::stopStream(bool set_disconnected) {
+    std::lock_guard<std::mutex> operation(operation_mutex_);
     std::lock_guard<std::mutex> lock(lifecycle_mutex_);
     // update() never waits for this lock, so joining while holding it is safe.
     input_pump_.stop();
@@ -364,6 +363,13 @@ bool SteamLinkStreamController::resumeAfterForeground(CancelCallback cancel) {
 void SteamLinkStreamController::update() {
     std::unique_lock<std::mutex> lock(lifecycle_mutex_, std::try_to_lock);
     if (!lock.owns_lock() || cancellation_.requested()) return;
+    const bool suspended = requested_suspension_.load();
+    if (presentation_suspended_ != suspended) {
+        presentation_suspended_ = suspended;
+        video_progress_.reset();
+        audio_progress_.reset();
+        if (media_) media_->setVideoPresentationSuspended(suspended);
+    }
     if (session_connected_.load() && media_ && media_->successfulVideoPresentCount() > 0) {
         auto expected = app::StreamState::Connecting;
         if (state_.compare_exchange_strong(expected, app::StreamState::Streaming))
@@ -519,15 +525,13 @@ void SteamLinkStreamController::update() {
 }
 
 void SteamLinkStreamController::presentVideoFrame() {
-    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    std::unique_lock<std::mutex> lock(lifecycle_mutex_, std::try_to_lock);
+    if (!lock.owns_lock()) return;
     if (media_) media_->presentVideoFrame();
 }
 
 void SteamLinkStreamController::setVideoPresentationSuspended(bool suspended) {
-    std::lock_guard<std::mutex> lock(lifecycle_mutex_);
-    presentation_suspended_ = suspended;
-    video_progress_.reset(); // resume gets a fresh deadline even if updates were paused
-    if (media_) media_->setVideoPresentationSuspended(suspended);
+    requested_suspension_.store(suspended);
 }
 
 void SteamLinkStreamController::onSessionInitialized(IHS_Session*, void* context) {
@@ -582,13 +586,14 @@ int SteamLinkStreamController::onAudioStart(IHS_Session*, const IHS_StreamAudioC
                          static_cast<int>(config->codec), config->frequency,
                          config->channels, config->codecDataLen);
     self->audio_unsupported_ = false;
+    if (self->media_) self->media_->prepareForNewAudioSource();
     if (config->codec != IHS_StreamAudioCodecOpus || config->frequency != 48000 ||
         config->channels != 2) {
         self->audio_unsupported_ = true;
         lunar::persistentEventLog("steam-audio", "unsupported format codec=%d rate=%u channels=%u",
                                   static_cast<int>(config->codec), config->frequency,
                                   config->channels);
-        return -1;
+        return 0; // Keep video/input alive; discard this unsupported audio stream.
     }
     return 0;
 }
@@ -596,12 +601,13 @@ int SteamLinkStreamController::onAudioStart(IHS_Session*, const IHS_StreamAudioC
 int SteamLinkStreamController::onAudioSubmit(IHS_Session*, IHS_Buffer* data, void* context) {
     auto* self = static_cast<SteamLinkStreamController*>(context);
     if (!self || !self->media_ || !data || data->size == 0) return -1;
+    if (self->audio_unsupported_.load()) return 0;
     const uint32_t count = self->audio_samples_.fetch_add(1) + 1;
-    const uint64_t timestamp = self->mediaTimestampNs();
+    const uint64_t timestamp = self->media_clock_.map(LunarIHSAudioTimestamp());
     self->media_->recordIncomingAudioPacket();
     self->media_activity_.received(steadyNowNs());
     const bool queued = self->media_->decodeAudioPacket(
-        IHS_BufferPointer(data), data->size, self->audio_sequence_++, timestamp);
+        IHS_BufferPointer(data), data->size, LunarIHSAudioSequence(), timestamp);
     if (count == 1 || count % 500 == 0) {
         lunar::diagnosticLog("steam-audio", "submit count=%u bytes=%zu queued=%d",
                              count, data->size, queued ? 1 : 0);
@@ -638,7 +644,7 @@ IHS_StreamVideoSubmitResult SteamLinkStreamController::onVideoSubmit(
     }
     const uint32_t count = self->video_samples_.fetch_add(1) + 1;
     self->media_activity_.received(steadyNowNs());
-    const uint64_t timestamp = self->mediaTimestampNs();
+    const uint64_t timestamp = self->media_clock_.map(LunarIHSVideoTimestamp());
     self->media_->recordIncomingVideoSample(
         data->size, timestamp, 0);
     // Keep parameter sets and IDR in a single queue item: the low-latency
