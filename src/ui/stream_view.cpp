@@ -779,6 +779,9 @@ void StreamView::stopAndReturn() {
     if (state == app::StreamState::Error && runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
         const auto reason = std::static_pointer_cast<steamlink::SteamLinkStreamController>(runtime_)->lastError();
         if (!reason.empty()) brls::Application::notify(reason);
+    } else if (state == app::StreamState::Disconnected &&
+               runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+        brls::Application::notify(brls::getStr("lunarnx/steam_ui/disconnected"));
     }
 #endif
     const bool report_disconnect =

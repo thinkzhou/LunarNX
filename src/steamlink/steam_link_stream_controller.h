@@ -161,7 +161,7 @@ private:
     mutable std::mutex lifecycle_mutex_;
     mutable std::mutex error_mutex_;
     std::string last_error_;
-    input::StreamInputRouter input_router_;
+    input::StreamInputRouter input_router_{true};
     stream::PerfStats perf_;
 
 };

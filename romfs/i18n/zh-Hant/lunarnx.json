@@ -250,7 +250,7 @@
   "ps_title": "PlayStation 按鍵映射",
   "detail": "選擇一個遠端功能，再按下一個 Switch 按鍵或按鍵組合。映射只影響所選平台的串流；Minus + Plus 始終用於 LunarNX 安全中斷串流。",
   "capture_title": "按下 Switch 按鍵或組合鍵",
-  "capture_hint": "放開按鍵後自動儲存",
+  "capture_hint": "放開按鍵後自動儲存。按 Minus + Plus 取消錄製，保留原映射。",
   "wait_release": "請先放開所有按鍵...",
   "press_buttons": "可以開始輸入",
   "reserved_chord": "Minus + Plus 是安全中斷串流的保留快捷鍵，請使用其他組合。",
@@ -564,6 +564,7 @@
   "steam_desc": "區域網路 Steam Remote Play"
  },
   "steam_ui": {
+  "disconnected": "Steam 連線已中斷。請檢查電腦和網路，選擇主機並點擊開始串流以重新連線。",
         "audio_missing": "未收到 Steam 音訊。若遊戲無聲，請檢查電腦音訊擷取並重新連線。",
         "audio_decode": "Steam 音訊解碼未恢復。請重新連線以重試音訊。",
         "audio_output": "Steam 音訊輸出失敗。請重新連線以重試音訊。",
