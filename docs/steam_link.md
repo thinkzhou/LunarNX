@@ -453,3 +453,39 @@ No new emulator smoke test was performed: interaction remains user-operated,
 and the Xbox mock cannot exercise this Steam transport. These local replays do
 not verify physical audio output, actual host timestamp behavior, real Switch
 GPU fault recovery or prolonged Steam streaming; those remain hardware checks.
+
+### UI recovery and navigation follow-up
+
+Steam streams now open the LunarNX menu with Minus + Plus, including in docked
+mode. The chord is reserved from game input; B closes the menu and its Disconnect
+action keeps confirmation. Xbox/PlayStation retain their existing exit shortcut.
+A normal short tap in the right-edge gesture area is deferred until release,
+then delivered as a mouse click (with its position in Absolute mode). A leftward
+menu swipe never produces a host click. Edge drags remain reserved for gestures.
+
+Repeated foreground events coalesce recovery without retaining stale background
+state. Completion respects current focus and an open settings page before
+resuming presentation/input. The playback page shows a waiting-for-video message
+until streaming starts, and hides that message while its menu is open. The host
+list is scrollable independently of its toolbar.
+
+A successful authorization refreshes the host before enabling Start. Authorized
+endpoints remain available for a direct streaming attempt after discovery expiry;
+new discovery replies update them and Unauthorized clears the cached endpoint.
+This cache belongs to the current client instance and is not persisted.
+
+Button-mapping edits and Reset only update the displayed mapping after a
+successful save. Saves use a flushed temporary file and recoverable replacement;
+write/close failures preserve the previous config and show an error. Touch/gyro
+settings still have an explicit Save action. The discard label and wrapping help
+now explicitly distinguish those unsaved changes from independently auto-saved
+button mappings; discard does not roll back mappings.
+
+`tests/steam_ux_replay_test.py` executes the production foreground and mapping
+handlers with controlled worker scheduling and injected save failure under
+ASan/UBSan. Pointer and production-client tests cover edge taps versus swipes and
+pairing success/stream requests after discovery expiry. Settings-file tests cover
+flush failure preservation. These tests are not a rendered Borealis UI run.
+No new Ryubing smoke run was performed: emulator interaction remains user-operated
+and the available Xbox mock does not validate Steam. Docked interaction, visual
+layout with many hosts and real Steam picture/audio still require device testing.

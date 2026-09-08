@@ -300,11 +300,15 @@ brls::View* SteamLinkActivity::createContentView() {
             brls::Application::notify(brls::getStr("lunarnx/steam_ui/manual_search"));
         }, brls::getStr("lunarnx/steam_ui/manual_help"), "192.168.1.10", 15, 0);
     root->addView(manual);
+    auto* hosts_scroll = new brls::ScrollingFrame();
+    hosts_scroll->setWidth(920);
+    hosts_scroll->setGrow(1.0f);
+    hosts_scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
     host_list_ = new brls::Box(brls::Axis::COLUMN);
     host_list_->setWidth(920);
-    host_list_->setGrow(1.0f);
     host_list_->setAlignItems(brls::AlignItems::CENTER);
-    root->addView(host_list_);
+    hosts_scroll->setContentView(host_list_);
+    root->addView(hosts_scroll);
     return root;
 }
 

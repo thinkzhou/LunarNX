@@ -286,7 +286,8 @@
   "share": "Share",
   "options": "Options",
   "ps": "PS",
-  "touchpad": "Touchpad Click"
+  "touchpad": "Touchpad Click",
+  "save_failed": "Could not save the mapping. Check SD card space and try again."
  },
  "loading": {
   "refreshing_credentials": "Refreshing Xbox credentials...",
@@ -573,10 +574,10 @@
         "manual_help": "Enter the computer’s LAN IPv4 address. Steam Remote Play must be enabled.",
         "search_help": "No response yet. Check Remote Play, network and firewall, or enter the host IP.",
         "select_host": "Select a computer",
-    "discard": "Discard and return",
+    "discard": "Discard touch/gyro changes",
    "settings_title": "Steam streaming settings",
    "input_title": "Steam input",
-   "settings_help": "Saved for Steam only. In-stream changes apply when you return to the game.",
+   "settings_help": "Touch and gyro changes apply when saved. Button mappings on the separate page save immediately; returning here does not undo them.",
    "touch": "Touchscreen mouse",
    "gyro": "Motion control",
    "off": "Off",
@@ -596,7 +597,10 @@
    "requesting": "Requesting Steam stream…",
    "stream_failed": "Steam streaming failed.",
    "worker_failed": "Could not start the streaming worker.",
-   "paired": "Paired"
+   "paired": "Paired",
+  "waiting_video": "Waiting for Steam video…\nPress − and + together for the menu or disconnect.",
+  "menu_hint": "Press − and + together, or swipe left from the right edge, to open. Press B to close.",
+  "menu_controls": "− + Menu   Right-edge swipe: Menu"
  },
  "steam_link": {
   "title": "Steam Link",

@@ -133,11 +133,14 @@ brls::View* ButtonMappingActivity::createContentView() {
     styleSecondaryButton(reset);
     reset->setMarginTop(24);
     reset->registerClickAction([this](brls::View*) -> bool {
-        mapping_ = input::defaultButtonMapping(profile_);
-        if (input::saveButtonMapping(profile_, mapping_)) {
+        const auto candidate = input::defaultButtonMapping(profile_);
+        if (input::saveButtonMapping(profile_, candidate)) {
+            mapping_ = candidate;
             refreshRows();
             brls::Application::notify(
                 brls::getStr("lunarnx/button_mapping/reset_done"));
+        } else {
+            brls::Application::notify(brls::getStr("lunarnx/button_mapping/save_failed"));
         }
         return true;
     });
@@ -233,8 +236,13 @@ void ButtonMappingActivity::finishCapture() {
             brls::getStr("lunarnx/button_mapping/reserved_chord"));
         return;
     }
-    mapping_[capture_index_] = peak_buttons_;
-    input::saveButtonMapping(profile_, mapping_);
+    auto candidate = mapping_;
+    candidate[capture_index_] = peak_buttons_;
+    if (!input::saveButtonMapping(profile_, candidate)) {
+        brls::Application::notify(brls::getStr("lunarnx/button_mapping/save_failed"));
+    } else {
+        mapping_ = candidate;
+    }
     capturing_ = false;
     capture_content_->setVisibility(brls::Visibility::GONE);
     mapping_content_->setVisibility(brls::Visibility::VISIBLE);

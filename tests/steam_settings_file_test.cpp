@@ -4,6 +4,11 @@
 #include <fstream>
 #include <iostream>
 
+static int failedFlush(FILE* file) {
+    std::fclose(file);
+    errno = ENOSPC;
+    return EOF;
+}
 static bool failCommit = false;
 static bool failRestore = false;
 static int switchRename(const char* from, const char* to) {
@@ -48,5 +53,9 @@ int main(int argc, char** argv) {
     }
     assert(!lunar::steamlink::commitSettingsFile(tmp, path, switchRename));
     assert(read(path) == "repeat"); // missing temporary file preserves current settings
+    assert(!lunar::common::writeSettingsText(path, "not committed", failedFlush));
+    assert(read(path) == "repeat");
+    assert(lunar::common::writeSettingsText(path, "committed"));
+    assert(read(path) == "committed");
     std::cout << "PASS: first/repeated saves, no-overwrite rename, failed commit/restore, backup recovery\n";
 }

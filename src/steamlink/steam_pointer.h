@@ -55,10 +55,32 @@ public:
         }
         if (t.valid) last_touch_ms_ = ms;
         if (!t.valid && ms-last_touch_ms_ > 100) { blocked_ = true; cancel(); }
-        // Match StreamView's 96px right-edge menu gesture. A touch starting
-        // here belongs entirely to the UI, even before the menu opens.
-        if (t.valid && t.count>0 && !count_ && t.x[0]>=1184) {
-            blocked_=true; cancel();
+        // Reserve a potential edge swipe without discarding an ordinary tap.
+        // No host event is sent until we can distinguish tap from menu gesture.
+        if (t.valid && t.count > 0 && !count_ && !edge_pending_ && !blocked_ && t.x[0] >= 1184) {
+            edge_pending_ = true; edge_moved_ = false;
+            edge_x_ = t.x[0]; edge_y_ = t.y[0]; edge_ms_ = ms;
+        }
+        if (edge_pending_) {
+            if (t.valid && t.count > 0) {
+                if (t.count != 1 || std::hypot(float(t.x[0]-edge_x_), float(t.y[0]-edge_y_)) > 10)
+                    edge_moved_ = true;
+                if (t.x[0]-edge_x_ <= -120) { blocked_=true; cancel(); }
+            } else if (t.valid) {
+                edge_pending_ = false;
+                const bool inside = edge_x_ >= video_x_ && edge_x_ < video_x_+video_w_ &&
+                    edge_y_ >= video_y_ && edge_y_ < video_y_+video_h_;
+                if (!edge_moved_ && ms-edge_ms_ < 300 && touch_mode != TouchMode::Off &&
+                    (touch_mode != TouchMode::Absolute || inside)) {
+                    click_until_ = ms+40; right_click_ = false; out.left = true;
+                    if (touch_mode == TouchMode::Absolute) {
+                        out.absolute = true;
+                        out.x = std::clamp((edge_x_-video_x_)/std::max(1.f,video_w_-1.f),0.f,1.f);
+                        out.y = std::clamp((edge_y_-video_y_)/std::max(1.f,video_h_-1.f),0.f,1.f);
+                    }
+                }
+            }
+            return out;
         }
         if (touch_mode == TouchMode::Absolute && t.valid && t.count>0 && !count_ &&
             (t.x[0]<video_x_ || t.x[0]>=video_x_+video_w_ ||
@@ -120,7 +142,10 @@ public:
     }
 private:
     float video_x_=0, video_y_=0, video_w_=1280, video_h_=720;
-    void cancel() { count_=0; drag_=false; multi_=false; click_until_=0; rx_=ry_=scroll_=0; }
+    void cancel() { edge_pending_=false; count_=0; drag_=false; multi_=false; click_until_=0; rx_=ry_=scroll_=0; }
+    bool edge_pending_=false, edge_moved_=false;
+    int edge_x_=0, edge_y_=0;
+    uint64_t edge_ms_=0;
     int count_=0, id_=0;
     bool blocked_=false, moved_=false, multi_=false, drag_=false, right_click_=false;
     float start_x_=0,start_y_=0,prev_x_=0,prev_y_=0,rx_=0,ry_=0,scroll_=0;

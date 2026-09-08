@@ -63,6 +63,23 @@ int main() {
     // Offline is not a revocation: a reappearing host can reconnect.
     client.updateHost(a);
     assert(client.isAuthorized(1) && visible.size() == 2);
+    client.last_seen_ms_[1] = 0;
+    client.emitHosts();
+    assert(!client.findHost(1, &result));
+    bool success_saw_host = false;
+    client.authorization_callback_ = [&](bool ok, const std::string&) {
+        success_saw_host = ok && client.findHost(1, &result);
+    };
+    SteamLinkClient::onAuthorizationSuccess(nullptr, &a, 101, &client);
+    assert(success_saw_host && client.authorized_hosts_.count(1));
+    client.last_seen_ms_[1] = 0;
+    client.emitHosts();
+    assert(!client.findHost(1, &result) && client.authorized_hosts_.count(1));
+    SteamLinkHost known; known.client_id = 1;
+    assert(client.requestStreaming(known, "", 1280, 720,
+        [](bool, const SteamLinkStreamInfo&, const std::string&) {}));
+    client.cancelStreaming();
+    client.updateHost(a);
     // Expiry ticks and network replies publish through the same serialized boundary.
     std::atomic<unsigned> active{0};
     client.host_callback_ = [&](const auto& hosts) {

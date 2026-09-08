@@ -286,7 +286,8 @@
   "share": "Share",
   "options": "Options",
   "ps": "PS",
-  "touchpad": "觸控板點擊"
+  "touchpad": "觸控板點擊",
+  "save_failed": "按鍵對應儲存失敗，請檢查 SD 卡空間後重試。"
  },
  "loading": {
   "refreshing_credentials": "正在重新整理 Xbox 認證資訊...",
@@ -573,10 +574,10 @@
         "manual_help": "輸入電腦的區域網路 IPv4 位址，並啟用 Steam 遠端暢玩。",
         "search_help": "尚未收到回覆。請檢查遠端暢玩、網路及防火牆，或輸入主機 IP。",
         "select_host": "請選擇電腦",
-    "discard": "不儲存並返回",
+    "discard": "放棄觸控/體感修改並返回",
    "settings_title": "Steam 串流設定",
    "input_title": "Steam 輸入",
-   "settings_help": "僅儲存至 Steam 設定。串流中修改後，返回遊戲即生效。",
+   "settings_help": "觸控和體感設定在儲存後生效。按鍵對應頁獨立即時儲存，返回此頁不會撤銷按鍵修改。",
    "touch": "觸控螢幕滑鼠",
    "gyro": "體感控制",
    "off": "關閉",
@@ -596,7 +597,10 @@
    "requesting": "正在請求 Steam 串流…",
    "stream_failed": "Steam 串流失敗。",
    "worker_failed": "無法啟動串流工作執行緒。",
-   "paired": "已配對"
+   "paired": "已配對",
+  "waiting_video": "正在等待 Steam 畫面…\n同時按 − 和 + 可開啟選單或中斷連線。",
+  "menu_hint": "同時按 − 和 +，或從螢幕右緣左滑開啟；按 B 關閉。",
+  "menu_controls": "− + 選單   右緣左滑 選單"
  },
  "steam_link": {
   "title": "Steam Link",

@@ -1,5 +1,6 @@
 #include "button_mapping.h"
 #include "../common.h"
+#include "../common/settings_file.h"
 #include <cJSON.h>
 #include <borealis/core/application.hpp>
 #include <borealis/core/platform.hpp>
@@ -43,7 +44,7 @@ brls::SwitchInputManager* switchInputManager() {
 }
 
 cJSON* readConfig() {
-    FILE* file = std::fopen(lunar::get_config_path(), "rb");
+    FILE* file = common::openSettingsFile(lunar::get_config_path());
     if (!file) return cJSON_CreateObject();
     std::fseek(file, 0, SEEK_END);
     const long size = std::ftell(file);
@@ -58,9 +59,7 @@ cJSON* readConfig() {
 bool writeConfig(cJSON* root) {
     char* text = cJSON_Print(root);
     if (!text) return false;
-    FILE* file = std::fopen(lunar::get_config_path(), "wb");
-    const bool ok = file && std::fwrite(text, 1, std::strlen(text), file) == std::strlen(text);
-    if (file) std::fclose(file);
+    const bool ok = common::writeSettingsText(lunar::get_config_path(), text);
     cJSON_free(text);
     return ok;
 }

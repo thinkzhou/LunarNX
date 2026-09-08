@@ -55,6 +55,13 @@ int main() {
     step(finger(1250,200),6000);
     r=step(finger(1000,200),6020); assert(r.dx==0 && !r.left);
     assert(!step({},6050).left); // edge swipe never becomes game input
+    p=SteamPointer{}; p.touch_mode=TouchMode::Absolute;
+    r=step(finger(1240,20),6060); assert(!r.absolute && !r.left);
+    r=step({},6090); assert(r.absolute && r.left && r.x>0.96f);
+    assert(!step({},6140).left); // deferred click releases normally
+    p=SteamPointer{}; p.touch_mode=TouchMode::Absolute;
+    step(finger(1240,20),6150); step(finger(1100,20),6170);
+    assert(!step({},6190).left); // opening the menu must not click the host
     p=SteamPointer{}; p.fenceTouches();
     step(finger(640,600),6100);
     assert(!step({},6150).left); // held Start-button touch cannot leak into Steam

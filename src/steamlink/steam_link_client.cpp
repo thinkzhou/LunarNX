@@ -329,8 +329,14 @@ bool SteamLinkClient::requestStreaming(const SteamLinkHost& host, const std::str
     LunarIHSStreamingCancel(client_);
     IHS_HostInfo protocol_host{};
     if (!findHost(host.client_id, &protocol_host)) {
-        last_error_ = "Steam Link host is no longer in the discovery list";
-        return false;
+        // Discovery expiry changes visibility, not authorization or reachability.
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto known = authorized_hosts_.find(host.client_id);
+        if (known == authorized_hosts_.end()) {
+            last_error_ = "Steam Link host is no longer in the discovery list";
+            return false;
+        }
+        protocol_host = known->second;
     }
     IHS_StreamingRequest request{};
     std::snprintf(request.pin, sizeof(request.pin), "%s", pin.c_str());
@@ -405,6 +411,7 @@ void SteamLinkClient::updateHost(const IHS_HostInfo& host) {
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
         host_infos_[host.clientId] = host;
+        if (authorized_hosts_.count(host.clientId)) authorized_hosts_[host.clientId] = host;
         auto it = std::find_if(hosts_.begin(), hosts_.end(),
             [&host](const SteamLinkHost& item) { return item.client_id == host.clientId; });
         SteamLinkHost item;
@@ -466,9 +473,11 @@ void SteamLinkClient::onAuthorizationSuccess(IHS_Client*, const IHS_HostInfo* ho
     {
         std::lock_guard<std::mutex> lock(self->mutex_);
         self->authorized_steam_ids_[host->clientId] = steam_id;
+        self->authorized_hosts_[host->clientId] = *host;
         callback = self->authorization_callback_;
         self->authorization_callback_ = {};
     }
+    self->updateHost(*host);
     if (callback) callback(true, {});
 }
 
@@ -510,8 +519,10 @@ void SteamLinkClient::onStreamingFailed(IHS_Client*, const IHS_HostInfo* host,
     const std::string error = streamingError(result);
     {
         std::lock_guard<std::mutex> lock(self->mutex_);
-        if (result == IHS_StreamingUnauthorized && host)
+        if (result == IHS_StreamingUnauthorized && host) {
             self->authorized_steam_ids_.erase(host->clientId);
+            self->authorized_hosts_.erase(host->clientId);
+        }
         callback = self->streaming_callback_;
         self->streaming_callback_ = {};
     }
