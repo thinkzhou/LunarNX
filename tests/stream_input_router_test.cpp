@@ -27,6 +27,14 @@ int main() {
     assert(hold.update(2,3,1000)==2);
     assert(hold.update(0,3,1001)==0);
 
+    // A tap straddling the recognition threshold must still produce an edge.
+    for (uint64_t release : {uint64_t{119}, uint64_t{120}, uint64_t{121}, uint64_t{128}, uint64_t{300}}) {
+        MenuChordFilter delayed;
+        assert(delayed.update(2,3,100)==0);
+        assert(delayed.update(2,3,212)==0);
+        assert(delayed.update(0,3,100+release)==2);
+        assert(delayed.update(0,3,141+release)==0);
+    }
     StreamInputRouter input_router(true);
     GamepadState menu_input;
     menu_input.a = true;

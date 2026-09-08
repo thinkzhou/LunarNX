@@ -32,10 +32,6 @@ bool GamepadReader::initialize() {
 #ifdef __SWITCH__
     releaseCaptureButton();
     reloadButtonMapping();
-    if (mappingUsesCaptureButton(button_mapping_)) {
-        acquireCaptureButtonInput();
-        capture_button_acquired_ = true;
-    }
     initialized_ = false;
     delete static_cast<PadState*>(pad_state_);
     pad_state_ = nullptr;
@@ -60,6 +56,13 @@ bool GamepadReader::initialize() {
 void GamepadReader::reloadButtonMapping() {
 #ifdef __SWITCH__
     button_mapping_ = loadButtonMapping(mapping_profile_);
+    const bool needs_capture = mappingUsesCaptureButton(button_mapping_);
+    if (needs_capture && !capture_button_acquired_) {
+        acquireCaptureButtonInput();
+        capture_button_acquired_ = true;
+    } else if (!needs_capture) {
+        releaseCaptureButton();
+    }
 #endif
 }
 
@@ -87,7 +90,13 @@ GamepadState GamepadReader::read() {
     if (mapping_profile_ == ButtonMappingProfile::Steam) {
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        btns = menu_chord_.update(btns, HidNpadButton_Minus | HidNpadButton_Plus, ms);
+        const auto menu_mask = HidNpadButton_Minus | HidNpadButton_Plus;
+        uint64_t mapped_chord = 0;
+        for (const auto mapping : button_mapping_) {
+            if ((mapping & menu_mask) && (mapping & (mapping - 1)) &&
+                (btns & mapping) == mapping) mapped_chord |= mapping;
+        }
+        btns = menu_chord_.update(btns, menu_mask, ms, mapped_chord);
     } else if (quick_menu_chord) {
         btns &= ~(HidNpadButton_Minus | HidNpadButton_Plus);
     }
