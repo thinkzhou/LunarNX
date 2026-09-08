@@ -62,7 +62,8 @@ void IHS_SessionChannelControlOnNegotiation(IHS_SessionChannel *channel, EStream
         case k_EStreamControlNegotiationSetConfig: {
             CNegotiationSetConfigMsg *message = IHS_UNPACK_BUFFER(cnegotiation_set_config_msg__unpack, payload);
             if (message == NULL) {
-                IHS_SessionLog(channel->session, IHS_LogLevelWarn, "Control", "Malformed CNegotiationSetConfigMsg");
+                IHS_SessionLog(channel->session, IHS_LogLevelError, "SteamNegotiation", "Malformed CNegotiationSetConfigMsg");
+                IHS_SessionDisconnect(channel->session);
                 break;
             }
             OnNegotiationSetConfig(channel, message, header->packetId);
@@ -139,7 +140,7 @@ static void OnNegotiationInit(IHS_SessionChannel *channel, const CNegotiationIni
                            message->supports_remote_hid;
     PROTOBUF_C_SET_VALUE(config, enable_remote_hid, remoteHid);
     IHS_SessionLog(session, remoteHid ? IHS_LogLevelInfo : IHS_LogLevelWarn,
-                   "Control", "Remote HID enabled=%d host_support=%d providers=%zu",
+                   "SteamNegotiation", "Remote HID requested=%d host_support=%d providers=%zu",
                    remoteHid, message->supports_remote_hid, session->hidManager->providers.size);
 
     CStreamingClientConfig clientConfig = CSTREAMING_CLIENT_CONFIG__INIT;
@@ -199,9 +200,32 @@ static void OnNegotiationInit(IHS_SessionChannel *channel, const CNegotiationIni
 
 static void OnNegotiationSetConfig(IHS_SessionChannel *channel, const CNegotiationSetConfigMsg *message,
                                    uint16_t packetId) {
+    IHS_Session *session = channel->session;
+    const CNegotiatedConfig *config = message->config;
+    const bool needsHid = session->hidManager->providers.size > 0;
+    const CStreamingClientConfig *client = message->streaming_client_config;
+    const bool hidRejected = needsHid &&
+        ((config && config->has_enable_remote_hid && !config->enable_remote_hid) ||
+         (client && client->has_enable_input_streaming && !client->enable_input_streaming));
+    if (!config || hidRejected) {
+        IHS_SessionLog(session, IHS_LogLevelError, "SteamNegotiation",
+                       "Host configuration rejected: missing_config=%d remote_hid_disabled=%d",
+                       config == NULL, hidRejected);
+        IHS_SessionDisconnect(session);
+        return;
+    }
+    // Absent fields are not an explicit rejection. Older hosts must still
+    // demonstrate actual HID device open within the application deadline.
+    IHS_SessionLog(session, IHS_LogLevelInfo, "SteamNegotiation",
+                   "Host config: hid_present=%d hid_enabled=%d needs_hid=%d",
+                   config->has_enable_remote_hid, config->enable_remote_hid, needsHid);
     CNegotiationCompleteMsg response = CNEGOTIATION_COMPLETE_MSG__INIT;
-    IHS_SessionChannelControlSend(channel, k_EStreamControlNegotiationComplete,
-                                  (const ProtobufCMessage *) &response, IHS_PACKET_ID_NEXT);
+    if (!IHS_SessionChannelControlSend(channel, k_EStreamControlNegotiationComplete,
+                                      (const ProtobufCMessage *) &response, IHS_PACKET_ID_NEXT)) {
+        IHS_SessionLog(session, IHS_LogLevelError, "SteamNegotiation", "NegotiationComplete send failed");
+        IHS_SessionDisconnect(session);
+        return;
+    }
     OnConnected(channel);
 }
 

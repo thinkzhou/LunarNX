@@ -85,6 +85,7 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
 
         const uint32_t generation = generation_.fetch_add(1) + 1;
         video_ready_notified_ = false;
+        successful_video_presents_ = 0;
         audio_latency_mode_.store(options.audio_latency_mode,
                                   std::memory_order_release);
         audio_start_gate_open_.store(
@@ -1575,6 +1576,7 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
                 rendered ? 1 : 0);
         }
         if (rendered && perf) perf->recordFrame();
+        successful_video_presents_.store(video_renderer_->successfulPresentCount());
         // Software presentation publishes synchronously from render(). The
         // hardware path opens this gate from presentVideoFrame() only after a
         // frame has actually reached the display command stream.
@@ -1642,6 +1644,7 @@ void MediaPipeline::presentVideoFrame() {
         video_renderer_->present();
         const uint64_t successful_present_after =
             video_renderer_->successfulPresentCount();
+        successful_video_presents_.store(successful_present_after);
         if (successful_present_after > successful_present_before) {
             openAudioStartupGateIfNeeded();
         }

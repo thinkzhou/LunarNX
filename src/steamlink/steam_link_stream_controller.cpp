@@ -111,6 +111,11 @@ bool SteamLinkStreamController::startStream() {
     media_epoch_ns_ = 0;
     video_samples_ = 0;
     video_recovery_.reset();
+    video_progress_.reset();
+    input_availability_.reset();
+    presentation_suspended_ = false;
+    status_log_at_ns_ = 0;
+    logged_hid_open_ = false;
     media_activity_.reset(steadyNowNs());
     audio_samples_ = 0;
     audio_sequence_ = 0;
@@ -215,9 +220,7 @@ bool SteamLinkStreamController::initializeMedia() {
     options.video_queue_limits.max_age = std::chrono::milliseconds(100);
     media_->setVideoReadyCallback([this]() {
         if (cancellation_.requested()) return;
-        auto expected = app::StreamState::Connecting;
-        if (!state_.compare_exchange_strong(expected, app::StreamState::Streaming)) return;
-        lunar::persistentEventLog("steam-media", "first video frame rendered");
+        lunar::persistentEventLog("steam-media", "first decoded video frame queued");
     });
     lunar::diagnosticLog("steam-media", "initialize begin profile=%dx%d backend=%s",
                          width_, height_, stream::videoBackendName(video_backend_));
@@ -357,6 +360,11 @@ bool SteamLinkStreamController::resumeAfterForeground(CancelCallback cancel) {
 void SteamLinkStreamController::update() {
     std::unique_lock<std::mutex> lock(lifecycle_mutex_, std::try_to_lock);
     if (!lock.owns_lock() || cancellation_.requested()) return;
+    if (session_connected_.load() && media_ && media_->successfulVideoPresentCount() > 0) {
+        auto expected = app::StreamState::Connecting;
+        if (state_.compare_exchange_strong(expected, app::StreamState::Streaming))
+            lunar::persistentEventLog("steam-media", "first video frame presented");
+    }
     if (session_ && state_.load() == app::StreamState::Connecting) {
         const auto timeout = startup_watchdog_.expired(steadyNowNs());
         if (timeout != StartupWatchdog::Timeout::None) {
@@ -376,11 +384,44 @@ void SteamLinkStreamController::update() {
     }
     if (!session_ || !session_connected_.load() || state_.load() == app::StreamState::Error ||
         state_.load() == app::StreamState::Disconnected) return;
-    if (state_.load() == app::StreamState::Streaming && media_activity_.expired(steadyNowNs())) {
-        auto expected = app::StreamState::Streaming;
+    const auto health_now = steadyNowNs();
+    const auto presented = media_ ? media_->successfulVideoPresentCount() : 0;
+    const auto decoded = media_ ? media_->decodedVideoFrameCount() : 0;
+    const bool recovering = media_ && media_->hasVideoRecoveryRequest();
+    const bool hid_open = pad_state_ && pad_state_->opened.load();
+    const char* health_error = nullptr;
+    if (state_.load() == app::StreamState::Streaming) {
+        using Timeout = VideoProgressWatchdog::Timeout;
+        const auto failure = video_progress_.observe(health_now, video_samples_.load(),
+            decoded, presented, recovering, presentation_suspended_);
+        switch (failure) {
+        case Timeout::Receive: health_error = "Steam video receive stalled (20s); check host capture/network"; break;
+        case Timeout::Decode: health_error = "Steam video decode stalled (20s); reconnect and check decoder logs"; break;
+        case Timeout::Present: health_error = "Steam video presentation stalled (20s); check renderer logs"; break;
+        case Timeout::Recovery: health_error = "Steam keyframe recovery timed out (20s); reconnect"; break;
+        default: break;
+        }
+        if (!health_error && media_activity_.expired(health_now))
+            health_error = "Steam media timed out (20s); check host/network and reconnect";
+    }
+    if (!health_error && input_availability_.expired(health_now, hid_open))
+        health_error = "Steam did not open the gamepad (20s); check Remote HID support and host input logs";
+    // Keep essential phase/counter evidence in release builds, not per-frame logs.
+    if (health_now >= status_log_at_ns_ || hid_open != logged_hid_open_) {
+        status_log_at_ns_ = health_now + 5000000000ULL;
+        logged_hid_open_ = hid_open;
+        lunar::persistentEventLog("steam-health",
+            "video_rx=%u decoded=%u presented=%llu audio_rx=%u recovery=%d suspended=%d hid_open=%d hid_reports=%llu",
+            video_samples_.load(), decoded, (unsigned long long)presented,
+            audio_samples_.load(), recovering, presentation_suspended_, hid_open,
+            pad_state_ ? (unsigned long long)pad_state_->reports.load() : 0ULL);
+    }
+    if (health_error) {
+        auto expected = state_.load();
         std::lock_guard<std::mutex> error_lock(error_mutex_);
-        if (state_.compare_exchange_strong(expected, app::StreamState::Error)) {
-            last_error_ = "Steam media timed out (20s); check host/network and reconnect";
+        if ((expected == app::StreamState::Connecting || expected == app::StreamState::Streaming) &&
+            state_.compare_exchange_strong(expected, app::StreamState::Error)) {
+            last_error_ = health_error;
             lunar::persistentEventLog("steam-stream", "%s", last_error_.c_str());
         }
         return;
@@ -468,6 +509,8 @@ void SteamLinkStreamController::presentVideoFrame() {
 
 void SteamLinkStreamController::setVideoPresentationSuspended(bool suspended) {
     std::lock_guard<std::mutex> lock(lifecycle_mutex_);
+    presentation_suspended_ = suspended;
+    video_progress_.reset(); // resume gets a fresh deadline even if updates were paused
     if (media_) media_->setVideoPresentationSuspended(suspended);
 }
 
@@ -500,6 +543,11 @@ void SteamLinkStreamController::onSessionDisconnected(IHS_Session*, void* contex
     self->session_connected_ = false;
     self->disconnect_gate_.disconnected();
     auto state = self->state_.load();
+    if (state == app::StreamState::Connecting) {
+        std::lock_guard<std::mutex> error_lock(self->error_mutex_);
+        if (self->state_.compare_exchange_strong(state, app::StreamState::Error))
+            self->last_error_ = "Steam disconnected before video started; check SteamNegotiation and host capture logs";
+    }
     while (state != app::StreamState::Error && state != app::StreamState::Disconnected &&
            !self->state_.compare_exchange_weak(state, app::StreamState::Disconnected)) {}
     lunar::persistentEventLog("steam-session", "disconnected state=%s", stateName(self->state_.load()));

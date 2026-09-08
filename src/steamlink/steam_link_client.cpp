@@ -477,10 +477,11 @@ void SteamLinkClient::logFunction(IHS_LogLevel level, const char* tag, const cha
     const auto now_ms = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count());
     if (level == IHS_LogLevelWarn && !warning_throttle.allow(now_ms)) return;
-    if (level == IHS_LogLevelInfo && !info_throttle.allow(now_ms)) return;
+    const bool negotiation = tag && std::strcmp(tag, "SteamNegotiation") == 0;
+    if (level == IHS_LogLevelInfo && !negotiation && !info_throttle.allow(now_ms)) return;
     const char* safe_tag = tag ? tag : "ihslib";
     const char* safe_message = message ? message : "";
-    if (level <= IHS_LogLevelWarn) {
+    if (level <= IHS_LogLevelWarn || negotiation) {
         lunar::persistentEventLog("steam-ihs", "level=%s tag=%s message=%s",
                                   IHS_LogLevelName(level), safe_tag, safe_message);
     } else {
