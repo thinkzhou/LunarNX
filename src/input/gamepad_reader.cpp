@@ -85,6 +85,7 @@ GamepadState GamepadReader::read() {
         btns |= kButtonMappingCapture;
     }
 
+    uint64_t replayed_buttons = 0;
     const bool quick_menu_chord =
         (btns & HidNpadButton_Minus) && (btns & HidNpadButton_Plus);
     if (mapping_profile_ == ButtonMappingProfile::Steam) {
@@ -97,6 +98,7 @@ GamepadState GamepadReader::read() {
                 (btns & mapping) == mapping) mapped_chord |= mapping;
         }
         btns = menu_chord_.update(btns, menu_mask, ms, mapped_chord);
+        replayed_buttons = menu_chord_.replayedButtons();
     } else if (quick_menu_chord) {
         btns &= ~(HidNpadButton_Minus | HidNpadButton_Plus);
     }
@@ -108,10 +110,14 @@ GamepadState GamepadReader::read() {
             consumed |= mapping;
         }
     }
-    auto mapped = [this, btns, consumed](RemoteButton button) {
+    auto mapped = [this, btns, consumed, replayed_buttons](RemoteButton button) {
         const uint64_t mapping = button_mapping_[static_cast<size_t>(button)];
-        if (mapping == 0 || (btns & mapping) != mapping) return false;
+        if (mapping == 0) return false;
         const bool combo = (mapping & (mapping - 1)) != 0;
+        // Replayed taps are standalone actions from an earlier sample. Never
+        // combine them with today's physical keys or consume those keys.
+        if (!combo && (replayed_buttons & mapping)) return true;
+        if ((btns & mapping) != mapping) return false;
         return combo || (consumed & mapping) == 0;
     };
 

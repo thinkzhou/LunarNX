@@ -562,3 +562,11 @@ sampling. These tests run in CI alongside pointer and UI handler replays. They
 are not rendered UI or real Switch/Steam verification; no new Ryubing run was
 performed because emulator interaction remains user-operated and the available
 Xbox mock does not exercise Steam.
+
+Replayed standalone taps are now returned separately from the current physical
+button mask. Only single-button mappings consume replayed taps; combo matching
+and component consumption use physical input exclusively. This prevents a
+released Plus followed by L/R from synthesizing Guide or swallowing L/R. The
+production mapping replay covers default and custom chords at 0/8/39/40/48 ms
+after release, checks pulse expiry and confirms subsequent real chords still
+work. Existing input, pointer, UI and platform-button regressions remain covered.
