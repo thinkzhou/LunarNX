@@ -282,6 +282,8 @@ void MediaPipeline::shutdownUnlocked() {
     renderer_stage_ = static_cast<uint8_t>(VideoRenderStage::Idle);
     renderer_stage_started_ns_ = 0;
     if (video_renderer_) {
+        std::unique_lock<std::shared_mutex> renderer_lock(
+            video_renderer_lifetime_mutex_);
         lunar::diagnosticLog("media", "shutdown video renderer begin");
         video_renderer_->shutdown();
         lunar::diagnosticLog("media", "shutdown video renderer done");
@@ -309,7 +311,11 @@ void MediaPipeline::shutdownUnlocked() {
 
     lunar::diagnosticLog("media", "shutdown reset components begin");
     video_decoder_.reset();
-    video_renderer_.reset();
+    {
+        std::unique_lock<std::shared_mutex> renderer_lock(
+            video_renderer_lifetime_mutex_);
+        video_renderer_.reset();
+    }
     audio_decoder_.reset();
     audio_player_.reset();
     av_sync_.reset();
@@ -1156,8 +1162,13 @@ void MediaPipeline::videoWorkerLoop() {
             video_renderer_recovery_in_progress_.store(
                 true, std::memory_order_release);
             const auto recovery_started = std::chrono::steady_clock::now();
-            const bool recovered = video_renderer_ &&
-                video_renderer_->prepareDecoderReset();
+            bool recovered = false;
+            {
+                std::shared_lock<std::shared_mutex> renderer_lock(
+                    video_renderer_lifetime_mutex_);
+                recovered = video_renderer_ &&
+                    video_renderer_->prepareDecoderReset();
+            }
             const auto handoff_ms = std::chrono::duration_cast<
                 std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - recovery_started).count();
@@ -1239,7 +1250,14 @@ void MediaPipeline::videoWorkerLoop() {
 
 bool MediaPipeline::resetVideoDecoderForKeyframe(bool new_source) {
     if (!video_decoder_) return false;
-    if (video_renderer_ && !video_renderer_->prepareDecoderReset()) {
+    bool renderer_ready = true;
+    {
+        std::shared_lock<std::shared_mutex> renderer_lock(
+            video_renderer_lifetime_mutex_);
+        renderer_ready = !video_renderer_ ||
+            video_renderer_->prepareDecoderReset();
+    }
+    if (!renderer_ready) {
         lunar::dropDiagnosticLog(
             "video-reset", "phase=gpu-handoff-failed action=defer-decoder-flush");
         return false;
@@ -1553,7 +1571,8 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
     }
 
     {
-        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
+        std::shared_lock<std::shared_mutex> renderer_lock(
+            video_renderer_lifetime_mutex_);
         if (!isGenerationActive(generation) || !video_renderer_) return;
 #if LUNARNX_LATENCY_DIAGNOSTIC_LOG
         const auto renderer_enqueue_started = std::chrono::steady_clock::now();
@@ -1635,10 +1654,12 @@ void MediaPipeline::presentVideoFrame() {
               std::memory_order_relaxed)
         : 0;
 #endif
-    // draw() already owns the GPU mutex. Lifecycle operations can hold this
-    // mutex while waiting for the GPU, so presentation must never wait here.
-    std::unique_lock<std::recursive_mutex> lock(lifecycle_mutex_, std::try_to_lock);
-    if (!lock.owns_lock()) return;
+    // Media lifecycle work can hold lifecycle_mutex_ while a decoder is being
+    // reset or a session is being torn down. Presentation only needs the
+    // renderer lifetime guard; sharing it with decode handoff prevents a
+    // routine decode callback from making the UI skip a whole display tick.
+    std::shared_lock<std::shared_mutex> renderer_lock(
+        video_renderer_lifetime_mutex_);
     if (running_.load() && video_renderer_) {
         const uint64_t successful_present_before =
             video_renderer_->successfulPresentCount();

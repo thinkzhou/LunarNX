@@ -12,6 +12,7 @@ noise on a good connection.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import random
 from statistics import median
 
@@ -173,6 +174,33 @@ def assert_clean(result: SimulationResult) -> None:
     assert result.percentile(0.95) < 20.0, (result.name, result.percentile(0.95))
 
 
+def simulate_renderer_lifetime_contention(seed: int = 7) -> tuple[list[float], list[float], int]:
+    """A/B only the old lifecycle try-lock around a 60 Hz present tick.
+
+    The decode callback is assumed to hold the old lifecycle mutex for a short
+    renderer-handoff interval. The new path shares only renderer lifetime, so
+    the decode callback and UI tick can proceed to their renderer-owned locks
+    independently. This is intentionally a narrow contention model, not a
+    claim about GPU throughput.
+    """
+    rng = random.Random(seed)
+    old_latencies: list[float] = []
+    new_latencies: list[float] = []
+    old_missed = 0
+    handoff_ms = 1.2
+    for sequence in range(FRAME_COUNT):
+        pts_ms = sequence * FRAME_MS
+        callback_ms = pts_ms + rng.uniform(0.0, FRAME_MS)
+        present_tick = math.ceil(callback_ms / FRAME_MS) * FRAME_MS
+        old_present_tick = present_tick
+        if callback_ms <= present_tick <= callback_ms + handoff_ms:
+            old_present_tick += FRAME_MS
+            old_missed += 1
+        old_latencies.append(old_present_tick - pts_ms)
+        new_latencies.append(present_tick - pts_ms)
+    return old_latencies, new_latencies, old_missed
+
+
 def main() -> None:
     results = [
         simulate("queued-xbox-cloud", direct=False, stale_ms=None, seed=7),
@@ -201,6 +229,8 @@ def main() -> None:
     ui_decoupled = simulate("independent-presenter-18ms", direct=False,
                             stale_ms=REALTIME_STALE_MS, seed=7,
                             ui_stall_ms=18.0, decoupled_present=True)
+    old_lock_latencies, new_lock_latencies, old_lock_misses = \
+        simulate_renderer_lifetime_contention()
 
     for result in results:
         assert_clean(result)
@@ -222,6 +252,10 @@ def main() -> None:
     assert ui_bound_fifo.missed_display_ticks > 0
     assert ui_bound.missed_display_ticks > ui_decoupled.missed_display_ticks
     assert ui_decoupled.dropped_frames < ui_bound.dropped_frames
+    assert old_lock_misses > 0
+    assert percentile(new_lock_latencies, 0.95) < percentile(
+        old_lock_latencies, 0.95
+    )
 
     print("mode                         p50    p95    p99   ingress-p95  render-p95  drops")
     for result in results:
@@ -253,6 +287,12 @@ def main() -> None:
     print(
         "UI contention FIFO p99 reduction: "
         f"{ui_bound_fifo.percentile(0.99) - ui_decoupled.percentile(0.99):.2f} ms"
+    )
+    print(
+        "renderer lifetime A/B: "
+        f"old p95={percentile(old_lock_latencies, 0.95):.2f} ms "
+        f"new p95={percentile(new_lock_latencies, 0.95):.2f} ms "
+        f"old missed ticks={old_lock_misses}"
     )
     print("clean-path assertions: PASS")
 
