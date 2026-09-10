@@ -29,4 +29,13 @@ require("pending_frame_ready_ns" not in renderer and
         "videoPresentationReady(" not in renderer,
         "two-slot hardware handoff must not gate pending frames by release time")
 
+# The UI presenter must not lose a display tick merely because the decode
+# callback is briefly in media lifecycle code. Renderer lifetime is a shared
+# boundary; only teardown takes it exclusively.
+require("video_renderer_lifetime_mutex_" in pipeline and
+        "std::shared_lock<std::shared_mutex> renderer_lock" in pipeline,
+        "decode and presentation must share renderer lifetime without the media lifecycle mutex")
+require("try_to_lock" not in pipeline,
+        "presentation must not silently skip a frame on lifecycle try-lock contention")
+
 print("video presentation independence test passed")

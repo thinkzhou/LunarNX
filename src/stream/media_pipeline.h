@@ -17,6 +17,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <thread>
 #include <vector>
 
@@ -307,6 +308,11 @@ private:
     // recursive mutex lets that callback enter handleVideoFrame while keeping
     // shutdown from destroying decoder/renderer state underneath the callback.
     mutable std::recursive_mutex lifecycle_mutex_;
+    // Rendering and presentation are independent of media lifecycle work.
+    // Shared lifetime protection lets either path call into the renderer's
+    // own render/GPU mutex; shutdown takes the unique side only when the
+    // worker and UI users have drained.
+    mutable std::shared_mutex video_renderer_lifetime_mutex_;
     std::mutex video_ready_callback_mutex_;
     std::function<void()> video_ready_callback_;
     std::atomic<bool> video_ready_notified_{false};

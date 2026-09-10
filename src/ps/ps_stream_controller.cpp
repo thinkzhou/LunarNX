@@ -438,6 +438,17 @@ bool PsStreamController::startStream() {
     media_opts.video_codec = video_codec_;
     media_opts.hold_non_target_startup_frames = true;
     media_opts.video_backend = video_backend_;
+    // Keep the renderer at the live edge on PS as well. The bounded encoded
+    // queue protects decode from bursts, while RealtimeAdaptive drops only
+    // already-decoded stale display frames instead of adding another FIFO
+    // frame at the renderer boundary.
+    media_opts.video_presentation_mode =
+        stream::VideoPresentationMode::RealtimeAdaptive;
+    // PS previously inherited the resilient 5-buffer audio ring (about
+    // 100 ms at 48 kHz). Good-path streaming should match Xbox Home's
+    // realtime 3-buffer ring (about 60 ms); the existing audio queue/drop
+    // guards still absorb short scheduling bursts.
+    media_opts.audio_latency_mode = stream::AudioLatencyMode::Realtime;
 #if LUNARNX_PS_DIRECT_VIDEO
     media_opts.video_scheduling =
         stream::VideoSchedulingMode::DirectLowLatency;
