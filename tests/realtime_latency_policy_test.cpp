@@ -12,10 +12,10 @@ int main() {
                stream::VideoPresentationMode::BufferedFifo, 2, 30'000) == 0);
     assert(stream::stalePresentationFramesToDrop(
                stream::VideoPresentationMode::RealtimeAdaptive, 2,
-               24'999) == 0);
+               15'999) == 0);
     assert(stream::stalePresentationFramesToDrop(
                stream::VideoPresentationMode::RealtimeAdaptive, 2,
-               25'000) == 1);
+               16'000) == 1);
 
     auto catch_up = stream::videoDecodeCatchUpDecision(
         stream::VideoDecodeCatchUpMode::Realtime,
