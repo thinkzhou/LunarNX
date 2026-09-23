@@ -24,6 +24,9 @@ constexpr int kPsButtonPulseFrames = 16;
 constexpr std::chrono::milliseconds kPsInputInterval{8};
 constexpr uint16_t kPsLegacyRumbleTimeoutMs = 5000;
 constexpr uint16_t kPsHapticsRumbleTimeoutMs = 100;
+constexpr std::chrono::seconds kFirstVideoFrameTimeout{10};
+constexpr std::chrono::seconds kFirstVideoRecoveryRetryInterval{2};
+constexpr uint32_t kMaxFirstVideoRecoveryAttempts = 3;
 
 const char* streamStateName(app::StreamState state) {
     switch (state) {
@@ -474,9 +477,14 @@ bool PsStreamController::startStream() {
     // The PS5 may begin sending immediately after CHIAKI_EVENT_CONNECTED,
     // while NVDEC/Audren are still being initialized. Always request a fresh
     // SPS/PPS/IDR once the media pipeline is ready.
-    if (mock_session_) mock_session_->requestIDR();
-    else session_->requestIDR();
-    diagnosticLog("ps-controller", "media ready; requested initial IDR");
+    const bool initial_idr_requested = mock_session_
+        ? mock_session_->requestIDR()
+        : session_->requestIDR();
+    connection_trace_->record(
+        "initial-idr", initial_idr_requested ? "sent" : "failed",
+        "media_ready=1");
+    diagnosticLog("ps-controller", "media ready; requested initial IDR result=%s",
+                  initial_idr_requested ? "sent" : "failed");
     bool worker_start_failed = false;
     try {
         startInputLoop();
@@ -527,7 +535,9 @@ void PsStreamController::startVideoMonitor() {
     video_monitor_stop_ = false;
     video_monitor_thread_ = std::thread([this]() {
         std::chrono::steady_clock::time_point waiting_started{};
-        bool waiting_notice_sent = false;
+        std::chrono::steady_clock::time_point next_first_video_recovery{};
+        uint32_t first_video_recovery_attempts = 0;
+        bool first_video_recovery_exhausted = false;
         auto last_video_summary = std::chrono::steady_clock::now();
         auto last_video_detail_summary = last_video_summary;
         uint32_t previous_video_packets = 0;
@@ -540,41 +550,84 @@ void PsStreamController::startVideoMonitor() {
             const bool streaming = state_.load() == app::StreamState::Streaming;
             if (streaming) {
                 waiting_started = {};
-                waiting_notice_sent = false;
-            }
-            if (waiting_started.time_since_epoch().count() == 0) {
+                next_first_video_recovery = {};
+                first_video_recovery_attempts = 0;
+                first_video_recovery_exhausted = false;
+            } else if (waiting_started.time_since_epoch().count() == 0) {
                 waiting_started = now;
             }
 
-            if (media_ && media_->hasVideoRecoveryRequest() &&
+            if (!first_video_recovery_exhausted && media_ &&
+                media_->hasVideoRecoveryRequest() &&
                 requestRecoveryIDR()) {
                 media_->clearVideoRecoveryRequest();
                 diagnosticLog("ps-controller",
                               "requested IDR for video recovery");
             }
 
-            if (!waiting_notice_sent &&
-                    now - waiting_started >=
-                    std::chrono::seconds(10)) {
-                waiting_notice_sent = true;
-                const bool received_access_units = perf_.video_packets.load() > 0;
-                const char* info = received_access_units
-                    ? "Video received. Recovering decoder..."
-                    : "Connected. Still waiting for video packets...";
-                diagnosticLog("ps-controller",
-                              "first rendered frame timeout access_units=%u decode_errors=%u",
-                              perf_.video_packets.load(),
-                              perf_.video_decode_errors.load());
-                if (connection_trace_ && !connection_trace_->finished()) {
-                    connection_trace_->record(
-                        "first-video-timeout", "timeout",
-                        "access_units=%u decode_errors=%u media_running=%d",
+            if (!streaming && !first_video_recovery_exhausted &&
+                    now - waiting_started >= kFirstVideoFrameTimeout &&
+                    (next_first_video_recovery.time_since_epoch().count() == 0 ||
+                     now >= next_first_video_recovery)) {
+                if (first_video_recovery_attempts <
+                        kMaxFirstVideoRecoveryAttempts) {
+                    if (media_) {
+                        media_->requestVideoRecovery(
+                            "first rendered frame timeout", true);
+                    }
+                    const bool idr_requested = requestRecoveryIDR();
+                    ++first_video_recovery_attempts;
+                    next_first_video_recovery =
+                        now + kFirstVideoRecoveryRetryInterval;
+                    diagnosticLog(
+                        "ps-controller",
+                        "first rendered frame recovery attempt=%u idr=%d "
+                        "video samples=%u decode_errors=%u",
+                        first_video_recovery_attempts,
+                        idr_requested ? 1 : 0,
+                        perf_.video_packets.load(),
+                        perf_.video_decode_errors.load());
+                    if (connection_trace_ &&
+                            !connection_trace_->finished()) {
+                        connection_trace_->record(
+                            "first-video-recovery",
+                            idr_requested ? "requested" : "request-failed",
+                            "attempt=%u video_samples=%u decode_errors=%u "
+                            "media_running=%d",
+                            first_video_recovery_attempts,
+                            perf_.video_packets.load(),
+                            perf_.video_decode_errors.load(),
+                            media_ && media_->isRunning() ? 1 : 0);
+                    }
+                    setState(
+                        app::StreamState::Connecting,
+                        "Waiting for a video frame. Requesting a keyframe...");
+                } else {
+                    first_video_recovery_exhausted = true;
+                    const std::string error =
+                        "Video stream did not start. Reconnect or try H.264.";
+                    diagnosticLog(
+                        "ps-controller",
+                        "first rendered frame timeout after recovery "
+                        "video samples=%u decode_errors=%u attempts=%u",
                         perf_.video_packets.load(),
                         perf_.video_decode_errors.load(),
-                        media_ && media_->isRunning() ? 1 : 0);
-                    connection_trace_->finish("timeout", "first-video-timeout");
+                        first_video_recovery_attempts);
+                    if (connection_trace_ &&
+                            !connection_trace_->finished()) {
+                        connection_trace_->record(
+                            "first-video-timeout", "timeout",
+                            "video_samples=%u decode_errors=%u attempts=%u "
+                            "media_running=%d",
+                            perf_.video_packets.load(),
+                            perf_.video_decode_errors.load(),
+                            first_video_recovery_attempts,
+                            media_ && media_->isRunning() ? 1 : 0);
+                        connection_trace_->finish(
+                            "timeout", "first-video-timeout");
+                    }
+                    setState(app::StreamState::Error, error);
                 }
-                setState(app::StreamState::Connecting, info);
             }
 
             if (now - last_video_summary >= std::chrono::seconds(1)) {
@@ -618,10 +671,9 @@ bool PsStreamController::requestRecoveryIDR() {
         }
         last_recovery_request_ = now;
     }
-    if (mock_session_) mock_session_->requestIDR();
-    else if (session_) session_->requestIDR();
-    else return false;
-    return true;
+    if (mock_session_) return mock_session_->requestIDR();
+    if (session_) return session_->requestIDR();
+    return false;
 }
 
 void PsStreamController::stopVideoMonitor() {

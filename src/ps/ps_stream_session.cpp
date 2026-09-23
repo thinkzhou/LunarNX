@@ -320,9 +320,20 @@ void PsStreamSession::setControllerState(ChiakiControllerState& state) {
     chiaki_session_set_controller_state(&session_, &state);
 }
 
-void PsStreamSession::requestIDR() {
-    if (!started_) return;
-    chiaki_session_request_idr(&session_);
+bool PsStreamSession::requestIDR() {
+    if (!started_) return false;
+    const ChiakiErrorCode err = chiaki_session_request_idr(&session_);
+    const bool requested = err == CHIAKI_ERR_SUCCESS;
+    if (trace_) {
+        trace_->record(
+            "idr-request", requested ? "sent" : "failed",
+            "error=%d error_name=%s", static_cast<int>(err),
+            chiaki_error_string(err));
+    }
+    diagnosticLog("ps-session", "IDR request result=%s error=%d error_name=%s",
+                  requested ? "sent" : "failed", static_cast<int>(err),
+                  chiaki_error_string(err));
+    return requested;
 }
 
 PsTransportStats PsStreamSession::transportStats() const {
