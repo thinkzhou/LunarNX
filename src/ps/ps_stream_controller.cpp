@@ -10,6 +10,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <thread>
 
 #ifndef LUNARNX_PS_DIRECT_VIDEO
@@ -476,8 +477,24 @@ bool PsStreamController::startStream() {
     if (mock_session_) mock_session_->requestIDR();
     else session_->requestIDR();
     diagnosticLog("ps-controller", "media ready; requested initial IDR");
-    startInputLoop();
-    startVideoMonitor();
+    bool worker_start_failed = false;
+    try {
+        startInputLoop();
+        startVideoMonitor();
+    } catch (const std::exception& e) {
+        diagnosticLog("ps-controller", "worker thread start failed: %s", e.what());
+        worker_start_failed = true;
+    } catch (...) {
+        diagnosticLog("ps-controller", "worker thread start failed: unknown exception");
+        worker_start_failed = true;
+    }
+    if (worker_start_failed) {
+        // stopStream joins whichever worker started and takes this lock itself.
+        operation_lock.unlock();
+        stopStream(false);
+        setState(app::StreamState::Error, "Failed to start stream workers");
+        return false;
+    }
 
     return true;
 }
