@@ -16,6 +16,10 @@
 
 #include <cstdio>
 
+#ifndef LUNARNX_XBOX_DIRECT_VIDEO
+#define LUNARNX_XBOX_DIRECT_VIDEO 0
+#endif
+
 namespace lunar::app {
 
 StreamController::StreamController() = default;
@@ -996,7 +1000,13 @@ bool StreamController::startStreamWithProfile(
     }
     stream::MediaPipelineOptions xbox_options = options;
     xbox_options.video_scheduling =
+#if LUNARNX_XBOX_DIRECT_VIDEO
+        profile.type == SessionType::Home
+            ? stream::VideoSchedulingMode::DirectLowLatency
+            : stream::VideoSchedulingMode::RealtimeQueued;
+#else
         stream::VideoSchedulingMode::RealtimeQueued;
+#endif
     {
         std::lock_guard<std::mutex> lock(stream_lifecycle_mutex_);
         active_profile_ = profile;

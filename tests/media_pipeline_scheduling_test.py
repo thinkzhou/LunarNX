@@ -26,8 +26,18 @@ require("VideoSchedulingMode video_scheduling" in header,
         "media options must carry the selected video scheduling mode")
 require("VideoSchedulingMode::RealtimeQueued" in xbox,
         "Xbox controller must explicitly select isolated realtime queue scheduling")
+require("LUNARNX_XBOX_DIRECT_VIDEO" in xbox and
+        "profile.type == SessionType::Home" in xbox and
+        "VideoSchedulingMode::DirectLowLatency" in xbox,
+        "Xbox direct scheduling must remain a Home-only development A/B")
 require("VideoSchedulingMode::BoundedLowLatency" in ps,
         "PlayStation controller must default to bounded low-latency scheduling")
+require("video_presentation_mode" in ps and
+        "VideoPresentationMode::RealtimeAdaptive" in ps,
+        "PlayStation renderer must stay at the live edge instead of FIFO buffering")
+require("audio_latency_mode" in ps and
+        "AudioLatencyMode::Realtime" in ps,
+        "PlayStation audio must use the low-latency ring on the good path")
 require("LUNARNX_PS_DIRECT_VIDEO" in ps and
         "VideoSchedulingMode::DirectLowLatency" in ps,
         "PlayStation direct scheduling must remain available for development A/B")
