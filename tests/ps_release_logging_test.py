@@ -20,10 +20,8 @@ def main() -> None:
     assert "#if LUNARNX_DIAGNOSTIC_LOG\n    ensureDiagnosticLogDirectory();" in adapter
     assert "#if LUNARNX_DIAGNOSTIC_LOG || LUNARNX_DROP_DIAGNOSTIC_LOG" in adapter
     assert "ChiakiLog log{};" in adapter
-    assert ('-e CHIAKI_TRANSPORT_DIAG="${CHIAKI_TRANSPORT_DIAG:-0}"' in
-            chiaki_docker_build)
-    assert ('chiaki_transport_diag="${CHIAKI_TRANSPORT_DIAG:-0}"' in
-            chiaki_container_build)
+    assert "CHIAKI_TRANSPORT_DIAG" not in chiaki_docker_build
+    assert "CHIAKI_TRANSPORT_DIAG" not in chiaki_container_build
     assert 'persistentEventLog("ps-registration"' in registration
     assert 'stage=missing-account-id' in manager
     assert 'stage=credential-save' in manager

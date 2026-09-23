@@ -4,7 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PATCH = (ROOT / "tools/chiaki_switch/lunarnx-chiaki-stream-switch.patch").read_text()
-BUILD = (ROOT / "tools/chiaki_switch/build_in_docker.sh").read_text()
+BUILD = (ROOT / "tools/chiaki_switch/build_in_container.sh").read_text()
 
 
 def require(condition, message):
@@ -33,7 +33,7 @@ require("skipping duplicate switch request" in PATCH,
         "session must not send a second switch request after an early ACK")
 require("initial seq num %#x" in PATCH and "protobuf_type=%d" in PATCH,
         "Takion diagnostics must expose both sequence values and dropped payload type")
-require("git -C \"$src\" apply /work/tools/chiaki_switch/lunarnx-chiaki-stream-switch.patch" in BUILD,
-        "Switch SDK build must apply the tracked stream-switch patch")
+require("lunarnx-chiaki-stream-switch.patch" not in BUILD,
+        "the legacy stream-switch patch must not be applied to v15")
 
-print("Chiaki PSN stream-switch patch test passed")
+print("Chiaki PSN stream-switch archival patch test passed")

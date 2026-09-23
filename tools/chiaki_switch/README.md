@@ -1,77 +1,36 @@
 # Chiaki Switch SDK
 
-`build_in_docker.sh` rebuilds Akira's pinned `github_repos/chiaki-ng-fork` and installs its archive,
-public headers, generated `config.h`, and LunarNX ABI fingerprint as one SDK.
+LunarNX builds the pinned xlanor/chiaki-ng revision
+`907cd8219170b771a7d5d052fa8234b545b25a9f`, the Takion v15 fork used by
+Akira. `github_repos/chiaki-ng-fork` is an ignored local checkout, not a Git
+submodule or a directory committed to LunarNX. Prepare it with:
 
-For a PS5 Takion v15 hardware comparison, set `CHIAKI_SDK_PROFILE=akira-v15`
-when running `scripts/setup_chiaki_dependencies.sh` and
-`tools/chiaki_switch/build_in_docker.sh`. This pins Akira's chiaki-ng
-`907cd8219170b771a7d5d052fa8234b545b25a9f` and uses the matching
-`pbgen_v15` outputs. The v15 profile carries the Switch video reorder and UDP
-receive-buffer patches. Other LunarNX patches target the older Chiaki protocol
-implementation and have not yet been rebased onto Akira's rewritten Takion and
-hole-punch code; use this profile for focused hardware validation before
-replacing the default SDK. A checkout elsewhere can be supplied with
-`CHIAKI_SOURCE_CHECKOUT=/absolute/path`.
-The setup script keeps this checkout separately at
-`github_repos/chiaki-ng-fork-akira-v15`; it does not switch the legacy checkout.
+```sh
+./scripts/setup_chiaki_dependencies.sh
+./tools/chiaki_switch/build_in_docker.sh
+```
 
-Run it from the LunarNX root. It uses `devkitpro/devkita64:20251117` unless
-`LUNARNX_DEVKIT_IMAGE` is set. The source checkout must be Akira's commit
-`1597a48514e5d9e67168ca40e6fa40c0171cd379` for the default legacy profile.
-The checkout remains clean. The
-temporary build copy receives the tracked Switch patches. The STUN patch uses
-the real-hardware-tested ordered IPv4 STUN list instead of the GitHub-hosted
-dynamic list. The route-preference patch can move a previously responsive STUN
-server and PlayStation endpoint to the front only when they are still present
-in the current lists; stale values never create candidates or bypass the normal
-fallbacks. The stream-switch patch handles a PSN console sending the CTRL
-switch ACK while Senkusha is still waiting for BANG, and adds targeted Takion
-sequence diagnostics. The focused hole-punch reliability patch removes consumed
-ACK notifications, retries only a timed-out short ACK once with the same request
-ID, checks OFFER delivery, gives DATA candidate selection three
-cancellation-aware attempts, and reports exhausted DATA setup as a stream
-connection error. The focused stream RTT patch measures live Takion DATA_ACK
-round trips with the monotonic clock, keeps a fixed eight-sample window, and
-uses the console's connection-quality RTT only until an ACK sample arrives.
-The focused receive-buffer patch keeps Takion's protocol receive window intact
-while increasing the Switch UDP socket buffer to 512 KiB in both LAN and PSN
-socket paths. This gives 1080p high-bitrate bursts enough scheduling headroom
-without changing the behavior of other Chiaki platforms.
-The packet-stats wrap patch keeps the 16-bit audio sequence arithmetic in its
-serial-number domain and synchronizes receive-side updates with the 200 ms
-congestion-control snapshot. This prevents a 0xffff-to-zero transition (or a
-concurrent reset) from producing a bogus loss report to the console.
-The focused video reorder-capacity patch raises only the Switch video AV
-reorder window from 64 to 256 packets. A 30 Mbit/s PS5 IDR observed on hardware
-uses up to 94 source and FEC units, so the upstream 64-packet window can discard
-valid tail packets while waiting 16 ms for one missing head packet. The larger
-window is dynamically allocated and adds roughly 4 KiB per session.
-The receive-allocation patch has a build-time A/B switch. `CHIAKI_RECV_OPT=0`
-keeps the upstream per-datagram shrink `realloc`; the default
-`CHIAKI_RECV_OPT=1` passes the already allocated 1500-byte receive block to the
-packet handler directly. Packet length and ownership are unchanged.
-The transport-diagnostics patch can aggregate Takion receive throughput,
-complete per-packet processing time, MAC failures, reorder drops/skips,
-allocation failures, video queue depth, frame flush/FEC work, and LunarNX video
-callback time. Release libraries compile all of that hot-path measurement out by
-default. Set `CHIAKI_TRANSPORT_DIAG=1` when invoking `build_in_docker.sh` to make
-a diagnostic SDK; that build emits only two aggregate info records per ten
-seconds.
-The same switch controls the key-position diagnostic, which emits one sparse
-record when an authenticated Takion packet changes the reconstructed high
-32-bit epoch. It does not alter authentication or decryption and makes the
-roughly 4 GiB stream-position wrap visible during long-running hardware tests.
-The fork's native libnx crypto backend is used directly.
+The setup script checks that an existing checkout has no local changes before
+moving it to the pinned commit. The Docker builder uses
+`devkitpro/devkita64:20251117` by default. CI runs the same setup and library
+builder before the LunarNX NRO build. For a source checkout elsewhere, set
+`CHIAKI_SOURCE_CHECKOUT=/absolute/path` when invoking the Docker builder.
 
-The pinned devkitA64 image does not include `protoc` or the Python protobuf
-package. Until the toolchain image provides them, the checkout must also have
-`pbgen/takion.pb`, `pbgen/takion.pb.c`, and `pbgen/takion.pb.h`; the build script
-uses these generated inputs without regenerating them.
+The image does not include protoc or the Python protobuf package. The tracked
+`pbgen_v15` outputs match this revision's `lib/protobuf/takion.proto` and let
+the container build without generating protobuf code. The build copies the
+clean checkout to a temporary directory, applies the Switch-only video reorder
+capacity and UDP receive-buffer patches, then installs `libchiaki.a`, its
+dependent archives, public headers, generated `config.h`, and the LunarNX ABI
+fingerprint together. Do not replace only the archive or only the headers.
 
-Akira's fork supplies the Switch crypto implementation. No LunarNX protocol,
-crypto, relay, or packet-format changes are applied. The optional Ryubing UDP
-relay profile remains unavailable.
+The other tracked `lunarnx-chiaki-*.patch` files target the previous Chiaki
+revision and are retained as historical references; the v15 builder does not
+apply them. In particular, PSN route-preference and transport-diagnostic
+patches have not been rebased onto v15's rewritten Takion/hole-punch code.
+PSN Remote still builds against the upstream implementation, but needs real
+hardware validation after this upgrade. There is no automatic HEVC-to-H.264
+fallback.
 
 The installed archive must pass:
 
@@ -79,5 +38,4 @@ The installed archive must pass:
 python3 tests/chiaki_switch_abi_test.py
 ```
 
-Do not copy only `libchiaki.a` or only the headers. Both are an ABI unit.
-The Switch link runs this ABI check again before producing `LunarNX.elf`.
+The Switch link runs the ABI check again before producing `LunarNX.elf`.
