@@ -13,6 +13,7 @@
 #include <switch.h>
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <sstream>
 #include <utility>
 
@@ -586,8 +587,44 @@ brls::View* StreamView::createContentView() {
     confirm_box_->addView(confirm_hint);
     root->addView(confirm_box_);
 
+    auto schedule_stop = [this]() noexcept {
+        try {
+            auto alive = alive_;
+            brls::sync([this, alive]() {
+                if (alive->load()) stopAndReturn();
+            });
+        } catch (...) {
+            terminal_stop_->store(true);
+            try { runtime_->requestStop(); } catch (...) {}
+        }
+    };
     running_ = true;
-    update_thread_ = std::thread(&StreamView::runLoop, this);
+    bool thread_started = false;
+    try {
+        update_thread_ = std::thread([this, schedule_stop]() {
+            try {
+                runLoop();
+            } catch (const std::exception& e) {
+                lunar::diagnosticLog("stream-view", "update thread failed: %s", e.what());
+                running_ = false;
+                schedule_stop();
+            } catch (...) {
+                lunar::diagnosticLog("stream-view", "update thread failed: unknown exception");
+                running_ = false;
+                schedule_stop();
+            }
+        });
+        thread_started = true;
+    } catch (const std::exception& e) {
+        running_ = false;
+        lunar::diagnosticLog("stream-view", "update thread start failed: %s", e.what());
+    } catch (...) {
+        running_ = false;
+        lunar::diagnosticLog("stream-view", "update thread start failed: unknown exception");
+    }
+    if (!thread_started) {
+        schedule_stop();
+    }
 
     return root;
 }
