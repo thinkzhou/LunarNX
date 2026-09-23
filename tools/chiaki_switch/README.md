@@ -3,9 +3,23 @@
 `build_in_docker.sh` rebuilds Akira's pinned `github_repos/chiaki-ng-fork` and installs its archive,
 public headers, generated `config.h`, and LunarNX ABI fingerprint as one SDK.
 
+For a PS5 Takion v15 hardware comparison, set `CHIAKI_SDK_PROFILE=akira-v15`
+when running `scripts/setup_chiaki_dependencies.sh` and
+`tools/chiaki_switch/build_in_docker.sh`. This pins Akira's chiaki-ng
+`907cd8219170b771a7d5d052fa8234b545b25a9f` and uses the matching
+`pbgen_v15` outputs. The v15 profile carries the Switch video reorder and UDP
+receive-buffer patches. Other LunarNX patches target the older Chiaki protocol
+implementation and have not yet been rebased onto Akira's rewritten Takion and
+hole-punch code; use this profile for focused hardware validation before
+replacing the default SDK. A checkout elsewhere can be supplied with
+`CHIAKI_SOURCE_CHECKOUT=/absolute/path`.
+The setup script keeps this checkout separately at
+`github_repos/chiaki-ng-fork-akira-v15`; it does not switch the legacy checkout.
+
 Run it from the LunarNX root. It uses `devkitpro/devkita64:20251117` unless
 `LUNARNX_DEVKIT_IMAGE` is set. The source checkout must be Akira's commit
-`1597a48514e5d9e67168ca40e6fa40c0171cd379`. The checkout remains clean. The
+`1597a48514e5d9e67168ca40e6fa40c0171cd379` for the default legacy profile.
+The checkout remains clean. The
 temporary build copy receives the tracked Switch patches. The STUN patch uses
 the real-hardware-tested ordered IPv4 STUN list instead of the GitHub-hosted
 dynamic list. The route-preference patch can move a previously responsive STUN

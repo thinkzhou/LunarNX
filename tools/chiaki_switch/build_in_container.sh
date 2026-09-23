@@ -2,12 +2,11 @@
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-checkout="$project_root/github_repos/chiaki-ng-fork"
 src=/tmp/lunarnx-chiaki-switch-src
 build=/tmp/lunarnx-chiaki-switch-build
 stage=/tmp/lunarnx-chiaki-switch-stage
 tools_dir=/tmp/lunarnx-chiaki-tools
-expected_commit=1597a48514e5d9e67168ca40e6fa40c0171cd379
+chiaki_sdk_profile="${CHIAKI_SDK_PROFILE:-legacy}"
 chiaki_recv_opt="${CHIAKI_RECV_OPT:-1}"
 chiaki_transport_diag="${CHIAKI_TRANSPORT_DIAG:-0}"
 build_jobs="${BUILD_JOBS:-$(nproc)}"
@@ -15,7 +14,40 @@ build_jobs="${BUILD_JOBS:-$(nproc)}"
 export DEVKITPRO="${DEVKITPRO:-/opt/devkitpro}"
 export PATH="$DEVKITPRO/devkitA64/bin:$DEVKITPRO/tools/bin:$PATH"
 export PKG_CONFIG_PATH="$project_root/tools/pkgconfig"
-export LUNARNX_CHIAKI_PBGEN="$project_root/tools/chiaki_switch/pbgen"
+case "$chiaki_sdk_profile" in
+    legacy)
+        checkout="${CHIAKI_SOURCE_CHECKOUT:-$project_root/github_repos/chiaki-ng-fork}"
+        expected_commit=1597a48514e5d9e67168ca40e6fa40c0171cd379
+        export LUNARNX_CHIAKI_PBGEN="$project_root/tools/chiaki_switch/pbgen"
+        patches=(
+            lunarnx-chiaki-stun-order.patch
+            lunarnx-chiaki-stream-switch.patch
+            lunarnx-chiaki-video-reorder-capacity.patch
+            lunarnx-chiaki-recv-allocation.patch
+            lunarnx-chiaki-holepunch-reliability.patch
+            lunarnx-chiaki-http-status.patch
+            lunarnx-chiaki-stream-rtt.patch
+            lunarnx-chiaki-recvbuf.patch
+            lunarnx-chiaki-packetstats-wrap.patch
+            lunarnx-chiaki-transport-diagnostics.patch
+            lunarnx-chiaki-key-position-diagnostics.patch
+            lunarnx-chiaki-route-preference.patch
+        )
+        ;;
+    akira-v15)
+        checkout="${CHIAKI_SOURCE_CHECKOUT:-$project_root/github_repos/chiaki-ng-fork-akira-v15}"
+        expected_commit=907cd8219170b771a7d5d052fa8234b545b25a9f
+        export LUNARNX_CHIAKI_PBGEN="$project_root/tools/chiaki_switch/pbgen_v15"
+        # The v15 fork changed Takion and remote-control internals. Keep the
+        # two independent Switch receive-capacity fixes for this hardware
+        # comparison; legacy patch files cannot be applied to those rewrites.
+        patches=(
+            lunarnx-chiaki-video-reorder-capacity.patch
+            lunarnx-chiaki-recvbuf.patch
+        )
+        ;;
+    *) echo "CHIAKI_SDK_PROFILE must be legacy or akira-v15" >&2; exit 2 ;;
+esac
 
 case "$chiaki_recv_opt" in
     0|1) ;;
@@ -39,19 +71,7 @@ fi
 rm -rf "$src" "$build" "$stage" "$tools_dir"
 mkdir -p "$src" "$stage/include" "$tools_dir"
 cp -a "$checkout/." "$src/"
-for patch in \
-    lunarnx-chiaki-stun-order.patch \
-    lunarnx-chiaki-stream-switch.patch \
-    lunarnx-chiaki-video-reorder-capacity.patch \
-    lunarnx-chiaki-recv-allocation.patch \
-    lunarnx-chiaki-holepunch-reliability.patch \
-    lunarnx-chiaki-http-status.patch \
-    lunarnx-chiaki-stream-rtt.patch \
-    lunarnx-chiaki-recvbuf.patch \
-    lunarnx-chiaki-packetstats-wrap.patch \
-    lunarnx-chiaki-transport-diagnostics.patch \
-    lunarnx-chiaki-key-position-diagnostics.patch \
-    lunarnx-chiaki-route-preference.patch
+for patch in "${patches[@]}"
 do
     case "$patch" in
         lunarnx-chiaki-transport-diagnostics.patch|\

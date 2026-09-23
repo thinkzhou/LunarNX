@@ -27,7 +27,7 @@ require("stream_transport_connected_ = true" in controller and
         "not while PSN DATA hole punching is still in progress")
 require("hasVideoRecoveryRequest()" in controller and
         "requested IDR for video recovery" in controller and
-        "if (media_ && media_->hasVideoRecoveryRequest()" in controller,
+        "media_->hasVideoRecoveryRequest() &&" in controller,
         "PS monitor must service recovery requests in every stream state")
 require("last_recovery_request" in controller and
         "std::chrono::seconds(1)" in controller,
@@ -44,9 +44,12 @@ require("requestVideoRecovery(" in monitor and
 require("kMaxFirstVideoRecoveryAttempts" in controller and
         "kFirstVideoRecoveryRetryInterval" in controller and
         'setState(app::StreamState::Error' in monitor and
-        "!first_video_recovery_exhausted && media_" in monitor,
+        "first_video_recovery_attempts == 0 && media_" in monitor,
         "first-frame recovery must retry at a bounded cadence and terminate "
         "without continuing to send IDR requests forever")
+require("retryWithH264" not in controller and
+        "hevc_fallback_pending_" not in controller,
+        "first-frame recovery must not change the user's codec selection")
 require("Video received. Recovering decoder..." not in monitor and
         "video samples=" in monitor,
         "the profile parameter-set callback must not be described as a received "

@@ -5,7 +5,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 PATCH = (ROOT / "tools/chiaki_switch/lunarnx-chiaki-video-reorder-capacity.patch").read_text()
-BUILD = (ROOT / "tools/chiaki_switch/build_in_docker.sh").read_text()
+BUILD = (ROOT / "tools/chiaki_switch/build_in_container.sh").read_text()
 
 
 def require(condition: bool, message: str) -> None:
@@ -34,11 +34,9 @@ require(switch_capacity >= observed_frame_units * 2,
         "Switch window must retain the observed frame with burst headroom")
 require(switch_capacity <= 256,
         "keep the Switch-only dynamic allocation bounded")
-require(
-    'git -C "$src" apply /work/tools/chiaki_switch/'
-    'lunarnx-chiaki-video-reorder-capacity.patch' in BUILD,
-    "Switch Chiaki build must apply the video reorder-capacity patch",
-)
+require("lunarnx-chiaki-video-reorder-capacity.patch" in BUILD and
+        'for patch in "${patches[@]}"' in BUILD,
+        "Switch Chiaki build must apply the video reorder-capacity patch")
 
 print(
     "Chiaki Switch video reorder capacity test passed "

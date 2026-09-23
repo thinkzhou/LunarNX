@@ -130,6 +130,10 @@ bool PsStreamController::startStream() {
         stream::videoCodecName(video_codec_));
     setState(app::StreamState::Connecting, "Setting up stream...");
     stream_transport_connected_ = false;
+    {
+        std::lock_guard<std::mutex> lock(video_recovery_mutex_);
+        last_recovery_request_ = {};
+    }
     ps_button_requested_ = false;
     ps_button_pulse_frames_remaining_ = 0;
     ps_button_release_pending_ = false;
@@ -557,14 +561,6 @@ void PsStreamController::startVideoMonitor() {
                 waiting_started = now;
             }
 
-            if (!first_video_recovery_exhausted && media_ &&
-                media_->hasVideoRecoveryRequest() &&
-                requestRecoveryIDR()) {
-                media_->clearVideoRecoveryRequest();
-                diagnosticLog("ps-controller",
-                              "requested IDR for video recovery");
-            }
-
             if (!streaming && !first_video_recovery_exhausted &&
                     now - waiting_started >= kFirstVideoFrameTimeout &&
                     (next_first_video_recovery.time_since_epoch().count() == 0 ||
@@ -576,6 +572,9 @@ void PsStreamController::startVideoMonitor() {
                             "first rendered frame timeout", true);
                     }
                     const bool idr_requested = requestRecoveryIDR();
+                    if (idr_requested && media_) {
+                        media_->clearVideoRecoveryRequest();
+                    }
                     ++first_video_recovery_attempts;
                     next_first_video_recovery =
                         now + kFirstVideoRecoveryRetryInterval;
@@ -628,6 +627,17 @@ void PsStreamController::startVideoMonitor() {
                     }
                     setState(app::StreamState::Error, error);
                 }
+            }
+
+            // Before the first timeout, service decoder recovery requests.
+            // Once timed retries begin, they own the one-second IDR limiter.
+            if (!first_video_recovery_exhausted &&
+                first_video_recovery_attempts == 0 && media_ &&
+                media_->hasVideoRecoveryRequest() &&
+                requestRecoveryIDR()) {
+                media_->clearVideoRecoveryRequest();
+                diagnosticLog("ps-controller",
+                              "requested IDR for video recovery");
             }
 
             if (now - last_video_summary >= std::chrono::seconds(1)) {

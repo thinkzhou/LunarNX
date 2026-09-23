@@ -347,7 +347,11 @@ PsTransportStats PsStreamSession::transportStats() const {
 
 void PsStreamSession::refreshTransportStats() {
     if (!initialized_) return;
+#if __has_include(<chiaki/akira/takion_profile.h>)
+    const double dynamic_rtt = session_.stream_connection.rtt_ms;
+#else
     const double dynamic_rtt = session_.stream_connection.rtt;
+#endif
     const uint32_t rtt_ms = dynamic_rtt > 0.0
         ? static_cast<uint32_t>(std::lround(dynamic_rtt))
         : static_cast<uint32_t>(session_.rtt_us / 1000ULL);
@@ -392,6 +396,9 @@ void PsStreamSession::handleEvent(ChiakiEvent* event) {
     diagnosticLog("ps-event", "type=%d", static_cast<int>(event->type));
     switch (event->type) {
         case CHIAKI_EVENT_CONNECTED: {
+            // Route preference getters are provided by the legacy LunarNX
+            // patch. Akira's v15 fork does not expose the selected route.
+#if !__has_include(<chiaki/akira/takion_profile.h>)
             if (remote_mode_ && session_.holepunch_session) {
                 char stun_host[254] = {};
                 uint16_t stun_port = 0;
@@ -410,6 +417,7 @@ void PsStreamSession::handleEvent(ChiakiEvent* event) {
                     successful_remote_route_.remote_port = remote_port;
                 }
             }
+#endif
             diagnosticLog("ps-session", "Connected");
             if (trace_) trace_->record(
                 "connected", "ok",
