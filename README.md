@@ -148,7 +148,7 @@ The Switch Capture button can also be assigned. For example, assign **Capture** 
 
 ## PlayStation Notes
 
-- PlayStation protocol code is isolated under `src/ps/` and uses [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng).
+- PlayStation protocol code is isolated under `src/ps/` and uses the [xlanor fork of chiaki-ng](https://github.com/xlanor/chiaki-ng).
 - Remote PS5 streaming uses PlayStation Network signaling and Chiaki hole punching. Restrictive NAT, firewall rules, Wi-Fi loss, or PSN service behavior can still prevent a connection.
 - PS5 sessions can use H.264 or HEVC; PS4 sessions use H.264. Requested codec, resolution, and bitrate come from the LunarNX quality settings.
 - Exiting a stream stops and joins the Chiaki session, finalizes the session, releases PSN/hole-punch resources, and shuts down the media pipeline.
@@ -222,7 +222,23 @@ Real Nintendo Switch hardware remains the final compatibility target.
 
 ## Credits And License
 
-LunarNX builds on [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng), [libpeer](https://github.com/sepfy/libpeer), [Borealis](https://github.com/XITRIX/borealis), [FFmpeg](https://github.com/FFmpeg/FFmpeg), [libnx](https://github.com/switchbrew/libnx), [deko3d](https://github.com/devkitPro/deko3d), [Moonlight-Switch](https://github.com/XITRIX/Moonlight-Switch), and other projects listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Xbox and PlayStation protocol behavior and client workflows were also studied with [XStreaming](https://github.com/Geocld/XStreaming) and [PeaSyo](https://github.com/Geocld/PeaSyo); they are reference projects rather than bundled LunarNX runtime dependencies.
+LunarNX builds on [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng)
+(using the [xlanor fork](https://github.com/xlanor/chiaki-ng) for the Switch SDK),
+[libpeer](https://github.com/sepfy/libpeer),
+[Borealis](https://github.com/XITRIX/borealis),
+[FFmpeg](https://github.com/FFmpeg/FFmpeg),
+[libnx](https://github.com/switchbrew/libnx),
+[deko3d](https://github.com/devkitPro/deko3d),
+[Moonlight-Switch](https://github.com/XITRIX/Moonlight-Switch), and other
+projects listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+We consulted [Akira](https://github.com/xlanor/akira) for its Switch PS5 Remote
+Play implementation and pinned Chiaki revision when investigating HEVC startup;
+Akira application code is not bundled in LunarNX. Xbox and PlayStation protocol
+behavior and client workflows were also studied with
+[XStreaming](https://github.com/Geocld/XStreaming) and
+[PeaSyo](https://github.com/Geocld/PeaSyo); these are reference projects rather
+than bundled LunarNX runtime dependencies.
 
 Original LunarNX code outside the PlayStation module is available under the MIT License. PlayStation support links against chiaki-ng under AGPL-3.0. A combined binary containing the PlayStation path must be distributed under AGPL-3.0 terms with the complete corresponding source code and applicable dependency modifications available. See [LICENSE](LICENSE), [LICENSES/AGPL-3.0.txt](LICENSES/AGPL-3.0.txt), and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 

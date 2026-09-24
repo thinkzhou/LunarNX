@@ -21,7 +21,7 @@ license; the LunarNX MIT license does not replace those terms.
 | curl 8.11.x | <https://curl.se/> | curl license |
 | zlib | <https://zlib.net/> | zlib |
 | zstd | <https://github.com/facebook/zstd> | BSD-3-Clause/GPL-2.0-only dual license |
-| chiaki-ng 1.10 | <https://github.com/chiaki-ng/chiaki-ng> | AGPL-3.0 |
+| chiaki-ng (xlanor fork, pinned revision) | <https://github.com/xlanor/chiaki-ng> (upstream: <https://github.com/chiaki-ng/chiaki-ng>) | AGPL-3.0 |
 | gf-complete | (chiaki dependency) | BSD-3-Clause |
 | jerasure | (chiaki dependency) | BSD-3-Clause |
 | protobuf-nanopb | (chiaki dependency) | zlib |
@@ -29,7 +29,9 @@ license; the LunarNX MIT license does not replace those terms.
 
 The exact source revisions for Borealis and legacy libpeer are pinned in
 `scripts/setup_dependencies.sh`. The FFmpeg revision, downloaded patches, and
-checksums are pinned in `tools/ffmpeg_switch_build/build_in_docker.sh`.
+checksums are pinned in `tools/ffmpeg_switch_build/build_in_docker.sh`. The
+Chiaki revision is pinned in `scripts/setup_chiaki_dependencies.sh` and built
+with the tracked Switch patches in `tools/chiaki_switch/`.
 
 ## Binary distribution warning
 
@@ -56,6 +58,7 @@ dependencies are listed separately above.
 | --- | --- | --- |
 | [XStreaming](https://github.com/Geocld/XStreaming) | MIT | Xbox Remote Play, Xbox Cloud Gaming, signaling, ICE, input, and vibration behavior |
 | [PeaSyo](https://github.com/Geocld/PeaSyo) | AGPL-3.0 | PlayStation Remote Play workflows and connectivity behavior |
+| [Akira](https://github.com/xlanor/akira) | AGPL-3.0 | Nintendo Switch PS5 Remote Play implementation and Chiaki fork/revision used for HEVC comparison; Akira application source is not bundled |
 | [Greenlight](https://github.com/unknownskl/greenlight) | See upstream project | Xbox authentication and streaming behavior |
 | [xbox-xcloud-player](https://github.com/unknownskl/xbox-xcloud-player) | See upstream project | Xbox Cloud Gaming WebRTC behavior |
 | [libnxbox](https://github.com/ursusworks/libnxbox) | See upstream project | Nintendo Switch Xbox streaming integration |

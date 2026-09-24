@@ -1,8 +1,11 @@
 # Chiaki Switch SDK
 
-LunarNX builds the pinned xlanor/chiaki-ng revision
-`907cd8219170b771a7d5d052fa8234b545b25a9f`, the Takion v15 fork used by
-Akira. `github_repos/chiaki-ng-fork` is an ignored local checkout, not a Git
+LunarNX builds the pinned [xlanor/chiaki-ng](https://github.com/xlanor/chiaki-ng)
+revision `907cd8219170b771a7d5d052fa8234b545b25a9f`. We selected it after
+comparing the PS5 Takion v15 path with [Akira](https://github.com/xlanor/akira),
+which pins the same revision in its Chiaki submodule. Akira is a reference
+project, not a bundled LunarNX application dependency.
+`github_repos/chiaki-ng-fork` is an ignored local checkout, not a Git
 submodule or a directory committed to LunarNX. Prepare it with:
 
 ```sh

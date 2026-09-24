@@ -77,7 +77,7 @@ LunarNX/
 | [libpeer](https://github.com/sepfy/libpeer) | 固定 revision + LunarNX 补丁链 | MIT | Xbox WebRTC、ICE、DTLS-SRTP 和 DataChannel |
 | [FFmpeg](https://github.com/FFmpeg/FFmpeg) | wiliwili/averne Switch NVDEC 补丁路线 | LGPL/GPL，取决于构建配置 | H.264/HEVC NVDEC 硬解和 Opus 解码 |
 | [Borealis](https://github.com/XITRIX/borealis) | XITRIX fork 固定 revision + GPU 生命周期补丁 | MIT | Switch 风格 C++ UI 框架 |
-| [chiaki-ng](https://github.com/chiaki-ng/chiaki-ng) | 固定 revision + LunarNX Switch 补丁链 | AGPL-3.0 | PlayStation Remote Play 协议、PSN 连接和媒体传输 |
+| [chiaki-ng（xlanor fork）](https://github.com/xlanor/chiaki-ng) | 固定 v15 revision + LunarNX Switch 补丁；参考 [Akira](https://github.com/xlanor/akira) 使用的 Chiaki 版本 | AGPL-3.0 | PlayStation Remote Play 协议、PSN 连接和媒体传输 |
 | [deko3d](https://github.com/devkitPro/deko3d) | devkitPro | Zlib | Switch 原生 GPU API |
 | [libnx](https://github.com/switchbrew/libnx) | devkitPro | ISC | Switch 硬件 API (HID, audout, fs) |
 | [curl](https://curl.se) | Moonlight Switch curl 8.x 构建 | curl license | Xbox/PS HTTP、HTTPS 和 PSN WSS 信令 |
