@@ -142,7 +142,8 @@ LIBS = -Wl,--start-group -lborealis -lfmt -lyogacore -ltinyxml2 -ldeko3d -lsrtp2
     lib/switch/libchiaki.a lib/switch/libgf_complete.a \
     lib/switch/libjerasure.a lib/switch/libprotobuf-nanopb.a \
     $(USRSCTP_LIBS) \
-    -lmbedtls -lmbedx509 -lmbedcrypto -lnx -Wl,--end-group
+    -lmbedtls -lmbedx509 -lmbedcrypto \
+    $(PORTLIBS)/lib/libmbedtls.a -lnx -Wl,--end-group
 
 BUILD   ?= build/switch
 TARGET  = $(BUILD)/LunarNX.nro

@@ -71,7 +71,7 @@ public:
 
     void setLoginPin(const std::string& pin);
     void setControllerState(ChiakiControllerState& state);
-    void requestIDR();
+    bool requestIDR();
     PsTransportStats transportStats() const;
     PsRoutePreference successfulRemoteRoute() const;
 

@@ -20,6 +20,15 @@ namespace {
 
 constexpr int kRemoteMaxAttempts = 3;
 
+long holepunchHttpStatus(ChiakiHolepunchSession session) {
+#if __has_include(<chiaki/akira/takion_profile.h>)
+    (void)session;
+    return 0;
+#else
+    return chiaki_holepunch_session_get_last_http_status(session);
+#endif
+}
+
 struct NetworkProfile {
     bool ryubing_compat = false;
     int fast_port_guessing_sockets = kPsFastNatSockets;
@@ -228,6 +237,7 @@ bool PsRemoteConnector::connect(const PsConnectionPlan& plan,
             result.error = CHIAKI_ERR_MEMORY;
             return false;
         }
+#if !__has_include(<chiaki/akira/takion_profile.h>)
         if (route_preference.hasPreferredStun()) {
             chiaki_holepunch_session_set_preferred_stun_server(
                 session, route_preference.preferred_stun_host.c_str(),
@@ -238,6 +248,7 @@ bool PsRemoteConnector::connect(const PsConnectionPlan& plan,
                 session, route_preference.remote_address.c_str(),
                 static_cast<uint16_t>(route_preference.remote_port));
         }
+#endif
         if (trace_) trace_->record(
             "holepunch-init", "ok", "attempt=%d elapsed_ms=%lld",
             attempt, elapsedMs(init_started));
@@ -285,7 +296,7 @@ bool PsRemoteConnector::connect(const PsConnectionPlan& plan,
             const auto stage_started = std::chrono::steady_clock::now();
             err = chiaki_holepunch_session_create(session);
             const long http_status =
-                chiaki_holepunch_session_get_last_http_status(session);
+                holepunchHttpStatus(session);
             if (trace_) trace_->record(
                 "session-create", err == CHIAKI_ERR_SUCCESS ? "ok" : "failed",
                 "attempt=%d elapsed_ms=%lld error=%d error_name=%s http_status=%ld",
@@ -305,7 +316,7 @@ bool PsRemoteConnector::connect(const PsConnectionPlan& plan,
                 "attempt=%d elapsed_ms=%lld error=%d error_name=%s http_status=%ld",
                 attempt, elapsedMs(stage_started), static_cast<int>(err),
                 chiaki_error_string(err),
-                chiaki_holepunch_session_get_last_http_status(session));
+                holepunchHttpStatus(session));
         }
 
         ChiakiHolepunchConsoleType dev_type = plan.isPs5()
@@ -323,7 +334,7 @@ bool PsRemoteConnector::connect(const PsConnectionPlan& plan,
                 attempt, elapsedMs(stage_started), plan.isPs5() ? "ps5" : "ps4",
                 plan.has_console_uid ? 1 : 0, static_cast<int>(err),
                 chiaki_error_string(err),
-                chiaki_holepunch_session_get_last_http_status(session));
+                holepunchHttpStatus(session));
         }
         if (err == CHIAKI_ERR_SUCCESS && cancel_requested_.load()) {
             failed_phase = "PSN connection cancelled";
@@ -379,7 +390,7 @@ bool PsRemoteConnector::connect(const PsConnectionPlan& plan,
         result.failed_phase = failed_phase ? failed_phase : "remote connection";
         result.error = err;
         result.http_status =
-            chiaki_holepunch_session_get_last_http_status(session);
+            holepunchHttpStatus(session);
         if (trace_) trace_->record(
             "remote-failure", "classified",
             "attempt=%d phase=%s error=%d error_name=%s http_status=%ld elapsed_ms=%lld",

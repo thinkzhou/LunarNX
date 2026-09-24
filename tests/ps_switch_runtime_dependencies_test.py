@@ -16,11 +16,6 @@ def main():
         "tools/chiaki_switch/build_in_docker.sh").read_text()
     container_build_script = Path(
         "tools/chiaki_switch/build_in_container.sh").read_text()
-    stun_patch = Path("tools/chiaki_switch/lunarnx-chiaki-stun-order.patch").read_text()
-    route_patch = Path("tools/chiaki_switch/lunarnx-chiaki-route-preference.patch").read_text()
-    reliability_patch = Path("tools/chiaki_switch/lunarnx-chiaki-holepunch-reliability.patch").read_text()
-    http_status_patch = Path("tools/chiaki_switch/lunarnx-chiaki-http-status.patch").read_text()
-    rtt_patch = Path("tools/chiaki_switch/lunarnx-chiaki-stream-rtt.patch").read_text()
     wrapper = Path("src/platform/chiaki_curl_compat.cpp").read_text()
     chiaki_root = Path(os.environ.get(
         "LUNARNX_CHIAKI_CHECKOUT", "github_repos/chiaki-ng-fork"))
@@ -39,41 +34,12 @@ def main():
     require("CHIAKI_LIB_ENABLE_LIBNX_CRYPTO" in makefile,
             "Chiaki consumers must use the library's public crypto ABI define")
     require("build_in_container.sh" in docker_build_script and
-            "lunarnx-chiaki-stun-order.patch" in container_build_script and
-            "lunarnx-chiaki-holepunch-reliability.patch" in container_build_script and
-            "lunarnx-chiaki-http-status.patch" in container_build_script and
-            "lunarnx-chiaki-route-preference.patch" in container_build_script and
-            "lunarnx-chiaki-stream-rtt.patch" in container_build_script and
-            "git -C \"$src\" apply" in container_build_script,
-            "Switch Chiaki build must apply focused reliability patches")
-    require("first_send_ms" in rtt_patch and
-            "event.data_ack.rtt_ms" in rtt_patch and
-            "CHIAKI_STREAM_CONNECTION_RTT_WINDOW" in rtt_patch,
-            "Switch Chiaki build must expose live Takion ACK RTT samples")
-    require("clear_notification(session, msg->notification)" in reliability_patch and
-            "CURLE_OPERATION_TIMEDOUT" in reliability_patch and
-            "!short_msg || res != CURLE_OPERATION_TIMEDOUT" in reliability_patch and
-            "port_type == CHIAKI_HOLEPUNCH_PORT_TYPE_DATA ? 3 : 1" in reliability_patch and
-            "holepunch_session_create_offer(session)" in reliability_patch and
-            "err = send_offer(session)" in reliability_patch and
-            "session->main_should_stop" in reliability_patch and
-            "session->quit_reason = CHIAKI_QUIT_REASON_STREAM_CONNECTION_UNKNOWN" in reliability_patch,
-            "focused hole-punch reliability patch must cover queue cleanup, ACK-only HTTP retry, checked offers, bounded DATA retry, and explicit failure state")
-    require("last_http_status" in http_status_patch and
-            "CURLINFO_RESPONSE_CODE" in http_status_patch,
-            "PSN retry classification must expose the actual Chiaki HTTP status")
-    stun_order = [
-        "stun.sonetel.com", "stun.siptrunk.com", "stun.romancecompass.com",
-        "stun.axialys.net", "stun.flashdance.cx", "stun.sip.us",
-        "stun.galeriemagnet.at", "stun.moonlight-stream.org",
-    ]
-    require(all(stun_patch.find(host) < stun_patch.find(stun_order[i + 1])
-                for i, host in enumerate(stun_order[:-1])),
-            "focused STUN patch must preserve measured server ordering")
-    require("set_preferred_stun_server" in route_patch and
-            "set_preferred_remote_candidate" in route_patch and
-            "get_selected_remote_candidate" in route_patch,
-            "route preference patch must expose soft preference and result APIs")
+            "907cd8219170b771a7d5d052fa8234b545b25a9f" in container_build_script and
+            "lunarnx-chiaki-video-reorder-capacity.patch" in container_build_script and
+            "lunarnx-chiaki-recvbuf.patch" in container_build_script and
+            "lunarnx-chiaki-holepunch-reliability.patch" not in container_build_script and
+            "lunarnx-chiaki-route-preference.patch" not in container_build_script,
+            "Switch Chiaki build must pin v15 without applying old hole-punch patches")
     require("chiaki_holepunch_stubs.c" not in cmake,
             "Switch CMake builds must not replace live PSN dependencies with stubs")
     require("CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4" in wrapper,

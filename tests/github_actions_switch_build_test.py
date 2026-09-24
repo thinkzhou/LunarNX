@@ -55,7 +55,8 @@ require(chiaki_wrapper, "build_in_container.sh", "Chiaki Docker wrapper")
 
 chiaki_setup = (ROOT / "scripts/setup_chiaki_dependencies.sh").read_text()
 require(chiaki_setup, "https://github.com/xlanor/chiaki-ng.git", "Chiaki setup")
-require(chiaki_setup, "1597a48514e5d9e67168ca40e6fa40c0171cd379", "Chiaki setup")
+require(chiaki_setup, "907cd8219170b771a7d5d052fa8234b545b25a9f", "Chiaki setup")
+assert "CHIAKI_SDK_PROFILE" not in chiaki_setup
 
 dependency_setup = (ROOT / "scripts/setup_dependencies.sh").read_text()
 for nested_patch in (
@@ -76,9 +77,12 @@ for unavailable_commit in (
     assert unavailable_commit not in libpeer_patch
 
 chiaki_build = (ROOT / "tools/chiaki_switch/build_in_container.sh").read_text()
-require(chiaki_build, "tools/chiaki_switch/pbgen", "Chiaki container build")
-require(chiaki_build, "lunarnx-chiaki-packetstats-wrap.patch", "Chiaki container build")
-require(chiaki_build, "lunarnx-chiaki-key-position-diagnostics.patch", "Chiaki container build")
+require(chiaki_build, "tools/chiaki_switch/pbgen_v15", "Chiaki container build")
+require(chiaki_build, "907cd8219170b771a7d5d052fa8234b545b25a9f", "Chiaki container build")
+require(chiaki_build, "lunarnx-chiaki-video-reorder-capacity.patch", "Chiaki container build")
+require(chiaki_build, "lunarnx-chiaki-recvbuf.patch", "Chiaki container build")
+assert "CHIAKI_SDK_PROFILE" not in chiaki_build
+assert "lunarnx-chiaki-packetstats-wrap.patch" not in chiaki_build
 assert "/work/github_repos/chiaki-ng/pbgen" not in chiaki_build
 
 protoc_wrapper = (ROOT / "tools/chiaki_switch/protoc_from_pbgen.sh").read_text()

@@ -26,7 +26,7 @@ public:
     void stop();
     std::string lastError() const { return last_error_; }
     void setControllerState(ChiakiControllerState&) {}
-    void requestIDR() {}
+    bool requestIDR() { return true; }
 
 private:
     void replayLoop();
