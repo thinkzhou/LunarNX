@@ -58,6 +58,10 @@ require(chiaki_setup, "https://github.com/xlanor/chiaki-ng.git", "Chiaki setup")
 require(chiaki_setup, "1597a48514e5d9e67168ca40e6fa40c0171cd379", "Chiaki setup")
 
 dependency_setup = (ROOT / "scripts/setup_dependencies.sh").read_text()
+require(dependency_setup, 'bash "$project_root/scripts/setup_steamlink_dependencies.sh"', "dependency setup")
+steam_setup = (ROOT / "scripts/setup_steamlink_dependencies.sh").read_text()
+require(steam_setup, "submodule update --init --recursive --", "Steam dependency setup")
+require(steam_setup, "vendor/ihslib vendor/protobuf-c", "Steam dependency setup")
 for nested_patch in (
     "0001-switch-add-libnx-network-byte-order-includes.patch",
     "0001-switch-configure-mbedtls-for-DTLS-SRTP.patch",

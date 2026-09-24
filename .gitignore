@@ -49,6 +49,7 @@ ps_credentials.json
 ps_token.json
 ps_registration.json
 psn_*.json
+steamlink_device.json
 
 # Logs
 debug.log

@@ -198,7 +198,13 @@ public:
     // Treat a new WebRTC association as a complete media source change. This
     // resets both video and audio RTP/decode/playback state.
     void prepareForNewMediaSource(const char* reason);
+    // Audio channel restart: reset sequence/decoder state without interrupting video.
+    void prepareForNewAudioSource();
+    uint64_t successfulAudioOutputCount() const { return successful_audio_outputs_.load(); }
     void presentVideoFrame();
+    // Always available, including release builds with latency logging disabled.
+    uint64_t successfulVideoPresentCount() const { return successful_video_presents_.load(); }
+    uint32_t decodedVideoFrameCount() const { return decoded_video_frames_.load(); }
     void setVideoPresentationSuspended(bool suspended);
     void setVideoPresentationMode(VideoPresentationMode mode);
     void setVideoDecodeCatchUpMode(VideoDecodeCatchUpMode mode);
@@ -310,6 +316,8 @@ private:
     std::mutex video_ready_callback_mutex_;
     std::function<void()> video_ready_callback_;
     std::atomic<bool> video_ready_notified_{false};
+    std::atomic<uint64_t> successful_audio_outputs_{0};
+    std::atomic<uint64_t> successful_video_presents_{0};
 
     std::mutex video_queue_mutex_;
     std::condition_variable video_queue_cv_;

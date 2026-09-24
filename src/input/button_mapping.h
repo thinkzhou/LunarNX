@@ -10,6 +10,7 @@ namespace lunar::input {
 enum class ButtonMappingProfile : uint8_t {
     Xbox,
     PlayStation,
+    Steam,
 };
 
 enum class RemoteButton : uint8_t {

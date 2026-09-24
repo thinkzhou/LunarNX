@@ -52,6 +52,20 @@ jobs:
             -DENABLE_MBEDTLS=OFF -DTEST_APPS=OFF -DCMAKE_BUILD_TYPE=Release
           cmake --build lib/libpeer/third_party/libsrtp/build_host -j3
 
+      - name: Run Steam lifecycle and input simulations
+        run: |
+          brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+          python3 tests/steam_link_hid_sim_test.py
+          python3 tests/steam_link_runtime_sim_test.py
+          python3 tests/steam_pointer_test.py
+          python3 tests/steam_settings_file_test.py
+          python3 tests/steam_ui_contract_test.py
+          python3 tests/steam_ux_replay_test.py
+          python3 tests/stream_input_router_test.py
+          python3 tests/steam_mapping_replay_test.py
+          python3 tests/steam_link_integration_test.py
+          python3 tests/steam_release_log_test.py
+
       - name: Run Xbox input state-machine tests
         run: |
           make -f Makefile.desktop input_tests
@@ -115,6 +129,9 @@ jobs:
         run: |
           ./scripts/setup_dependencies.sh
           ./scripts/setup_chiaki_dependencies.sh
+
+      - name: Check Steam dependency setup from a clean checkout
+        run: python3 tests/steam_dependency_setup_test.py
 
       - name: Build Chiaki libraries
         run: ./tools/chiaki_switch/build_in_container.sh

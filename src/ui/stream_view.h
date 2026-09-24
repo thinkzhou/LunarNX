@@ -51,6 +51,8 @@ private:
     bool performance_visible_ = false;
     std::atomic<bool> disconnect_armed_{false};
     float swipe_start_x_ = 0.0f;
+    brls::Box* connecting_overlay_ = nullptr;
+    void updateConnectionStatus();
 
     void runLoop();
     void setQuickMenuVisible(bool visible);
