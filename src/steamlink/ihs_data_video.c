@@ -178,7 +178,11 @@ static bool DataStart(IHS_SessionChannel *channel) {
         return false;
     }
     CVideoDecoderInfoMsg message = CVIDEO_DECODER_INFO_MSG__INIT;
-    message.info = "Marvell hardware decoding";
+#ifdef __SWITCH__
+    message.info = "LunarNX FFmpeg NVDEC";
+#else
+    message.info = "LunarNX FFmpeg";
+#endif
     PROTOBUF_C_SET_VALUE(message, threads, 1);
 
     videoCh->states.lastStatsTime = IHS_TimerNow();

@@ -174,20 +174,14 @@ static void OnNegotiationInit(IHS_SessionChannel *channel, const CNegotiationIni
 
     CStreamingClientCaps clientCaps = CSTREAMING_CLIENT_CAPS__INIT;
 
-    clientCaps.system_info = "\"SystemInfo\"\n{\n\t\"OSType\"\t\t\"-197\"\n\t\"CPUID\"\t\t\"ARM\"\n"
-                             "\t\"CPUGhz\"\t\t\"0.000000\"\n\t\"PhysicalCPUCount\"\t\"1\"\n"
-                             "\t\"LogicalCPUCount\"\t\"1\"\n\t\"SystemRAM\"\t\t\"263\"\n"
-                             "\t\"VideoVendorID\"\t\"0\"\n\t\"VideoDeviceID\"\t\"0\"\n"
-                             "\t\"VideoRevision\"\t\"0\"\n\t\"VideoRAM\"\t\t\"0\"\n"
-                             "\t\"VideoDisplayX\"\t\"1920\"\n\t\"VideoDisplayY\"\t\"1080\"\n"
-                             "\t\"VideoDisplayNameID\"\t\"JN-MD133BFHDR\"\n}\n";
+    // The upstream snapshot describes an unrelated TV/monitor and RAM size.
+    // Omit optional identity fields instead of reporting invented capabilities.
     PROTOBUF_C_SET_VALUE(clientCaps, system_can_suspend, true);
     PROTOBUF_C_SET_VALUE(clientCaps, maximum_decode_bitrate_kbps, 30000);
     PROTOBUF_C_SET_VALUE(clientCaps, maximum_burst_bitrate_kbps, 90000);
     if (ihsConf.enableHevc) {
         PROTOBUF_C_SET_VALUE(clientCaps, supports_video_hevc, true);
     }
-    PROTOBUF_C_SET_VALUE(clientCaps, form_factor, k_EStreamDeviceFormFactorTV);
 
     CNegotiationSetConfigMsg response = CNEGOTIATION_SET_CONFIG_MSG__INIT;
     response.config = &config;

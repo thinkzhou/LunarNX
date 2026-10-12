@@ -42,6 +42,9 @@ extern "C" bool CaptureNegotiationSend(IHS_SessionChannel*, EStreamControlMessag
     protobuf_c_message_pack(message, bytes.data());
     auto* reply = cnegotiation_set_config_msg__unpack(nullptr, bytes.size(), bytes.data());
     assert(reply && reply->config && reply->streaming_client_config);
+    assert(reply->streaming_client_caps);
+    assert(!reply->streaming_client_caps->system_info);
+    assert(!reply->streaming_client_caps->has_form_factor);
     assert(reply->config->has_enable_remote_hid);
     assert(bool(reply->config->enable_remote_hid) == expected_hid);
     assert(reply->config->selected_video_codec == k_EStreamVideoCodecH264);
