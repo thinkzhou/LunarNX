@@ -622,3 +622,14 @@ registration/ACK ordering, retry lifetime, sequence rollover, pending memory
 bound, receive-window holes/growth, orphan media, endpoint/connection rejection,
 wire-parser/dispatcher ACK behavior and boundary/exact-multiple fragment round
 trips. These are local component/transport replays, not Steam interoperability.
+
+Validation: production Steam HID/client/reliability sanitizer replays, portable
+runtime replay with five real H.264 frame hashes, pointer/mapping/menu replays,
+settings-file and release-log tests, and static Steam integration/UI checks
+passed. The desktop stream probe builds with the same overrides. Xbox session
+ordering, DTLS read-loop and DataChannel PPID checks passed.
+
+`libpeer_sctp_config_test.py` still fails its completed-state UDP drain-loop
+check against the existing shared ignored `lib/libpeer` checkout. The unchanged
+test from baseline `80b0c34` reproduces that failure; this Steam change did not
+modify the checkout or its reproducible patches.
