@@ -633,3 +633,12 @@ ordering, DTLS read-loop and DataChannel PPID checks passed.
 check against the existing shared ignored `lib/libpeer` checkout. The unchanged
 test from baseline `80b0c34` reproduces that failure; this Steam change did not
 modify the checkout or its reproducible patches.
+
+The combined Xbox/PlayStation/Steam NRO was built in
+`devkitpro/devkita64:20251117`, with the legacy libpeer provider and moonlight curl.
+The BSS guard passed at 20.4 MiB. Existing prebuilt Switch dependencies were
+mounted read-only from the primary checkout; no Switch library was built on macOS.
+No Ryubing mock stream was run: the available mock exercises Xbox WebRTC rather
+than this Steam transport, and emulator interaction is user-operated. Real Steam
+host/Switch picture, audio, lossy-network recovery and hbmenu relaunch remain
+unverified; local sanitizer replays and an NRO build do not establish those outcomes.
