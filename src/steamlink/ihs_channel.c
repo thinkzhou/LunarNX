@@ -223,7 +223,7 @@ void IHS_SessionChannelPacketAck(IHS_SessionChannel *channel, int32_t packetId, 
 
 static bool SessionChannelQueueFramePackets(IHS_SessionChannel *channel, IHS_SessionFrame *frame, size_t bodyLimit,
                                             bool enableRetransmit) {
-    int fragmentSize = (int) (frame->body.size / bodyLimit + 1);
+    int fragmentSize = (int) ((frame->body.size + bodyLimit - 1) / bodyLimit);
     assert(fragmentSize <= INT16_MAX);
     int16_t fragmentId = -1;
     while (frame->body.size != 0) {
@@ -231,10 +231,11 @@ static bool SessionChannelQueueFramePackets(IHS_SessionChannel *channel, IHS_Ses
         IHS_SessionPacket packet;
         packet.header = frame->header;
         if (fragmentId < 0) {
-            packet.header.fragmentId = (int16_t) fragmentSize;
+            packet.header.fragmentId = (int16_t) (fragmentSize - 1);
         } else {
             packet.header.fragmentId = fragmentId;
             packet.header.type = FragmentedPacketType(packet.header.type);
+            packet.header.packetId = IHS_SessionChannelNextPacketId(channel);
         }
         IHS_SessionPacketBodyInitialize(&packet.body, packet.header.hasCrc);
         IHS_BufferAppendMem(&packet.body, IHS_BufferPointer(&frame->body), packetBodySize);

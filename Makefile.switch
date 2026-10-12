@@ -227,12 +227,12 @@ C_SRCS += vendor/ihslib/src/base.c vendor/ihslib/src/crc32.c vendor/ihslib/src/c
     src/steamlink/ihs_hid_device.c vendor/ihslib/src/hid/provider.c \
     src/steamlink/ihs_hid_manager.c vendor/ihslib/src/hid/report.c \
     src/steamlink/ihs_session.c vendor/ihslib/src/session/packet.c \
-    vendor/ihslib/src/session/frame.c vendor/ihslib/src/session/window.c \
+    vendor/ihslib/src/session/frame.c src/steamlink/ihs_window.c \
     vendor/ihslib/src/session/frame_crypto.c vendor/ihslib/src/session/frame_stats.c \
-    vendor/ihslib/src/session/callbacks.c vendor/ihslib/src/session/retransmission.c \
+    vendor/ihslib/src/session/callbacks.c src/steamlink/ihs_retransmission.c \
     src/steamlink/ihs_channel.c \
     src/steamlink/ihs_discovery.c \
-    vendor/ihslib/src/session/channels/ch_control.c \
+    src/steamlink/ihs_control.c \
     vendor/ihslib/src/session/channels/ch_control_authentication.c \
     src/steamlink/ihs_negotiation.c \
     vendor/ihslib/src/session/channels/ch_control_keepalive.c \

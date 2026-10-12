@@ -22,10 +22,10 @@ set -- \
   "$root_dir/src/steamlink/ihs_client.c" "$ihs_src/client/discovery.c" \
   "$root_dir/src/steamlink/ihs_authorization.c" "$root_dir/src/steamlink/ihs_streaming.c" \
   "$root_dir/src/steamlink/ihs_session.c" "$ihs_src/session/packet.c" "$ihs_src/session/frame.c" \
-  "$ihs_src/session/window.c" "$ihs_src/session/frame_crypto.c" \
+  "$root_dir/src/steamlink/ihs_window.c" "$ihs_src/session/frame_crypto.c" \
   "$ihs_src/session/frame_stats.c" "$ihs_src/session/callbacks.c" \
-  "$ihs_src/session/retransmission.c" "$root_dir/src/steamlink/ihs_channel.c" \
-  "$root_dir/src/steamlink/ihs_discovery.c" "$ihs_src/session/channels/ch_control.c" \
+  "$root_dir/src/steamlink/ihs_retransmission.c" "$root_dir/src/steamlink/ihs_channel.c" \
+  "$root_dir/src/steamlink/ihs_discovery.c" "$root_dir/src/steamlink/ihs_control.c" \
   "$ihs_src/session/channels/ch_control_authentication.c" \
   "$root_dir/src/steamlink/ihs_negotiation.c" \
   "$ihs_src/session/channels/ch_control_keepalive.c" \

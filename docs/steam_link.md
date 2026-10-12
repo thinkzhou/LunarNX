@@ -587,3 +587,38 @@ while suspended, duplicate connected callbacks and unchanged connection timeout.
 No new Ryubing run was performed: emulator interaction remains user-operated and
 the available Xbox mock does not exercise Steam. Real-host/Switch end-to-end
 verification remains outstanding.
+
+### IHSlib reliability comparison and corrections (2026-10-12)
+
+[The pinned-source comparison](steam_ihslib_comparison.md) distinguishes adopted
+transport corrections from remaining application/media work. The vendor revision
+is unchanged; `ihs_window.c`, `ihs_retransmission.c` and `ihs_control.c` are tracked
+compile-time overrides in both Switch and desktop probe builds.
+
+Reliable packets now have independent retained buffers registered before initial
+send admission. Retries stay dormant until the initial send completes. Cumulative
+ACKs release received IDs across sequence rollover; an extended NACK releases
+only its contiguous/present IDs, while missing packets remain eligible for retry.
+Reliable messages survive the former 20-attempt cutoff, with a 1024-packet memory
+bound and a fixed 25 ms fallback interval. RTT-derived pacing, peer clock
+translation and periodic outgoing presence-mask NACKs are not implemented here.
+
+Control receipt starts from ID zero, preserves holes and acknowledges contiguous
+receipt; the receive window grows boundedly to 16384 slots. Fragment headers count
+following datagrams, and fragments use consecutive packet IDs. Unreliable media
+windows skip orphan fragments at join and ignore already consumed duplicates.
+Endpoint/connection IDs are checked before feedback dispatch. Destruction joins
+media channel workers before freeing control/stats. Truncated encrypted control
+payloads are rejected before entering the pinned decrypt helper's length arithmetic.
+
+Negotiation omits the upstream snapshot's invented TV/monitor/RAM identity.
+Decoder information identifies LunarNX's FFmpeg backend, including NVDEC in a
+Switch build. Host authorization persistence and frame tickets through actual GPU
+completion remain separate follow-ups.
+
+The production-source ASan/UBSan replay in `steam_link_hid_sim_test.py` also runs
+`steam_reliability_test.cpp`: cumulative/selective feedback, NACK retention,
+registration/ACK ordering, retry lifetime, sequence rollover, pending memory
+bound, receive-window holes/growth, orphan media, endpoint/connection rejection,
+wire-parser/dispatcher ACK behavior and boundary/exact-multiple fragment round
+trips. These are local component/transport replays, not Steam interoperability.

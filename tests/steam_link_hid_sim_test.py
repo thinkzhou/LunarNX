@@ -25,7 +25,10 @@ sources = list(ihs.glob("*.c"))
 for sub in ("client", "session", "protobuf"):
     sources += list((ihs / sub).rglob("*.c"))
 sources += list((ihs / "hid").glob("*.c"))
-overrides = {ihs / "session/channels/ch_data.c": ROOT / "src/steamlink/ihs_data.c",
+overrides = {ihs / "session/window.c": ROOT / "src/steamlink/ihs_window.c",
+             ihs / "session/retransmission.c": ROOT / "src/steamlink/ihs_retransmission.c",
+             ihs / "session/channels/ch_control.c": ROOT / "src/steamlink/ihs_control.c",
+             ihs / "session/channels/ch_data.c": ROOT / "src/steamlink/ihs_data.c",
              ihs / "session/channels/video/ch_data_video.c": ROOT / "src/steamlink/ihs_data_video.c",
              ihs / "session/channels/ch_data_audio.c": ROOT / "src/steamlink/ihs_data_audio.c",
              ihs / "session/channels/channel.c": ROOT / "src/steamlink/ihs_channel.c",
@@ -55,6 +58,12 @@ with tempfile.TemporaryDirectory(prefix="lunarnx-hid-sim-") as directory:
          "src/steamlink/steam_hid.cpp", "tests/steam_link_hid_sim.cpp", *objects,
          f"-L{mbed / 'build_host/library'}", "-lmbedcrypto", "-lmbedtls", "-lmbedx509", "-o", exe])
     print(run([exe]).strip())
+
+    reliable_exe = tmp / "reliability-sim"
+    run(["clang++", *cppflags, *san, *includes, "-std=c++20", "-pthread",
+         "tests/steam_reliability_test.cpp", *objects,
+         f"-L{mbed / 'build_host/library'}", "-lmbedcrypto", "-lmbedtls", "-lmbedx509", "-o", reliable_exe])
+    print(run([reliable_exe]).strip())
 
     # Production client state, without a Switch runtime or any live host contact.
     (tmp / "switch.h").write_text("#pragma once\n#include <cstring>\ninline void randomGet(void* p, size_t n) { std::memset(p, 42, n); }\n")
