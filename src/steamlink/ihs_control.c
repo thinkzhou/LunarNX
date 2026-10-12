@@ -221,7 +221,8 @@ static void OnControlReceived(IHS_SessionChannel *channel, IHS_SessionPacket *pa
                 case IHS_SessionFrameDecryptSequenceMismatch: {
                     IHS_SessionLog(channel->session, IHS_LogLevelWarn, "Control",
                                    "Mismatched message sequence %llu (expect %llu). id=%d, retransmit=%d, type=%s",
-                                   actualSequence, expectSequence, frame.header.packetId, frame.header.retransmitCount,
+                                   (unsigned long long)actualSequence, (unsigned long long)expectSequence,
+                                   frame.header.packetId, frame.header.retransmitCount,
                                    ControlMessageTypeName(type));
                     control->recvEncryptSequence = actualSequence + 1;
                     break;
