@@ -3,6 +3,10 @@ import json
 import struct
 from pathlib import Path
 import unittest
+from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+
+import mock_xbox_server as server
 
 from mock_xbox_server import (
     InputPacketValidator,
@@ -287,6 +291,30 @@ class ProtocolShapeTests(unittest.TestCase):
 
         self.assertIn("_setup_control_channel(channel, video_sender)", source)
         self.assertIn("video_sender._send_keyframe()", source)
+
+
+class AnswerRoleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_passive_role_is_installed_in_real_local_description(self):
+        pc = SimpleNamespace(
+            on=lambda name: lambda callback: callback,
+            setRemoteDescription=AsyncMock(),
+            addTrack=lambda track: object(),
+            createAnswer=AsyncMock(return_value=SimpleNamespace(
+                sdp="v=0\r\na=setup:active\r\n", type="answer")),
+        )
+        async def install(description):
+            self.assertIn("a=setup:passive", description.sdp)
+            self.assertNotIn("a=setup:active", description.sdp)
+            pc.localDescription = description
+        pc.setLocalDescription = AsyncMock(side_effect=install)
+        session = server.Session("role-test")
+        session.offer_sdp = "v=0\r\n"
+        with patch.object(server, "RTCPeerConnection", return_value=pc), \
+             patch.object(server, "VideoFileTrack", return_value=object()), \
+             patch.object(server, "AudioFileTrack", return_value=object()):
+            answer = await server.create_webrtc_answer(session)
+        self.assertIn("a=setup:passive", answer)
+        pc.setLocalDescription.assert_awaited_once()
 
 
 if __name__ == "__main__":
