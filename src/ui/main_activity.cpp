@@ -366,7 +366,9 @@ void MainActivity::installStateCallback() {
 void MainActivity::openStreamSettings() {
     signout_pending_ = false;
 
-    StreamSettingsSnapshot snapshot;
+    // Preserve persisted fields that are not cached by MainActivity, including
+    // the next-session WebRTC backend choice when settings are reopened.
+    StreamSettingsSnapshot snapshot = loadStreamSettings();
     snapshot.width = stream_width_;
     snapshot.height = stream_height_;
     snapshot.bitrate_kbps = stream_bitrate_kbps_;
