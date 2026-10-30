@@ -1,5 +1,9 @@
 #include "webrtc_backend.h"
 #include "../common.h"
+#include "../diagnostics.h"
+#ifndef LUNARNX_ENABLE_LIBDATACHANNEL
+#define LUNARNX_ENABLE_LIBDATACHANNEL 0
+#endif
 #include <cJSON.h>
 #include <cstdio>
 #include <string>
@@ -16,6 +20,13 @@ WebRtcBackend loadWebRtcBackend() {
     const cJSON* value = cJSON_GetObjectItemCaseSensitive(config, "xbox_webrtc_backend");
     const auto backend = parseWebRtcBackend(cJSON_IsString(value) ? value->valuestring : nullptr);
     cJSON_Delete(config);
+#if LUNARNX_ENABLE_LIBDATACHANNEL
     return backend;
+#else
+    if (backend == WebRtcBackend::Libdatachannel) {
+        lunar::persistentEventLog("webrtc", "requested backend=libdatachannel unavailable; selected backend=libpeer");
+    }
+    return WebRtcBackend::Libpeer;
+#endif
 }
 }

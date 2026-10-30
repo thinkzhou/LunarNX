@@ -3,6 +3,9 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#ifndef LUNARNX_ENABLE_LIBDATACHANNEL
+#define LUNARNX_ENABLE_LIBDATACHANNEL 0
+#endif
 using lunar::webrtc::WebRtcBackend;
 using lunar::webrtc::loadWebRtcBackend;
 int main(int argc, char** argv) {
@@ -18,7 +21,9 @@ int main(int argc, char** argv) {
         assert(loadWebRtcBackend() == expected);
     };
     check("{}", WebRtcBackend::Libpeer);
-    check("{\"xbox_webrtc_backend\":\"libdatachannel\",\"resolution\":1080}", WebRtcBackend::Libdatachannel);
+    constexpr auto experimental = LUNARNX_ENABLE_LIBDATACHANNEL
+        ? WebRtcBackend::Libdatachannel : WebRtcBackend::Libpeer;
+    check("{\"xbox_webrtc_backend\":\"libdatachannel\",\"resolution\":1080}", experimental);
     check("{\"xbox_webrtc_backend\":\"libpeer\"}", WebRtcBackend::Libpeer);
     check("{\"xbox_webrtc_backend\":\"unknown\"}", WebRtcBackend::Libpeer);
     check("{\"xbox_webrtc_backend\":true}", WebRtcBackend::Libpeer);

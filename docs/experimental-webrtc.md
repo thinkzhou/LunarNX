@@ -21,7 +21,7 @@ switched to libdatachannel by this setting.
    resume, as well as a longer session. Repeat with libpeer after the experiment.
 5. If the experimental connection fails, return to Xbox Settings and choose
    libpeer. There is no silent automatic fallback that could invalidate an A/B
-   result.
+   result. This applies when both implementations are present.
 
 The persistent log contains `selected backend=libpeer` or
 `selected backend=libdatachannel` for each new connection. This is present even
@@ -72,6 +72,11 @@ make -f Makefile.switch CURL_PROVIDER=moonlight EXPERIMENTAL_WEBRTC=1
 Run that command inside the project's prescribed devkitA64 Docker environment.
 `EXPERIMENTAL_WEBRTC=0` omits the experimental SDK and selector; clean the app
 build when changing build feature flags. `WEBRTC_PROVIDER` stays `legacy`.
+A binary built with the feature disabled always uses libpeer even if a previous
+installation saved `libdatachannel`; it logs that the requested backend is
+unavailable. This prevents a hidden experimental setting from blocking Xbox
+connections after a downgrade.
+
 Native Make builds default to the feature being disabled; enable it explicitly
 for local development.
 
