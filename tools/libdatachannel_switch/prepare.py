@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Fetch hash-locked upstream sources and MPL-licensed Switch adaptations."""
-import concurrent.futures
 import hashlib
 import io
 import json
@@ -40,7 +39,9 @@ def extract(repo, ref, checksum, destination, archive_name):
                 target.mkdir(parents=True, exist_ok=True)
             elif member.isfile():
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(source.extractfile(member).read())
+                content = source.extractfile(member).read()
+                if not target.exists() or target.read_bytes() != content:
+                    target.write_bytes(content)
             else:
                 raise ValueError('unexpected archive link or special file')
 

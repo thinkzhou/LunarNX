@@ -9,6 +9,10 @@ LUNARNX_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
 # WebRTC provider: "legacy" (old lib/libpeer) or "upstream" (clean github_repos/libpeer)
 WEBRTC_PROVIDER ?= legacy
+# Build both implementations; the persisted Xbox setting still defaults to libpeer.
+EXPERIMENTAL_WEBRTC ?= 1
+RTC_SDK = build/libdatachannel-sdk/switch
+RTC_HEADERS = build/libdatachannel-sdk/source/libdatachannel/include
 
 ifeq ($(WEBRTC_PROVIDER),upstream)
 LIBPEER       = github_repos/libpeer
@@ -142,7 +146,17 @@ LIBS = -Wl,--start-group -lborealis -lfmt -lyogacore -ltinyxml2 -ldeko3d -lsrtp2
     lib/switch/libchiaki.a lib/switch/libgf_complete.a \
     lib/switch/libjerasure.a lib/switch/libprotobuf-nanopb.a \
     $(USRSCTP_LIBS) \
-    -lmbedtls -lmbedx509 -lmbedcrypto -lnx -Wl,--end-group
+    -lmbedtls -lmbedx509 -lmbedcrypto -lnx
+
+ifeq ($(EXPERIMENTAL_WEBRTC),1)
+INCDIRS += -I$(RTC_HEADERS)
+DFLAGS += -DLUNARNX_ENABLE_LIBDATACHANNEL=1 -DRTC_ENABLE_MEDIA=1 -DRTC_ENABLE_WEBSOCKET=0 -DRTC_STATIC
+LIBS += $(RTC_SDK)/dependency/libdatachannel-static.a \
+    $(RTC_SDK)/dependency/deps/libjuice/libjuice-static.a \
+    $(RTC_SDK)/liblunar_rtc_background.a
+endif
+
+LIBS += -Wl,--end-group
 
 BUILD   ?= build/switch
 TARGET  = $(BUILD)/LunarNX.nro
@@ -157,7 +171,7 @@ ROMFS_SHADERS = romfs/shaders/basic_vsh.dksh \
     romfs/shaders/upscaling_fsh.dksh \
     romfs/shaders/rcas_fsh.dksh
 
-CXX_SRCS = src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_processor.cpp src/app/stream_controller.cpp \
+CXX_SRCS = src/webrtc/libdatachannel_peer.cpp src/webrtc/webrtc_backend.cpp src/main.cpp lib/qrcodegen/qrcodegen.cpp src/app/ice_candidate_processor.cpp src/app/stream_controller.cpp \
     src/app/dev_bridge_client.cpp \
     src/app/web_rtc_transport.cpp \
     src/app/xbox_ice_preferences.cpp \
@@ -299,3 +313,11 @@ $(RHO_TARGET): $(RHO_ELF) $(ROMFS_STAGE_STAMP)
 $(RHO_ELF): $(RHO_CXX_OBJS) $(RHO_C_OBJS)
 	@mkdir -p $(BUILD)
 	$(CXX) $(LDFLAGS) $(RHO_CXX_OBJS) $(RHO_C_OBJS) $(LIBDIRS) $(RHO_LIBS) -o $@
+
+ifeq ($(EXPERIMENTAL_WEBRTC),1)
+$(ALL_OBJS): | $(RTC_SDK)/ready.stamp
+$(BUILD)/LunarNX.elf: $(RTC_SDK)/ready.stamp
+$(RTC_SDK)/ready.stamp: tools/libdatachannel_switch/prepare.py tools/libdatachannel_switch/build.sh \
+    tools/libdatachannel_switch/CMakeLists.txt $(wildcard tools/libdatachannel_switch/compat/*)
+	bash tools/libdatachannel_switch/build.sh switch
+endif

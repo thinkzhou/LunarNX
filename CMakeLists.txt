@@ -42,6 +42,8 @@ set(LUNARNX_SOURCES
     src/api/http_client.cpp
 
     # WebRTC
+    src/webrtc/webrtc_backend.cpp
+    src/webrtc/libdatachannel_peer.cpp
     src/webrtc/peer_manager.cpp
 
     # Stream

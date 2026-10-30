@@ -2,6 +2,8 @@
 
 #include "../common.h"
 #include "network_path_estimator.h"
+#include "webrtc_backend.h"
+#include <memory>
 #include "rtp_clock_mapper.h"
 #include "video_rtp_jitter_buffer.h"
 #include <peer_connection.h>
@@ -17,6 +19,7 @@
 namespace lunar::webrtc {
 
 struct PeerManagerQueueTestAccess;
+class LibdatachannelPeer;
 
 struct IceCandidate {
     std::string sdp;          // Full candidate line
@@ -113,7 +116,7 @@ struct PeerCallbacks {
 
 class PeerManager {
 public:
-    PeerManager();
+    explicit PeerManager(WebRtcBackend backend = WebRtcBackend::Libpeer);
     ~PeerManager();
 
     bool initialize();
@@ -187,6 +190,8 @@ private:
     static constexpr size_t kMaxOutboundPayloadBytes = 1024;
     static constexpr uint8_t kMaxPliSendAttempts = 3;
     static constexpr std::chrono::milliseconds kInputTransitionTtl{50};
+    WebRtcBackend backend_ = WebRtcBackend::Libpeer;
+    std::unique_ptr<LibdatachannelPeer> alternate_;
     PeerConnection* pc_ = nullptr;
     PeerCallbacks callbacks_;
     std::atomic<bool> connected_{false};

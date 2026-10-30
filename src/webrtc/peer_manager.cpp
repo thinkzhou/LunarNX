@@ -1,4 +1,5 @@
 #include "peer_manager.h"
+#include "libdatachannel_peer.h"
 #include "video_jitter_policy.h"
 #include "xbox_input_feedback.h"
 #include "xstreaming_data_channels.h"
@@ -316,7 +317,8 @@ void PeerManager::onAudioTrack(uint8_t* data,
 uint64_t PeerManager::recoverRtpClockAnchorArrivalNs(const char* track) const {
     const uint64_t callback_ns = elapsedNs(media_clock_start_);
     PeerConnectionMediaStats stats = {};
-    peer_connection_get_media_stats(pc_, &stats);
+    if (alternate_) stats = alternate_->stats();
+    else peer_connection_get_media_stats(pc_, &stats);
     const uint64_t arrival_ns = recoverQueuedRtpArrivalNs(
         callback_ns, stats.rtp_queue_oldest_age_ms);
     lunar::diagnosticLog(
@@ -332,7 +334,10 @@ uint64_t PeerManager::recoverRtpClockAnchorArrivalNs(const char* track) const {
 
 void PeerManager::onDataChannelMessage(char* msg, size_t len, void* userdata, uint16_t sid) {
     auto* self = static_cast<PeerManager*>(userdata);
-    char* label = peer_connection_lookup_sid_label(self->pc_, sid);
+    const char* label = nullptr;
+    if (self->alternate_) {
+        for (const auto& channel : kXStreamingDataChannels) if (channel.sid == sid) label = channel.label;
+    } else label = peer_connection_lookup_sid_label(self->pc_, sid);
     std::string label_str = label ? label : "unknown";
 
     if (label_str == "input" && len >= 2) {
@@ -371,7 +376,7 @@ void PeerManager::onDataChannelMessage(char* msg, size_t len, void* userdata, ui
 // =============================================================================
 // PeerManager
 // =============================================================================
-PeerManager::PeerManager() = default;
+PeerManager::PeerManager(WebRtcBackend backend) : backend_(backend) {}
 
 PeerManager::~PeerManager() {
     disconnect();
@@ -379,7 +384,7 @@ PeerManager::~PeerManager() {
 
 bool PeerManager::initialize() {
     if (initialized_) disconnect();
-    if (peer_init() != 0) {
+    if (backend_ == WebRtcBackend::Libpeer && peer_init() != 0) {
         lunar::diagnosticLog("webrtc", "peer_init failed");
         return false;
     }
@@ -440,6 +445,16 @@ bool PeerManager::initialize() {
     config.onaudiotrack = onAudioTrack;
     config.user_data = this;
 
+    lunar::persistentEventLog("webrtc", "selected backend=%s", webRtcBackendName(backend_));
+    if (backend_ == WebRtcBackend::Libdatachannel) {
+        alternate_ = std::make_unique<LibdatachannelPeer>();
+        if (!alternate_->initialize(config, onIceCandidate, onIceStateChange, onDataChannelMessage)) {
+            alternate_.reset(); initialized_ = false;
+            lunar::diagnosticLog("webrtc", "libdatachannel unavailable or initialization failed");
+            return false;
+        }
+        return true;
+    }
     pc_ = peer_connection_create(&config);
     if (!pc_) {
         fprintf(stderr, "[webrtc] peer_connection_create failed\n");
@@ -479,6 +494,7 @@ std::string PeerManager::successfulIceServerUrl() const {
 }
 
 std::string PeerManager::createOffer() {
+    if (alternate_) return alternate_->createOffer();
     if (!pc_) return "";
     const char* sdp = peer_connection_create_offer(pc_);
     const char* successful_url =
@@ -494,6 +510,7 @@ std::string PeerManager::createOffer() {
 }
 
 void PeerManager::setRemoteAnswer(const std::string& sdp) {
+    if (alternate_) { alternate_->setRemoteAnswer(sdp); return; }
     if (!pc_) return;
     lunar::diagnosticLog("webrtc", "set remote answer len=%zu", sdp.size());
     logRemoteMediaDescription(sdp);
@@ -506,6 +523,10 @@ std::vector<IceCandidate> PeerManager::getLocalCandidates() {
 }
 
 void PeerManager::addIceCandidate(const std::string& candidate_sdp) {
+    if (alternate_) {
+        for (const auto& candidate : extractCandidateLines(candidate_sdp)) alternate_->addIceCandidate(candidate);
+        return;
+    }
     if (!pc_) return;
     for (const auto& candidate : extractCandidateLines(candidate_sdp)) {
         lunar::diagnosticLog("webrtc", "add remote ICE candidate: %s", candidate.c_str());
@@ -515,6 +536,7 @@ void PeerManager::addIceCandidate(const std::string& candidate_sdp) {
 }
 
 bool PeerManager::createDataChannels() {
+    if (alternate_) { data_channels_created_ = alternate_->channelsReady(); return data_channels_created_; }
     if (!pc_) return false;
     if (data_channels_created_) return true;
     if (!peer_connection_is_datachannel_connected(pc_)) return false;
@@ -868,7 +890,7 @@ void PeerManager::logOutboundDrop(const char* reason,
 }
 
 int PeerManager::sendOutboundCommand(const OutboundCommand& command) {
-    if (!pc_ || !connected_.load()) return -1;
+    if ((!pc_ && !alternate_) || !connected_.load()) return -1;
     if ((command.type == OutboundType::InputReliable ||
          command.type == OutboundType::InputTransition ||
          command.type == OutboundType::InputLatest ||
@@ -883,22 +905,27 @@ int PeerManager::sendOutboundCommand(const OutboundCommand& command) {
         case OutboundType::InputLatest:
             return sendInputCommand(command);
         case OutboundType::Control:
+            if (alternate_) return alternate_->send(xstreamingDataChannelSid("control"), command.payload.data(), command.payload.size(), false);
             return peer_connection_datachannel_send_sid(
                 pc_,
                 reinterpret_cast<char*>(const_cast<uint8_t*>(command.payload.data())),
                 command.payload.size(),
                 xstreamingDataChannelSid("control"));
         case OutboundType::Message:
+            if (alternate_) return alternate_->send(xstreamingDataChannelSid("message"), command.payload.data(), command.payload.size(), false);
             return peer_connection_datachannel_send_sid(
                 pc_,
                 reinterpret_cast<char*>(const_cast<uint8_t*>(command.payload.data())),
                 command.payload.size(),
                 xstreamingDataChannelSid("message"));
         case OutboundType::Nack:
+            if (alternate_) return alternate_->sendNack(command.pid, command.blp);
             return peer_connection_send_nack(pc_, command.pid, command.blp);
         case OutboundType::Pli:
+            if (alternate_) return alternate_->requestKeyframe();
             return peer_connection_send_rtcp_pil(pc_, 0);
         case OutboundType::ReceiverFeedback:
+            if (alternate_) return alternate_->sendFeedback(command.fraction_lost, command.cumulative_lost, command.highest_sequence, command.bitrate_bps);
             return peer_connection_send_receiver_feedback_stats(
                 pc_, command.fraction_lost, command.cumulative_lost,
                 command.highest_sequence, 0, command.bitrate_bps);
@@ -925,11 +952,13 @@ void PeerManager::commitSequencedInputResult(int result) {
 }
 
 int PeerManager::sendInputCommand(const OutboundCommand& command) {
-    if (!pc_) return -1;
+    if (!pc_ && !alternate_) return -1;
     std::vector<uint8_t> packet;
     if (!prepareSequencedInputPayload(command, packet)) return -1;
 
-    const int result = peer_connection_datachannel_send_sid_binary(
+    const int result = alternate_
+        ? alternate_->send(xstreamingDataChannelSid("input"), packet.data(), packet.size(), true)
+        : peer_connection_datachannel_send_sid_binary(
         pc_,
         reinterpret_cast<char*>(packet.data()),
         packet.size(),
@@ -996,8 +1025,7 @@ void PeerManager::drainOutboundCommands(
         }
 #endif
         const bool data_channel_connected =
-            result < 0 && isSctpCommand(command.type) && pc_ &&
-            peer_connection_is_datachannel_connected(pc_);
+            result < 0 && isSctpCommand(command.type) && isDataChannelReady();
         if (completeOutboundCommand(command, result,
                                     data_channel_connected)) {
             if (!isSctpCommand(command.type)) return;
@@ -1152,11 +1180,12 @@ bool PeerManager::isConnected() const {
 }
 
 bool PeerManager::isDataChannelReady() const {
-    return pc_ && !data_channel_failed_ &&
-           peer_connection_is_datachannel_connected(pc_);
+    return !data_channel_failed_ && (alternate_ ? alternate_->channelsReady()
+        : pc_ && peer_connection_is_datachannel_connected(pc_));
 }
 
 void PeerManager::setMediaEnabled(bool enabled) {
+    if (alternate_) alternate_->setMediaEnabled(enabled);
     if (pc_) {
         lunar::diagnosticLog("webrtc", "set media enabled=%s", enabled ? "true" : "false");
         peer_connection_set_media_enabled(pc_, enabled ? 1 : 0);
@@ -1254,7 +1283,9 @@ PeerConnectionMediaStats PeerManager::networkStatsSnapshot() const {
     const bool cache_fresh = media_stats_cache_valid_ &&
         now - media_stats_cache_at_ < kMediaStatsCacheInterval;
     if (!cache_fresh) {
-        if (pc_) {
+        if (alternate_) {
+            media_stats_cache_ = alternate_->stats();
+        } else if (pc_) {
             peer_connection_get_media_stats(pc_, &media_stats_cache_);
         } else {
             media_stats_cache_ = {};
@@ -1397,7 +1428,7 @@ PeerLatencyWindow PeerManager::takeLatencyWindow() {
 }
 
 void PeerManager::processEvents() {
-    if (pc_) {
+    if (pc_ || alternate_) {
         const auto pump_started = std::chrono::steady_clock::now();
 #if LUNARNX_LATENCY_DIAGNOSTIC_LOG
         if (latency_last_pump_started_.time_since_epoch().count() != 0) {
@@ -1435,7 +1466,7 @@ void PeerManager::processEvents() {
         int drain_work = 0;
         const auto peer_loop_started = std::chrono::steady_clock::now();
         while (drain_passes < kMaxDrainPasses) {
-            const int work = peer_connection_loop(pc_);
+            const int work = alternate_ ? alternate_->loop() : peer_connection_loop(pc_);
             drain_work += work;
             drain_passes++;
             if (work <= 0 ||
@@ -1451,9 +1482,9 @@ void PeerManager::processEvents() {
                                  drain_work,
                                  connected_.load() ? "true" : "false",
                                  data_channels_created_ ? "true" : "false",
-                                 peer_connection_is_datachannel_connected(pc_) ? "true" : "false");
+                                 isDataChannelReady() ? "true" : "false");
         }
-        if (connected_ && !data_channels_created_ && peer_connection_is_datachannel_connected(pc_)) {
+        if (connected_ && !data_channels_created_ && isDataChannelReady()) {
             lunar::diagnosticLog("webrtc", "datachannel connected, creating channels");
             createDataChannels();
         }
@@ -1602,12 +1633,14 @@ void PeerManager::disconnect() {
     invalidateMediaStatsCache();
     video_jitter_.reset();
     nack_logs_ = 0;
-    if (initialized_) {
+    if (alternate_) { alternate_->close(); alternate_.reset(); }
+    if (initialized_ && backend_ == WebRtcBackend::Libpeer) {
         lunar::diagnosticLog("webrtc", "disconnect peer_deinit begin");
         peer_deinit();
         lunar::diagnosticLog("webrtc", "disconnect peer_deinit done");
         initialized_ = false;
     }
+    initialized_ = false;
     lunar::diagnosticLog("webrtc", "disconnect done");
 }
 
