@@ -47,3 +47,12 @@ make -f Makefile.desktop EXPERIMENTAL_WEBRTC=1
 The native recipe requires the normal LunarNX native mbedTLS/libSRTP archives.
 The existing combined Xbox/PlayStation binary distribution terms remain
 AGPL-3.0; keep all third-party notices and provide corresponding source.
+
+The artifact packaging step runs `package_licenses.sh`, including the MPL-2.0,
+plog MIT and usrsctp BSD texts plus source provenance and the hash-locked source
+reconstruction script. See `THIRD_PARTY_NOTICES.md` in the package for component
+attribution and source locations.
+
+The package's `sources/LunarNX-revision.txt` identifies the exact application
+source tree. Check out that tree before using the included preparation script;
+the script copy is a source record, not a standalone application build kit.

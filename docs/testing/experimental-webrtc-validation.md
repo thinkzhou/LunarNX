@@ -42,14 +42,17 @@ installed local description; the native runs exercise the actual DTLS handshake.
 
 - Pinned SDK builds on native macOS and inside `devkitpro/devkita64:20251117`.
 - Full dual-backend Switch NRO builds in Docker; BSS check passes at 20.4 MiB.
-- Backend configuration file tests pass for missing/default/selected/unknown/
-  malformed/oversized input.
+- Backend configuration file tests pass with the feature enabled and omitted,
+  including a saved unavailable selection, trailing garbage, embedded NUL, an
+  exact-64-KiB valid file and a larger file with a valid 64-KiB prefix.
 - Existing native outbound-queue and stream-resilience scenario tests pass with
   the experimental feature disabled.
 - Mock protocol tests: 17 pass.
 - Session-order, SCTP configuration, DTLS read-loop, PPID and Chiaki ABI checks
   pass. The SCTP source-contract test now accepts both the fixed and configurable
   bounded receive-loop forms; no legacy dependency source was changed.
+- Artifact packaging smoke includes the new MPL/MIT/BSD texts, pinned source
+  reconstruction record and exact application source revision; workflow checks pass.
 - Python/shell syntax, locale JSON parsing and `git diff --check` pass.
 
 Generated evidence is under `build/mock-runs/`, `build/libdatachannel-sdk/`, and
