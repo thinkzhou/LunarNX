@@ -66,7 +66,7 @@ python3 tools/webrtc_bench/run_trials.py --rates 15 30 50 --repeats 3 --seconds 
 
 6/6 次完成且没有丢包、重复包、无效包或失败发送。libpeer 第一次长测存在明显尾延迟异常（P99 170.802 ms），随后两次为 5.977 / 6.471 ms。没有额外插桩来定位这个异常，因此不能断言是库内部、发送排队还是主机调度造成；全部样本均保留。
 
-基线、敏感性和持续负载合计 32 次正式测量，均完成。它们支持“本机此配置下，libdatachannel 有降低传输回调延迟的潜力”，但不支持“真机整体性能必然更好”。
+基线、敏感性和持续负载合计 32 次正式测量，均完成；合计 1,429,170 个测量包发送并收到。它们支持“本机此配置下，libdatachannel 有降低传输回调延迟的潜力”，但不支持“真机整体性能必然更好”。
 
 原始数据：`build/webrtc_bench/sustained/results.json` 与 `sustained-repeat/results.json`。
 
@@ -132,3 +132,5 @@ docker run --rm --platform linux/amd64 -v "$PWD:/work" -w /work \
 - 对已有的 `build/switch/LunarNX.nro` 执行 BSS 检查通过（20.4 MiB）。该文件是此前产物，不代表本次生成或验证了新后端 NRO。
 - 原始回归结果在 `build/webrtc_bench/regression-results.json`。正式测量期间未运行这些回归脚本；最后重新构建及 profile 验证属于单独 smoke，不混入性能矩阵。
 - 这些库对应 Xbox/xCloud 的 WebRTC 路线；PS 的 Chiaki 传输不会因替换它们自动受益。
+
+独立审查已核对脚本、提交差异、原始结果、加密套件日志、Docker 编译日志和回归输出，未发现影响上述研究结论的实质性问题。真机收益仍未验证。
