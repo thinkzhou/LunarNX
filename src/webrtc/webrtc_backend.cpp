@@ -13,10 +13,20 @@ WebRtcBackend loadWebRtcBackend() {
     if (!file) return WebRtcBackend::Libpeer;
     std::string data;
     char chunk[1024]; size_t count;
-    while ((count = std::fread(chunk, 1, sizeof(chunk), file)) != 0 && data.size() < 65536) data.append(chunk, count);
+    bool oversized = false;
+    while ((count = std::fread(chunk, 1, sizeof(chunk), file)) != 0) {
+        if (count > 65536 - data.size()) { oversized = true; break; }
+        data.append(chunk, count);
+    }
+    const bool read_failed = std::ferror(file) != 0;
     std::fclose(file);
-    if (data.size() > 65536) return WebRtcBackend::Libpeer;
-    cJSON* config = cJSON_Parse(data.c_str());
+    if (oversized || read_failed) return WebRtcBackend::Libpeer;
+    const char* end = nullptr;
+    cJSON* config = cJSON_ParseWithLengthOpts(data.c_str(), data.size() + 1, &end, 1);
+    if (!config || end != data.c_str() + data.size()) {
+        cJSON_Delete(config);
+        return WebRtcBackend::Libpeer;
+    }
     const cJSON* value = cJSON_GetObjectItemCaseSensitive(config, "xbox_webrtc_backend");
     const auto backend = parseWebRtcBackend(cJSON_IsString(value) ? value->valuestring : nullptr);
     cJSON_Delete(config);

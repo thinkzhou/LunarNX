@@ -29,6 +29,12 @@ int main(int argc, char** argv) {
     check("{\"xbox_webrtc_backend\":true}", WebRtcBackend::Libpeer);
     check("{\"xbox_webrtc_backend\":", WebRtcBackend::Libpeer);
     check(std::string(70000, 'x'), WebRtcBackend::Libpeer);
+    const std::string valid = "{\"xbox_webrtc_backend\":\"libdatachannel\"}";
+    check(valid + " trailing-garbage", WebRtcBackend::Libpeer);
+    check(valid + std::string(1, '\0') + "hidden-tail", WebRtcBackend::Libpeer);
+    const auto at_limit = valid + std::string(65536 - valid.size(), ' ');
+    check(at_limit, experimental);
+    check(at_limit + "oversized-tail", WebRtcBackend::Libpeer);
     std::filesystem::remove("config.json");
     std::filesystem::current_path(original);
 }
