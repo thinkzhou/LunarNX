@@ -73,6 +73,7 @@ struct LibdatachannelPeer::Impl {
     void (*state)(PeerConnectionState, void*) = nullptr;
     void (*message)(char*, size_t, void*, uint16_t) = nullptr;
     bool media_enabled = true;
+    bool rtc_started = false;
     bool failure_reported = false;
     uint32_t video_ssrc = 0;
     int rtcp(const uint8_t* data, size_t size) {
@@ -108,6 +109,7 @@ bool LibdatachannelPeer::initialize(const PeerConfiguration& config,
         for (const auto& server : config.ice_servers) {
             if (server.urls) options.iceServers.emplace_back(server.urls);
         }
+        p.rtc_started = true;
         p.pc = std::make_unique<rtc::PeerConnection>(options);
         auto inbox = p.inbox;
         p.pc->onLocalCandidate([inbox](rtc::Candidate candidate) {
@@ -149,7 +151,7 @@ bool LibdatachannelPeer::initialize(const PeerConfiguration& config,
                 Event e{Event::Message}; e.sid = sid;
                 if (auto* binary = std::get_if<rtc::binary>(&message)) {
                     const auto* bytes = reinterpret_cast<const uint8_t*>(binary->data());
-                    e.data.assign(bytes, bytes + binary->size());
+                    if (!binary->empty()) e.data.assign(bytes, bytes + binary->size());
                 } else {
                     const auto& text = std::get<std::string>(message); e.data.assign(text.begin(), text.end());
                 }
@@ -318,13 +320,15 @@ void LibdatachannelPeer::close() {
     if (!impl_) return;
     auto& p = *impl_;
     { std::lock_guard<std::mutex> guard(p.inbox->mutex); p.inbox->closing = true; p.inbox->control.clear(); p.inbox->media.clear(); p.inbox->media_bytes = 0; }
-    if (!p.pc) return;
+    if (!p.rtc_started) return;
     for (auto& dc : p.channels) { if (dc) dc->resetCallbacks(); dc.reset(); }
     if (p.video) p.video->resetCallbacks();
     if (p.audio) p.audio->resetCallbacks();
-    p.video.reset(); p.audio.reset(); p.pc->resetCallbacks(); p.pc->close(); p.pc.reset();
+    p.video.reset(); p.audio.reset();
+    if (p.pc) { p.pc->resetCallbacks(); p.pc->close(); p.pc.reset(); }
     rtc::Cleanup().wait();
     joinRtcTasks();
+    p.rtc_started = false;
 }
 }
 #else

@@ -318,6 +318,6 @@ ifeq ($(EXPERIMENTAL_WEBRTC),1)
 $(ALL_OBJS): | $(RTC_SDK)/ready.stamp
 $(BUILD)/LunarNX.elf: $(RTC_SDK)/ready.stamp
 $(RTC_SDK)/ready.stamp: tools/libdatachannel_switch/prepare.py tools/libdatachannel_switch/build.sh \
-    tools/libdatachannel_switch/CMakeLists.txt $(wildcard tools/libdatachannel_switch/compat/*)
+    tools/libdatachannel_switch/CMakeLists.txt $(wildcard tools/libdatachannel_switch/compat/* tools/libdatachannel_switch/compat/*/*)
 	bash tools/libdatachannel_switch/build.sh switch
 endif
