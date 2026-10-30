@@ -73,3 +73,8 @@ continues through Chiaki and is not covered by this WebRTC backend experiment.
 libdatachannel does not currently expose the same ICE RTT and SRTP failure
 counters as the legacy adapter; unavailable counters must not be interpreted as
 proof of a healthy network.
+
+Independent code/evidence review found and verified fixes for persisted UI
+selection, feature-disabled recovery, strict configuration bounds and artifact
+license/source packaging. The follow-up review found no remaining material
+issues; interactive settings and hardware results remain outstanding.
