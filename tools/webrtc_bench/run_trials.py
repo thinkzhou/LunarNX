@@ -67,10 +67,15 @@ def main():
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--seconds', type=float, default=6)
     parser.add_argument('--idle-us', type=int, default=1000)
-    parser.add_argument('--bind-address', default=subprocess.check_output(['ipconfig', 'getifaddr', 'en0'], text=True).strip())
+    parser.add_argument('--bind-address', help='IPv4 address; defaults to the current en0 address')
     args = parser.parse_args()
     if args.seconds <= 0 or args.repeats <= 0 or args.idle_us < 0 or any(rate <= 0 for rate in args.rates):
         parser.error('rates, seconds, and repeats must be positive; idle-us must be nonnegative')
+    if args.bind_address is None:
+        try:
+            args.bind_address = subprocess.check_output(['ipconfig', 'getifaddr', 'en0'], text=True).strip()
+        except (OSError, subprocess.CalledProcessError):
+            parser.error('cannot discover en0 IPv4 address; provide --bind-address')
     args.output = args.output.resolve()
     args.bin = args.bin.resolve()
     args.output.mkdir(parents=True, exist_ok=False)

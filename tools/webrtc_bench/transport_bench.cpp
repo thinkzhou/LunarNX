@@ -102,8 +102,8 @@ int main(int argc,char** argv) try {
     rtc::InitLogger(std::getenv("BENCH_DEBUG")?rtc::LogLevel::Debug:rtc::LogLevel::Error);
     rtc::Configuration config; config.disableAutoNegotiation=true;
     if (const char* address=std::getenv("BENCH_BIND_ADDRESS")) config.bindAddress=address;
-    rtc::PeerConnection pc(config);
     std::atomic<bool> gathered{false};
+    rtc::PeerConnection pc(config);
     pc.onGatheringStateChange([&](rtc::PeerConnection::GatheringState state){ if(state==rtc::PeerConnection::GatheringState::Complete) gathered=true; });
     std::shared_ptr<rtc::Track> track;
     if(sender) {

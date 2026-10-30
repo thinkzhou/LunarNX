@@ -2,6 +2,14 @@
 
 Status: DONE_WITH_CONCERNS
 
+Follow-up (2026-10-30): the YOUYOU project's pinned dependency adaptations now
+compile `datachannel-static` successfully inside the prescribed Switch Docker
+image. The blockers below describe this original unadapted-source experiment,
+not a fresh failure of the adapted sources. See
+[`docs/libdatachannel-performance-evaluation-2026-10-30.md`](../../docs/libdatachannel-performance-evaluation-2026-10-30.md)
+for the isolated native transport measurements, source versions, and remaining
+Switch/Xbox validation gaps. LunarNX's active provider remains legacy libpeer.
+
 ## Scope
 
 Evaluated `github_repos/libdatachannel` for Nintendo Switch/devkitPro cross-compilation. No LunarNX main build entry was integrated, and no `lib/libpeer`, `src/webrtc`, or `src/app` files were edited by this spike.
