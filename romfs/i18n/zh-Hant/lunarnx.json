@@ -188,6 +188,11 @@
   "retry_detail": "{0}\n按「開始遊戲」重試。"
  },
  "settings": {
+  "webrtc_section": "連線後端",
+  "webrtc_detail": "僅適用於 Xbox 與 xCloud。請先中斷串流，切換後於下次連線生效。PlayStation 繼續使用 Chiaki。",
+  "webrtc_backend": "WebRTC 後端",
+  "webrtc_libpeer": "libpeer（預設）",
+  "webrtc_libdatachannel": "libdatachannel（實驗）",
   "back_action": "返回",
   "title": "設定",
   "intro_title": "調整 LunarNX 的下次使用體驗",
