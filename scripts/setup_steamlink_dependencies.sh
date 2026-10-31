@@ -13,4 +13,11 @@ for header in vendor/ihslib/include/ihslib/client.h vendor/protobuf-c/protobuf-c
         exit 2
     fi
 done
-printf 'Pinned Steam dependencies are ready.\n'
+pairing_patch="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tools/steamlink_probe/ihslib-pairing-kx.patch"
+if git -C "$project_root/vendor/ihslib" apply --check "$pairing_patch" 2>/dev/null; then
+    git -C "$project_root/vendor/ihslib" apply "$pairing_patch"
+elif ! git -C "$project_root/vendor/ihslib" apply --reverse --check "$pairing_patch" 2>/dev/null; then
+    printf 'Steam pairing patch conflicts with local dependency changes.\n' >&2
+    exit 2
+fi
+printf 'Pinned Steam dependencies and pairing key exchange are ready.\n'

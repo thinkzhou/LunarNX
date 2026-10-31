@@ -223,6 +223,7 @@ C_SRCS += vendor/ihslib/src/base.c vendor/ihslib/src/crc32.c vendor/ihslib/src/c
     vendor/ihslib/src/ihs_enumeration_ll.c vendor/ihslib/src/ihs_ip.c \
     vendor/ihslib/src/ihs_queue.c src/steamlink/ihs_timer.c \
     src/steamlink/ihs_authorization.c src/steamlink/ihs_client.c \
+    vendor/ihslib/src/client/authorization_kx.c \
     vendor/ihslib/src/client/discovery.c src/steamlink/ihs_streaming.c \
     src/steamlink/ihs_hid_device.c vendor/ihslib/src/hid/provider.c \
     src/steamlink/ihs_hid_manager.c vendor/ihslib/src/hid/report.c \

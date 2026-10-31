@@ -50,6 +50,10 @@ ps_token.json
 ps_registration.json
 psn_*.json
 steamlink_device.json
+steamlink_device.json.hosts
+steamlink_device.json.hosts.tmp
+steamlink_device.json.pairings
+steamlink_device.json.pairings.tmp
 
 # Logs
 debug.log

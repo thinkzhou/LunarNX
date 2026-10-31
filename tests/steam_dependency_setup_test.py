@@ -27,4 +27,6 @@ with tempfile.TemporaryDirectory(prefix="lunarnx-steam-deps-") as temporary:
             actual = subprocess.check_output(
                 ["git", "-C", str(checkout / path), "rev-parse", "HEAD"], text=True).strip()
             assert actual == expected, (path, expected, actual)
+        assert (checkout / "vendor/ihslib/src/client/authorization_kx.c").is_file()
+        assert "IHS_BaseSetSecretKey" in (checkout / "vendor/ihslib/src/base.c").read_text()
 print("PASS: clean checkout downloads pinned Steam headers; repeated setup preserves revisions")

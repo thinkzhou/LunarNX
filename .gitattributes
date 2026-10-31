@@ -2,3 +2,4 @@ tools/libpeer_legacy/*.patch -whitespace
 tools/libpeer_legacy/nested/*.patch -whitespace
 tools/borealis_switch/*.patch -whitespace
 tools/chiaki_switch/*.patch -whitespace
+tools/steamlink_probe/*.patch -whitespace

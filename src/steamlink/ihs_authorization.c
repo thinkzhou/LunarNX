@@ -27,6 +27,7 @@
 #include "ihs_streaming_support.h"
 #include "client/pubkeys.h"
 #include "crypto.h"
+#include "client/authorization_kx.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -37,6 +38,7 @@ typedef struct IHS_AuthorizationState {
     char deviceName[64];
     char pin[16];
     uint64_t deadline;
+    IHS_AuthorizationKeyExchange keyExchange;
 } IHS_AuthorizationState;
 
 static uint64_t AuthorizationRequestTimer(int runCount, void *data);
@@ -52,11 +54,16 @@ static bool AuthorizationRequestLocked(IHS_Client *client, const IHS_HostInfo *h
     }
     IHS_AuthorizationState *state = calloc(1, sizeof(IHS_AuthorizationState));
     if (!state) return false;
+#ifdef __SWITCH__
     state->deadline = IHS_TimerNow() + 120000;
+#else
+    state->deadline = IHS_TimerNow() + 300000;
+#endif
     state->client = client;
     state->host = *host;
     strncpy(state->deviceName, client->base.deviceName, sizeof(state->deviceName) - 1);
     strncpy(state->pin, pin, sizeof(state->pin) - 1);
+    if (!IHS_AuthorizationKeyExchangeInit(&state->keyExchange, pin)) { free(state); return false; }
     client->taskHandles.authorization = LunarIHSTimerStartLocked(client->timers, AuthorizationRequestTimer,
                                                            AuthorizationRequestCleanup, 0, state);
     if (!client->taskHandles.authorization) { free(state); return false; }
@@ -94,6 +101,24 @@ static void AuthorizationCallbackLocked(IHS_Client *client, const IHS_SocketAddr
         IHS_IPAddressCompare(&address->ip, &state->host.address.ip) != 0) return;
     if (resp->result == k_ERemoteDeviceAuthorizationSuccess &&
         (!resp->has_steamid || resp->steamid == 0)) return;
+    if (resp->has_auth_key) {
+        uint8_t secret[32];
+        bool ok = resp->has_device_token && IHS_AuthorizationKeyExchangeComplete(
+            &state->keyExchange, resp->auth_key.data, resp->auth_key.len,
+            resp->device_token.data, resp->device_token.len, client->base.deviceId, secret);
+        CMsgRemoteDeviceAuthorizationConfirmed confirmed = CMSG_REMOTE_DEVICE_AUTHORIZATION_CONFIRMED__INIT;
+        confirmed.result = ok ? k_ERemoteDeviceAuthorizationSuccess : k_ERemoteDeviceAuthorizationDenied;
+        IHS_ClientSend(client, state->host.address, k_ERemoteDeviceAuthorizationConfirmed, &confirmed.base);
+        if (ok) {
+            IHS_BaseSetSecretKey(&client->base, secret);
+            if (client->callbacks.authorization && client->callbacks.authorization->success)
+                client->callbacks.authorization->success(client, &state->host, resp->steamid, client->callbackContexts.authorization);
+        } else if (client->callbacks.authorization && client->callbacks.authorization->failed)
+            client->callbacks.authorization->failed(client, &state->host, IHS_AuthorizationDenied, client->callbackContexts.authorization);
+        memset(secret, 0, sizeof(secret));
+        LunarIHSTimerRemoveLocked(task);
+        return;
+    }
     switch (resp->result) {
         case k_ERemoteDeviceAuthorizationInProgress:
             if (client->callbacks.authorization && client->callbacks.authorization->progress) {
@@ -154,7 +179,13 @@ static uint64_t AuthorizationRequestTimer(int runCount, void *data) {
     }
     uint8_t pubKey[384];
     size_t pubKeyLen = sizeof(pubKey);
-    IHS_ClientAuthorizationPubKey(client, state->host.universe, pubKey, &pubKeyLen);
+    if (!IHS_ClientAuthorizationPubKey(client, state->host.universe, pubKey, &pubKeyLen)) {
+        IHS_ClientLog(client, IHS_LogLevelError, "Authorization", "Unsupported Steam universe=%d", (int) state->host.universe);
+        if (client->callbacks.authorization && client->callbacks.authorization->failed)
+            client->callbacks.authorization->failed(client, &state->host,
+                IHS_AuthorizationFailed, client->callbackContexts.authorization);
+        return 0;
+    }
     ProtobufCBinaryData deviceToken = {.data = client->base.deviceToken, .len = sizeof(client->base.deviceToken)};
 
     /* Initialize and serialize ticket */
@@ -167,13 +198,25 @@ static uint64_t AuthorizationRequestTimer(int runCount, void *data) {
     /* RSA encrypt ticket data */
     uint8_t encryptedTicket[2048];
     ProtobufCBinaryData encryptedRequest = {.data = encryptedTicket, .len = sizeof(encryptedTicket)};
-    IHS_CryptoRSAEncrypt(serTicket, serTicketLen, pubKey, pubKeyLen, encryptedRequest.data,
+    int cryptoResult = IHS_CryptoRSAEncrypt(serTicket, serTicketLen, pubKey, pubKeyLen, encryptedRequest.data,
                          &encryptedRequest.len);
+    if (cryptoResult != 0 || encryptedRequest.len == 0 || encryptedRequest.len > sizeof(encryptedTicket)) {
+        IHS_ClientLog(client, IHS_LogLevelError, "Authorization", "RSA encryption failed rc=%d", cryptoResult);
+        if (client->callbacks.authorization && client->callbacks.authorization->failed)
+            client->callbacks.authorization->failed(client, &state->host,
+                IHS_AuthorizationFailed, client->callbackContexts.authorization);
+        return 0;
+    }
 
     CMsgRemoteDeviceAuthorizationRequest request = CMSG_REMOTE_DEVICE_AUTHORIZATION_REQUEST__INIT;
     request.device_name = state->deviceName;
     request.device_token = deviceToken;
     request.encrypted_request = encryptedRequest;
+    uint8_t authKey[32];
+    IHS_AuthorizationKeyExchangeMaskedKey(&state->keyExchange, authKey);
+    request.has_auth_key = true;
+    request.auth_key.data = authKey;
+    request.auth_key.len = sizeof(authKey);
 
     IHS_SocketAddress address = state->host.address;
     IHS_ClientSend(client, address, k_ERemoteDeviceAuthorizationRequest, (ProtobufCMessage *) &request);
@@ -203,6 +246,7 @@ static void AuthorizationRequestCleanup(void *data) {
     IHS_AuthorizationState *state = data;
     IHS_Client *client = state->client;
     client->taskHandles.authorization = NULL;
+    IHS_AuthorizationKeyExchangeClear(&state->keyExchange);
     free(data);
 }
 

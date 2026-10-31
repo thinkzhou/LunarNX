@@ -5,6 +5,7 @@ import concurrent.futures
 import subprocess
 import tempfile
 import sys
+import os
 
 ROOT = Path(__file__).resolve().parents[1]
 def run(args):
@@ -20,7 +21,8 @@ includes = ["-Isrc", "-Ivendor/ihslib/include", "-Ivendor/ihslib/src", "-Ivendor
 san = ["-fsanitize=address,undefined", "-g", "-O1"]
 sdk = run(["xcrun", "--show-sdk-path"]).strip() if sys.platform == "darwin" else ""
 cflags = ["-isysroot", sdk] if sdk else []
-cppflags = cflags + (["-isystem", f"{sdk}/usr/include/c++/v1"] if sdk else [])
+cpp_include = os.environ.get("LUNAR_TEST_CXX_INCLUDE", f"{sdk}/usr/include/c++/v1")
+cppflags = cflags + (["-nostdinc++", "-isystem", cpp_include] if sdk else [])
 sources = list(ihs.glob("*.c"))
 for sub in ("client", "session", "protobuf"):
     sources += list((ihs / sub).rglob("*.c"))

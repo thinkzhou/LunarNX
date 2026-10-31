@@ -17,6 +17,8 @@ void FailNextSteamReceive(void);
 #include "steamlink/ihs_media_metadata.h"
 #include "ihs_enumeration.h"
 #include "client/client_pri.h"
+#include "client/authorization_kx.h"
+#include "endianness.h"
 #include "steamlink/ihs_streaming_support.h"
 }
 #include <sys/socket.h>
@@ -267,12 +269,13 @@ static void testAuthorization(const IHS_ClientConfig& config) {
     host.address.ip.v4.data[0] = 127; host.address.ip.v4.data[3] = 1;
     // Unbound loopback port, never send authorization to a user's Steam host.
     host.address.port = 9;
-    struct Counts { std::atomic<unsigned> success{0}, timeout{0}; } counts;
+    struct Counts { std::atomic<unsigned> success{0}, timeout{0}, failed{0}; } counts;
     IHS_ClientAuthorizationCallbacks callbacks{};
     callbacks.success = [](IHS_Client*, const IHS_HostInfo*, uint64_t id, void* p) {
         assert(id == 456); ++static_cast<Counts*>(p)->success;
     };
     callbacks.failed = [](IHS_Client*, const IHS_HostInfo*, IHS_AuthorizationResult result, void* p) {
+        if (result == IHS_AuthorizationFailed) { ++static_cast<Counts*>(p)->failed; return; }
         assert(result == IHS_AuthorizationTimedOut); ++static_cast<Counts*>(p)->timeout;
     };
     IHS_ClientSetAuthorizationCallbacks(&client, &callbacks, &counts);
@@ -282,6 +285,16 @@ static void testAuthorization(const IHS_ClientConfig& config) {
     CMsgRemoteDeviceAuthorizationResponse response = CMSG_REMOTE_DEVICE_AUTHORIZATION_RESPONSE__INIT;
     response.result = k_ERemoteDeviceAuthorizationSuccess;
     response.has_steamid = true; response.steamid = 456;
+    // Replay the real Steam log: progress replies followed by terminal failure.
+    assert(IHS_ClientAuthorizationRequest(&client, &host, "1234"));
+    response.result = k_ERemoteDeviceAuthorizationInProgress;
+    for (int i = 0; i < 8; ++i)
+        IHS_ClientAuthorizationCallback(&client, &host.address, &header, &response.base);
+    assert(client.taskHandles.authorization && counts.failed == 0);
+    response.result = k_ERemoteDeviceAuthorizationFailed;
+    IHS_ClientAuthorizationCallback(&client, &host.address, &header, &response.base);
+    assert(counts.failed == 1 && !client.taskHandles.authorization);
+    response.result = k_ERemoteDeviceAuthorizationSuccess;
     for (int cycle = 0; cycle < 100; ++cycle) {
         assert(IHS_ClientAuthorizationRequest(&client, &host, "1234"));
         assert(!IHS_ClientAuthorizationRequest(&client, &host, "5678"));
@@ -466,6 +479,28 @@ static void testMalformedBroadcast(const IHS_ClientConfig& config) {
 }
 
 int main() {
+    {
+    // Independent peer derives the secret and proves it with our device ID.
+    IHS_AuthorizationKeyExchange client_kx{}, host_kx{}, wrong_pin{};
+    assert(IHS_AuthorizationKeyExchangeInit(&client_kx, "4826"));
+    assert(IHS_AuthorizationKeyExchangeInit(&host_kx, "4826"));
+    assert(IHS_AuthorizationKeyExchangeInit(&wrong_pin, "4827"));
+    uint8_t masked[32], secret[32], actual[32], id[8], token[64];
+    IHS_AuthorizationKeyExchangeMaskedKey(&host_kx, masked);
+    assert(IHS_CryptoKeyExchange(host_kx.privateKey, client_kx.publicKey, secret) == 0);
+    IHS_WriteUInt64LE(id, 123);
+    size_t token_len = sizeof(token);
+    assert(IHS_CryptoSymmetricEncrypt(id, sizeof(id), secret, sizeof(secret), token, &token_len) == 0);
+    assert(IHS_AuthorizationKeyExchangeComplete(&client_kx, masked, 32, token, token_len, 123, actual));
+    assert(std::memcmp(actual, secret, 32) == 0);
+    assert(!IHS_AuthorizationKeyExchangeComplete(&client_kx, masked, 32, token, token_len, 124, actual));
+    assert(!IHS_AuthorizationKeyExchangeComplete(&wrong_pin, masked, 32, token, token_len, 123, actual));
+    assert(!IHS_AuthorizationKeyExchangeComplete(&client_kx, masked, 31, token, token_len, 123, actual));
+    IHS_AuthorizationKeyExchangeClear(&client_kx);
+    IHS_AuthorizationKeyExchangeClear(&host_kx);
+    IHS_AuthorizationKeyExchangeClear(&wrong_pin);
+    std::cout << "PASS: real X25519 peer proof, wrong PIN, wrong device ID and malformed key rejected\n";
+    }
     lunar::input::GamepadState state;
     state.a = true; state.guide = true; state.menu = true;
     state.left_stick_x = -32768; state.left_stick_y = 32767;

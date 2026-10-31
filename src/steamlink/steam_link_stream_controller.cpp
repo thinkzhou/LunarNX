@@ -547,9 +547,9 @@ void SteamLinkStreamController::onSessionConfiguring(IHS_Session*, IHS_SessionCo
                                                      void* context) {
     auto* self = static_cast<SteamLinkStreamController*>(context);
     if (!config) return;
-    config->enableAudio = true;
+    config->enableAudio = false;
     config->enableHevc = false;
-    if (self) lunar::diagnosticLog("steam-session", "configuring audio=1 hevc=0");
+    if (self) lunar::persistentEventLog("steam-session", "configuring audio=0 hevc=0 video-only test");
 }
 void SteamLinkStreamController::onSessionConnected(IHS_Session*, void* context) {
     auto* self = static_cast<SteamLinkStreamController*>(context);

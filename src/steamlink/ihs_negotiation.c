@@ -144,6 +144,7 @@ static void OnNegotiationInit(IHS_SessionChannel *channel, const CNegotiationIni
                    remoteHid, message->supports_remote_hid, session->hidManager->providers.size);
 
     CStreamingClientConfig clientConfig = CSTREAMING_CLIENT_CONFIG__INIT;
+    PROTOBUF_C_SET_VALUE(clientConfig, enable_audio_streaming, ihsConf.enableAudio);
 
     PROTOBUF_C_SET_VALUE(clientConfig, maximum_resolution_x, 1280);
     PROTOBUF_C_SET_VALUE(clientConfig, maximum_resolution_y, 720);

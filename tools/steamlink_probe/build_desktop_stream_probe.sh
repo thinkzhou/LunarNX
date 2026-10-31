@@ -21,6 +21,7 @@ set -- \
   "$ihs_src/ihs_enumeration_ll.c" "$ihs_src/ihs_enumeration_array.c" \
   "$root_dir/src/steamlink/ihs_client.c" "$ihs_src/client/discovery.c" \
   "$root_dir/src/steamlink/ihs_authorization.c" "$root_dir/src/steamlink/ihs_streaming.c" \
+  "$ihs_src/client/authorization_kx.c" \
   "$root_dir/src/steamlink/ihs_session.c" "$ihs_src/session/packet.c" "$ihs_src/session/frame.c" \
   "$root_dir/src/steamlink/ihs_window.c" "$ihs_src/session/frame_crypto.c" \
   "$ihs_src/session/frame_stats.c" "$ihs_src/session/callbacks.c" \

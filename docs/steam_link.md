@@ -1,5 +1,10 @@
 # Steam Link integration
 
+Current hardware-test build uses video and input only (audio is disabled in the
+startup request and negotiation to avoid macOS audio-driver installation waits).
+PIN-masked X25519 pairing, per-host authorization persistence and saved-IP probing
+are documented with live validation evidence in [steam_pairing_fix.md](steam_pairing_fix.md).
+
 The Switch build now contains a build-time selectable Steam Link entry point
 (`STEAMLINK=1`, the default). The adapter includes:
 
@@ -30,9 +35,9 @@ stream. The adapter requests Big Picture desktop streaming at up to 1280x720, ne
 H.264/Opus, and feeds LunarNX's media pipeline. H.264 codec data supplied as
 Annex B or AVCDecoderConfigurationRecord is normalized and included with frames.
 Pair and start streaming without leaving the Steam host page. Returning to the
-platform home recreates the Steam client when reopened, so pair again then too.
-Account/device authorization resumption across client instances/app launches is
-not implemented yet (only the device identity is persisted).
+platform home recreates the Steam client when reopened. Saved authorization keys
+and Steam IDs are restored; saved IPv4 addresses are probed when entering Steam
+Link, so neither re-entering the IP nor pairing again is normally required.
 
 The pairing direction is important: LunarNX generates and displays the
 four-digit pairing code, and the user enters that code in Steam's `Pair Steam

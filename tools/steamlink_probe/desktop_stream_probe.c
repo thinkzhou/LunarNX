@@ -1,4 +1,6 @@
 #include "ihslib.h"
+#include "client/client_pri.h"
+#include "../../src/steamlink/ihs_streaming_support.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -12,7 +14,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-static const uint8_t secret_key[32] = {
+static uint8_t secret_key[32] = {
     0x4c, 0x75, 0x6e, 0x61, 0x72, 0x4e, 0x58, 0x2d,
     0x53, 0x74, 0x65, 0x61, 0x6d, 0x4c, 0x69, 0x6e,
     0x6b, 0x2d, 0x50, 0x72, 0x6f, 0x62, 0x65, 0x2d,
@@ -50,6 +52,10 @@ typedef struct ProbeContext {
 static IHS_Client *active_client;
 static IHS_Session *active_session;
 
+static void pairing_path(char* path, size_t size, uint64_t host) {
+    snprintf(path, size, "build/steam-probe-host-%llu.key", (unsigned long long)host);
+}
+
 static void log_print(IHS_LogLevel level, const char *tag, const char *message) {
     fprintf(stderr, "[IHS.%s %s] %s\n", tag, IHS_LogLevelName(level), message);
 }
@@ -61,9 +67,9 @@ static void stop_client(IHS_Client *client) {
 static void request_stream(IHS_Client *client, const IHS_HostInfo *host, ProbeContext *probe) {
     IHS_StreamingRequest request = {
         .pin = "",
-        .streamingEnable = {true, true, true},
+        .streamingEnable = {true, false, true},
         .maxResolution = {1280, 720},
-        .audioChannelCount = 2,
+        .audioChannelCount = 0,
         .streamingInterface = IHS_StreamInterfaceBigPicture,
     };
     if (probe->stream_pin != NULL) {
@@ -86,7 +92,28 @@ static void on_discovered(IHS_Client *client, const IHS_HostInfo *host, void *co
            host->address.port, host->gamesRunning ? "true" : "false");
     fflush(stdout);
 
-    if (probe->pairing_pin != NULL) {
+    FILE* endpoint = fopen("build/steam-probe-host.ip.tmp", "w");
+    if (endpoint) {
+        bool ok = fprintf(endpoint, "%u.%u.%u.%u\n", host->address.ip.v4.data[0],
+            host->address.ip.v4.data[1], host->address.ip.v4.data[2], host->address.ip.v4.data[3]) > 0;
+        ok = fclose(endpoint) == 0 && ok;
+        if (ok) rename("build/steam-probe-host.ip.tmp", "build/steam-probe-host.ip");
+    }
+    char key_path[128];
+    pairing_path(key_path, sizeof(key_path), host->clientId);
+    FILE* saved = fopen(key_path, "rb");
+    uint8_t stored_key[32];
+    bool restored = false;
+    if (saved) {
+        restored = fread(stored_key, sizeof(stored_key), 1, saved) == 1 && fgetc(saved) == EOF && !ferror(saved);
+        fclose(saved);
+    }
+    if (restored) {
+        memcpy(secret_key, stored_key, sizeof(secret_key));
+        IHS_BaseSetSecretKey(&client->base, secret_key);
+        printf("using saved host pairing\n");
+    }
+    if (!restored && probe->pairing_pin != NULL) {
         probe->authorization_requested = true;
         printf("authorizing device before streaming\n");
         fflush(stdout);
@@ -112,6 +139,20 @@ static void on_authorization_success(IHS_Client *client, const IHS_HostInfo *hos
     (void) steam_id;
     ProbeContext *probe = context;
     probe->authorization_succeeded = true;
+    IHS_BaseGetSecretKey(&client->base, secret_key);
+    char key_path[128], temporary[144];
+    pairing_path(key_path, sizeof(key_path), host->clientId);
+    snprintf(temporary, sizeof(temporary), "%s.tmp", key_path);
+    FILE* saved = fopen(temporary, "wb");
+    if (saved) {
+        chmod(temporary, 0600);
+        bool ok = fwrite(secret_key, sizeof(secret_key), 1, saved) == 1;
+        ok = fclose(saved) == 0 && ok;
+        if (!ok || rename(temporary, key_path) != 0) {
+            remove(temporary);
+            fprintf(stderr, "could not save host pairing\n");
+        }
+    }
     printf("authorization success; requesting stream with the same client identity\n");
     fflush(stdout);
     request_stream(client, host, probe);
@@ -275,6 +316,11 @@ static int audio_submit(IHS_Session *session, IHS_Buffer *data, void *context) {
     if (probe->audio_file != NULL) fwrite(IHS_BufferPointer(data), 1, len, probe->audio_file);
     probe->audio_packets++;
     probe->audio_bytes += len;
+    if (probe->audio_packets == 1 || probe->audio_packets % 100 == 0) {
+        printf("audio packets=%u bytes=%zu\n", probe->audio_packets, probe->audio_bytes);
+        fflush(stdout);
+        if (probe->audio_file) fflush(probe->audio_file);
+    }
     return 0;
 }
 
@@ -292,7 +338,7 @@ static void audio_stop(IHS_Session *session, void *context) {
 static void session_configuring(IHS_Session *session, IHS_SessionConfig *config, void *context) {
     (void) session;
     (void) context;
-    config->enableAudio = true;
+    config->enableAudio = false;
     config->enableHevc = false;
 }
 
@@ -341,6 +387,16 @@ static int run_stream_probe(ProbeContext *probe) {
         fprintf(stderr, "could not start discovery\n");
         stop_client(active_client);
     }
+    FILE* endpoint = fopen("build/steam-probe-host.ip", "r");
+    if (endpoint) {
+        char address[64];
+        if (fgets(address, sizeof(address), endpoint)) {
+            address[strcspn(address, "\r\n")] = 0;
+            printf("probing saved host address=%s\n", address);
+            LunarIHSDiscoverAddress(active_client, address);
+        }
+        fclose(endpoint);
+    }
     IHS_ClientThreadedJoin(active_client);
     IHS_ClientDestroy(active_client);
     active_client = NULL;
@@ -377,6 +433,7 @@ int main(int argc, char **argv) {
     }
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
+    signal(SIGALRM, on_signal);
     signal(SIGPIPE, SIG_IGN);
 
     IHS_Init();
@@ -430,5 +487,5 @@ int main(int argc, char **argv) {
     IHS_Quit();
     printf("summary video_frames=%u video_bytes=%zu audio_packets=%u audio_bytes=%zu\n",
            probe.video_frames, probe.video_bytes, probe.audio_packets, probe.audio_bytes);
-    return probe.video_frames > 0 && probe.audio_packets > 0 ? 0 : 1;
+    return probe.video_frames > 0 ? 0 : 1;
 }

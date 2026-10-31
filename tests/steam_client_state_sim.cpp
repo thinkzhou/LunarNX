@@ -95,5 +95,31 @@ int main() {
     assert(client.discoverAddress(""));
     assert(!client.discoverAddress("not-an-ip"));
     assert(!client.discoverAddress("::1"));
+    assert(client.discoverAddress("127.0.0.1"));
+    {
+        SteamLinkClient restored_address;
+        assert(restored_address.saved_addresses_ == std::vector<std::string>{"127.0.0.1"});
+        assert(!restored_address.discoverAddress("bad-address"));
+        SteamLinkClient unchanged_address;
+        assert(unchanged_address.saved_addresses_ == restored_address.saved_addresses_);
+        assert(restored_address.discoverAddress(""));
+        SteamLinkClient cleared_address;
+        assert(cleared_address.saved_addresses_.empty());
+    }
+    std::cout << "PASS: saved host IP survives client recreation; invalid input preserves it; explicit clear persists\n";
+    {
+        assert(client.savePairings());
+        SteamLinkClient restarted;
+        assert(restarted.authorized_steam_ids_ == client.authorized_steam_ids_);
+        assert(restarted.authorized_keys_ == client.authorized_keys_);
+        assert(!restarted.authorized_keys_.empty());
+        restarted.authorized_steam_ids_.clear();
+        restarted.authorized_keys_.clear();
+        assert(restarted.savePairings());
+        SteamLinkClient revoked;
+        assert(revoked.authorized_keys_.empty());
+        assert(revoked.authorized_steam_ids_.empty());
+    }
+    std::cout << "PASS: pairing keys and Steam IDs survive client recreation; revoked records stay removed\n";
     std::cout << "PASS: host expiry/reappearance/endpoint change, multi-host authorization/revocation/re-pair, invalid manual address\n";
 }

@@ -1,6 +1,9 @@
 #ifdef __SWITCH__
 
 #include "steam_link_client.h"
+extern "C" {
+#include "client/client_pri.h"
+}
 #include "stream_support.h"
 extern "C" {
 #include "ihs_streaming_support.h"
@@ -103,6 +106,40 @@ bool loadIdentity(SteamLinkClient::Identity* identity) {
     return valid && identity->device_id != 0;
 }
 
+bool validHostAddress(const std::string& address) {
+    IHS_IPAddress parsed{};
+    return IHS_IPAddressFromString(&parsed, address.c_str()) && parsed.family == IHS_IPAddressFamilyIPv4;
+}
+
+std::vector<std::string> loadHostAddresses() {
+    std::vector<std::string> addresses;
+    const std::string path = std::string(lunar::get_steam_link_device_path()) + ".hosts";
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return addresses;
+    char line[64];
+    while (addresses.size() < 64 && std::fgets(line, sizeof(line), f)) {
+        line[std::strcspn(line, "\r\n")] = '\0';
+        if (validHostAddress(line) && std::find(addresses.begin(), addresses.end(), line) == addresses.end())
+            addresses.emplace_back(line);
+    }
+    std::fclose(f);
+    return addresses;
+}
+
+bool saveHostAddresses(const std::vector<std::string>& addresses) {
+    const std::string path = std::string(lunar::get_steam_link_device_path()) + ".hosts";
+    const std::string temporary = path + ".tmp";
+    FILE* f = std::fopen(temporary.c_str(), "wb");
+    if (!f) return false;
+    bool ok = true;
+    for (const auto& address : addresses)
+        ok = ok && validHostAddress(address) && std::fprintf(f, "%s\n", address.c_str()) > 0;
+    ok = std::fclose(f) == 0 && ok;
+    if (ok) ok = std::rename(temporary.c_str(), path.c_str()) == 0;
+    if (!ok) std::remove(temporary.c_str());
+    return ok;
+}
+
 // ihslib owns one process-wide timer service. Async page cleanup can overlap
 // the next page's client, so each native client holds a lease until destruction.
 std::mutex ihs_runtime_mutex;
@@ -118,14 +155,59 @@ void releaseIhsRuntime() {
 } // namespace
 
 SteamLinkClient::SteamLinkClient() {
+    // Pairings are loaded after the persistent device identity is available.
     lunar::diagnosticLog("steam-link", "client construct");
     if (!loadOrCreateIdentity()) {
         last_error_ = "Could not create Steam Link device identity";
         lunar::persistentEventLog("steam-link", "identity unavailable");
     } else {
+        loadPairings();
+        saved_addresses_ = loadHostAddresses();
         lunar::diagnosticLog("steam-link", "identity ready device_id=%llu",
                              static_cast<unsigned long long>(identity_.device_id));
     }
+}
+
+void SteamLinkClient::loadPairings() {
+    const std::string path = std::string(lunar::get_steam_link_device_path()) + ".pairings";
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return;
+    uint64_t header[3]{};
+    bool ok = std::fread(header, sizeof(header), 1, f) == 1 &&
+        header[0] == UINT64_C(0x4c4e585041495231) && header[1] == identity_.device_id && header[2] <= 64;
+    decltype(authorized_keys_) keys;
+    decltype(authorized_steam_ids_) ids;
+    for (uint64_t i = 0; ok && i < header[2]; ++i) {
+        uint64_t record[2]{};
+        std::array<uint8_t, 32> key{};
+        ok = std::fread(record, sizeof(record), 1, f) == 1 &&
+            std::fread(key.data(), key.size(), 1, f) == 1 && record[0] && record[1];
+        if (ok) { keys[record[0]] = key; ids[record[0]] = record[1]; }
+    }
+    ok = ok && std::fgetc(f) == EOF && !std::ferror(f);
+    std::fclose(f);
+    if (ok) { authorized_keys_ = std::move(keys); authorized_steam_ids_ = std::move(ids); }
+    lunar::persistentEventLog("steam-link", "saved pairings loaded=%zu valid=%d", authorized_keys_.size(), int(ok));
+}
+
+bool SteamLinkClient::savePairings() {
+    // Caller holds mutex_. Bind records to the existing persistent device ID.
+    const std::string path = std::string(lunar::get_steam_link_device_path()) + ".pairings";
+    const std::string temporary = path + ".tmp";
+    FILE* f = std::fopen(temporary.c_str(), "wb");
+    if (!f) return false;
+    uint64_t header[3]{UINT64_C(0x4c4e585041495231), identity_.device_id, authorized_keys_.size()};
+    bool ok = header[2] <= 64 && std::fwrite(header, sizeof(header), 1, f) == 1;
+    for (const auto& entry : authorized_keys_) {
+        auto id = authorized_steam_ids_.find(entry.first);
+        uint64_t record[2]{entry.first, id == authorized_steam_ids_.end() ? 0 : id->second};
+        ok = ok && record[1] && std::fwrite(record, sizeof(record), 1, f) == 1 &&
+            std::fwrite(entry.second.data(), entry.second.size(), 1, f) == 1;
+    }
+    ok = std::fclose(f) == 0 && ok;
+    if (ok) ok = std::rename(temporary.c_str(), path.c_str()) == 0;
+    if (!ok) std::remove(temporary.c_str());
+    return ok;
 }
 
 SteamLinkClient::~SteamLinkClient() {
@@ -214,9 +296,10 @@ bool SteamLinkClient::startDiscovery(HostCallback callback) {
             std::unique_lock<std::mutex> lock(discovery_wait_mutex_);
             while (!discovery_wait_.wait_for(lock, std::chrono::seconds(1),
                                              [this] { return discovery_stop_; })) {
-                const auto manual = manual_address_;
+                const auto addresses = saved_addresses_;
                 lock.unlock();
-                if (!manual.empty()) LunarIHSDiscoverAddress(client_, manual.c_str());
+                for (const auto& address : addresses)
+                    LunarIHSDiscoverAddress(client_, address.c_str());
                 emitHosts();
                 lock.lock();
             }
@@ -235,6 +318,9 @@ bool SteamLinkClient::discoverAddress(const std::string& address) {
     if (address.empty()) {
         std::lock_guard<std::mutex> lock(discovery_wait_mutex_);
         manual_address_.clear();
+        saved_addresses_.clear();
+        if (!saveHostAddresses(saved_addresses_))
+            lunar::persistentEventLog("steam-link", "could not clear saved host addresses");
         return true;
     }
     IHS_IPAddress parsed{};
@@ -250,6 +336,12 @@ bool SteamLinkClient::discoverAddress(const std::string& address) {
     }
     std::lock_guard<std::mutex> lock(discovery_wait_mutex_);
     manual_address_ = address;
+    if (std::find(saved_addresses_.begin(), saved_addresses_.end(), address) == saved_addresses_.end()) {
+        if (saved_addresses_.size() == 64) saved_addresses_.erase(saved_addresses_.begin());
+        saved_addresses_.push_back(address);
+    }
+    if (!saveHostAddresses(saved_addresses_))
+        lunar::persistentEventLog("steam-link", "could not save host address");
     return true;
 }
 
@@ -340,12 +432,20 @@ bool SteamLinkClient::requestStreaming(const SteamLinkHost& host, const std::str
     }
     IHS_StreamingRequest request{};
     std::snprintf(request.pin, sizeof(request.pin), "%s", pin.c_str());
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto key = authorized_keys_.find(host.client_id);
+        if (key != authorized_keys_.end()) {
+            identity_.secret_key = key->second;
+            IHS_BaseSetSecretKey(&client_->base, identity_.secret_key.data());
+        }
+    }
     request.streamingEnable.video = true;
-    request.streamingEnable.audio = true;
+    request.streamingEnable.audio = false;
     request.streamingEnable.input = true;
     request.maxResolution.x = width > 0 ? width : 1280;
     request.maxResolution.y = height > 0 ? height : 720;
-    request.audioChannelCount = 2;
+    request.audioChannelCount = 0;
     request.streamingInterface = IHS_StreamInterfaceBigPicture;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -424,6 +524,15 @@ void SteamLinkClient::updateHost(const IHS_HostInfo& host) {
             std::free(address);
         }
         item.port = host.address.port;
+        if (authorized_steam_ids_.count(host.clientId) && validHostAddress(item.address)) {
+            std::lock_guard<std::mutex> address_lock(discovery_wait_mutex_);
+            if (std::find(saved_addresses_.begin(), saved_addresses_.end(), item.address) == saved_addresses_.end()) {
+                if (saved_addresses_.size() == 64) saved_addresses_.erase(saved_addresses_.begin());
+                saved_addresses_.push_back(item.address);
+                if (!saveHostAddresses(saved_addresses_))
+                    lunar::persistentEventLog("steam-link", "could not save authorized host address");
+            }
+        }
         item.ostype = static_cast<int>(host.ostype);
         item.games_running = host.gamesRunning;
         if (it == hosts_.end()) hosts_.push_back(std::move(item));
@@ -465,14 +574,19 @@ void SteamLinkClient::onAuthorizationProgress(IHS_Client*, const IHS_HostInfo*, 
     self->emitHosts();
 }
 
-void SteamLinkClient::onAuthorizationSuccess(IHS_Client*, const IHS_HostInfo* host,
+void SteamLinkClient::onAuthorizationSuccess(IHS_Client* protocol_client, const IHS_HostInfo* host,
                                              uint64_t steam_id, void* context) {
     auto* self = static_cast<SteamLinkClient*>(context);
     if (!self || !host) return;
+    if (protocol_client)
+        IHS_BaseGetSecretKey(&protocol_client->base, self->identity_.secret_key.data());
     AuthorizationCallback callback;
     {
         std::lock_guard<std::mutex> lock(self->mutex_);
         self->authorized_steam_ids_[host->clientId] = steam_id;
+        self->authorized_keys_[host->clientId] = self->identity_.secret_key;
+        if (!self->savePairings())
+            lunar::persistentEventLog("steam-link", "could not save host pairing");
         self->authorized_hosts_[host->clientId] = *host;
         callback = self->authorization_callback_;
         self->authorization_callback_ = {};
@@ -521,6 +635,8 @@ void SteamLinkClient::onStreamingFailed(IHS_Client*, const IHS_HostInfo* host,
         std::lock_guard<std::mutex> lock(self->mutex_);
         if (result == IHS_StreamingUnauthorized && host) {
             self->authorized_steam_ids_.erase(host->clientId);
+            self->authorized_keys_.erase(host->clientId);
+            self->savePairings();
             self->authorized_hosts_.erase(host->clientId);
         }
         callback = self->streaming_callback_;
@@ -585,6 +701,8 @@ void SteamLinkClient::onAuthorizationFailed(IHS_Client*, const IHS_HostInfo*,
     if (!self) return;
     AuthorizationCallback callback;
     const std::string error = authorizationError(result);
+    lunar::persistentEventLog("steam-link", "authorization failed result=%d error=%s",
+                              static_cast<int>(result), error.c_str());
     {
         std::lock_guard<std::mutex> lock(self->mutex_);
         callback = self->authorization_callback_;

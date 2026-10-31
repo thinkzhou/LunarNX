@@ -83,6 +83,8 @@ private:
                                   IHS_StreamingResult result, void* context);
 
     bool loadOrCreateIdentity();
+    void loadPairings();
+    bool savePairings();
     bool ensureClient();
     bool findHost(uint64_t client_id, IHS_HostInfo* result) const;
     void updateHost(const IHS_HostInfo& host);
@@ -103,6 +105,7 @@ private:
     std::thread discovery_worker_;
     bool discovery_stop_ = false;
     std::string manual_address_;
+    std::vector<std::string> saved_addresses_;
     std::unordered_map<uint64_t, uint64_t> last_seen_ms_;
     std::unordered_map<uint64_t, IHS_HostInfo> host_infos_;
     std::vector<SteamLinkHost> hosts_;
@@ -110,6 +113,7 @@ private:
     AuthorizationCallback authorization_callback_;
     StreamingCallback streaming_callback_;
     std::unordered_map<uint64_t, uint64_t> authorized_steam_ids_;
+    std::unordered_map<uint64_t, std::array<uint8_t, 32>> authorized_keys_;
     std::unordered_map<uint64_t, IHS_HostInfo> authorized_hosts_;
     std::string last_error_;
 };
