@@ -48,7 +48,7 @@ set -- \
   "$ihs_src/hid/report.c" "$ihs_src/protobuf/discovery.pb-c.c" \
   "$ihs_src/protobuf/hiddevices.pb-c.c" "$ihs_src/protobuf/pb_utils.c" \
   "$ihs_src/protobuf/remoteplay.pb-c.c" "$pb_src" \
-  "$ihs_src/platforms/ihs_ip_posix.c" "$ihs_src/platforms/ihs_udp_posix.c" \
+  "$ihs_src/platforms/ihs_ip_posix.c" "$root_dir/tools/steamlink_probe/udp_loss.c" \
   "$ihs_src/crypto/impl_mbedtls.c"
 
 clang -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter \

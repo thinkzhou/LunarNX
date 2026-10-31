@@ -51,6 +51,7 @@ void PerfOverlay::update(float fps, const std::string& resolution,
     uint32_t rtp_audio = perf_->rtp_audio_packets.load();
     uint32_t video_missing = perf_->rtp_video_missing_packets.load();
     const bool is_ps = platform_ == app::StreamPlatform::PlayStation;
+    const bool is_steam = platform_ == app::StreamPlatform::Steam;
     if (is_ps && rtp_video == 0 && video_missing == 0 && perf_->video_packets.load() > 0) {
         rtp_video = perf_->video_packets.load();
         video_missing = perf_->packets_lost.load();
@@ -80,7 +81,7 @@ void PerfOverlay::update(float fps, const std::string& resolution,
     float drop_pct = (recv + lost > 0) ? (100.0f * lost / (recv + lost)) : 0.0f;
 
     std::string text = brls::getStr(
-        is_ps ? "lunarnx/perf/detail_frames" : "lunarnx/perf/detail_frames_xbox",
+        (is_ps || is_steam) ? "lunarnx/perf/detail_frames" : "lunarnx/perf/detail_frames_xbox",
         fps, video, audio, input);
     text += "\n" + brls::getStr("lunarnx/perf/detail_decode", dec_ms);
     text += "\n" + brls::getStr(
@@ -95,7 +96,7 @@ void PerfOverlay::update(float fps, const std::string& resolution,
     text += "\n" + brls::getStr(
         "lunarnx/perf/detail_access_units", video_aus, audio_aus,
         decode_errors);
-    text += "\n" + brls::getStr(
+    if (!is_steam) text += "\n" + brls::getStr(
         "lunarnx/perf/detail_rtp", rtp_video, rtp_audio, video_missing,
         h264_corrupt, srtp_fail);
     if (!resolution.empty()) {
@@ -106,11 +107,16 @@ void PerfOverlay::update(float fps, const std::string& resolution,
         text += "\n" + brls::getStr(
             "lunarnx/perf/detail_backend", video_backend);
     }
-    if (is_ps && !video_codec.empty()) {
+    if ((is_ps || is_steam) && !video_codec.empty()) {
         text += "\n" + brls::getStr(
             "lunarnx/perf/detail_codec", video_codec);
     }
-    text += "\n" + brls::getStr(
+    if (is_steam) {
+        text += "\nSteam IHS: " + std::to_string(perf_->video_packets.load()) + " AU / " +
+            std::to_string(perf_->unique_video_frames_submitted.load()) + " new frames";
+        text += "\nEncoded: " + std::to_string(perf_->encoded_video_bytes.load() / 1024) + " KiB";
+        text += "\nRTP / SRTP / network loss: N/A";
+    } else text += "\n" + brls::getStr(
         "lunarnx/perf/detail_packet_loss", lost, drop_pct);
 
     label_->setText(text);

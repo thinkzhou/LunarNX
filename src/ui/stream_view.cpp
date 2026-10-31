@@ -932,7 +932,9 @@ void StreamView::updatePerformanceVisibility() {
         overlay_->setVisibility(performance_visible_
             ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
     }
-    if (!performance_visible_ && perf_overlay_) {
+    if (perf_overlay_ && runtime_->getStreamPlatform() == app::StreamPlatform::Steam) {
+        perf_overlay_->setVisible(performance_visible_);
+    } else if (!performance_visible_ && perf_overlay_) {
         perf_overlay_->setVisible(false);
     }
     if (performance_button_) {

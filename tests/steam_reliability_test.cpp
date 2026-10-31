@@ -245,6 +245,50 @@ static void fragmentationTests(IHS_Session* session) {
     }
 }
 int main() {
+    // A lost middle fragment blocks Poll even after newer complete frames arrive.
+    // The old worker checked expiry once, then waited/repolled forever without
+    // advancing that expiry. Exercise the exact helper used after every wakeup.
+    for (unsigned cycle = 0; cycle < 200; ++cycle) {
+        auto* window = IHS_SessionPacketsWindowCreate(8);
+        uint16_t first = uint16_t(65500 + cycle * 7);
+        auto head = packet(first, IHS_SessionPacketTypeUnreliable, 1);
+        head.header.sendTimestamp = 1000;
+        assert(IHS_SessionPacketsWindowAdd(window, &head));
+        IHS_SessionFrame frame{}; IHS_BufferInit(&frame.body, 8, 65536);
+        assert(!LunarIHSMediaWindowPoll(window, &frame));
+        // first+1 is deliberately lost; first+2 is a complete later frame.
+        auto next = packet(uint16_t(first + 2), IHS_SessionPacketTypeUnreliable);
+        next.header.sendTimestamp = 1000 + IHS_SESSION_PACKET_TIMESTAMP_FROM_MILLIS(300);
+        assert(IHS_SessionPacketsWindowAdd(window, &next));
+        assert(!IHS_SessionPacketsWindowPoll(window, &frame)); // old wait loop wedges here
+        assert(LunarIHSMediaWindowPoll(window, &frame));
+        assert(frame.header.packetId == uint16_t(first + 2));
+        assert(IHS_SessionPacketsWindowSize(window) == 0);
+        auto burst = packet(uint16_t(first + 40), IHS_SessionPacketTypeUnreliable);
+        burst.header.sendTimestamp = next.header.sendTimestamp + 30000;
+        assert(IHS_SessionPacketsWindowAdd(window, &burst));
+        IHS_SessionPacketsWindowReleaseFrame(&frame);
+        assert(LunarIHSMediaWindowPoll(window, &frame));
+        assert(frame.header.packetId == uint16_t(first + 40));
+        IHS_SessionPacketsWindowReleaseFrame(&frame);
+        auto reordered = packet(uint16_t(first + 41), IHS_SessionPacketTypeUnreliable, 1);
+        auto following = packet(uint16_t(first + 43), IHS_SessionPacketTypeUnreliable);
+        reordered.header.sendTimestamp = following.header.sendTimestamp = burst.header.sendTimestamp;
+        assert(IHS_SessionPacketsWindowAdd(window, &reordered));
+        assert(IHS_SessionPacketsWindowAdd(window, &following));
+        assert(!LunarIHSMediaWindowPoll(window, &frame));
+        auto late = packet(uint16_t(first + 42), IHS_SessionPacketTypeUnreliableFrag, 0);
+        late.header.sendTimestamp = burst.header.sendTimestamp;
+        assert(IHS_SessionPacketsWindowAdd(window, &late));
+        assert(LunarIHSMediaWindowPoll(window, &frame));
+        assert(frame.header.packetId == uint16_t(first + 41) && frame.body.size == 2);
+        IHS_SessionPacketsWindowReleaseFrame(&frame);
+        assert(LunarIHSMediaWindowPoll(window, &frame));
+        assert(frame.header.packetId == uint16_t(first + 43));
+        IHS_SessionFrameClear(&frame, true);
+        IHS_SessionPacketsWindowDestroy(window);
+    }
+    std::cout << "PASS: 200 lost-middle-fragment wakeups recover without window overflow, including ID wrap\n";
     IHS_Init(); windowTests();
     uint8_t key[32]{};
     IHS_ClientConfig config{}; config.deviceId = 42; config.secretKey = key; config.deviceName = "Replay";

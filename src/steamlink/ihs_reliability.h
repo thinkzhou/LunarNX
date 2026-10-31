@@ -2,6 +2,8 @@
 
 #include "session/retransmission.h"
 #include "session/window.h"
+bool LunarIHSMediaWindowPoll(IHS_SessionPacketsWindow *window, IHS_SessionFrame *frame);
+void IHS_SessionPacketsWindowReleaseAll(IHS_SessionPacketsWindow *window);
 
 // Receive-window adaptation of kxn/ihslib 04688d1 (LGPL-3.0-or-later).
 // Keep the pinned vendor ABI; all additional state lives in tracked overrides.

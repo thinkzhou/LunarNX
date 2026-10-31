@@ -141,7 +141,11 @@ bool IHS_SessionPacketsWindowAdd(IHS_SessionPacketsWindow *window, IHS_SessionPa
     }
     /* Not sure why but the offset is significantly larger than window capacity. Ignore it reset */
     if (tailOffset > window->capacity) {
-        return !window->reliable;
+        if (window->reliable) return false;
+        // A burst loss can advance farther than the media ring. Keeping the old
+        // tail would reject every subsequent packet until the 16-bit ID wraps.
+        IHS_SessionPacketsWindowReleaseAll(window);
+        return IHS_SessionPacketsWindowAdd(window, packet);
     }
     /* Large offset means overflow, abort processing and hangup */
     if (tailOffset > (int)IHS_SessionPacketsWindowAvailable(window)) {

@@ -30,6 +30,7 @@
 #include "session/session_pri.h"
 
 #include "ihs_buffer_ext.h"
+#include "ihs_reliability.h"
 
 #define DISCARD_DIFF IHS_SESSION_PACKET_TIMESTAMP_FROM_MILLIS(200)
 
@@ -82,7 +83,9 @@ void IHS_SessionChannelDataReceived(IHS_SessionChannel *channel, IHS_SessionPack
     if (!IHS_SessionPacketsWindowAdd(dataCh->window, packet)) {
         IHS_SessionLog(channel->session, IHS_LogLevelWarn, "Data", "%s channel items overflow! Available: %u",
                        DataChannelName(channel->type), IHS_SessionPacketsWindowAvailable(dataCh->window));
-        IHS_SessionPacketsWindowDiscard(dataCh->window, 0);
+        IHS_SessionPacketsWindowReleaseAll(dataCh->window);
+        // Retain the arriving packet: it may be the recovery IDR's head.
+        IHS_SessionPacketsWindowAdd(dataCh->window, packet);
         IHS_SessionChannelDataLost(channel);
     }
     IHS_CondSignal(dataCh->windowCond);
@@ -113,6 +116,11 @@ size_t IHS_SessionChannelDataFrameHeaderParse(IHS_SessionDataFrameHeader *header
     return offset;
 }
 
+bool LunarIHSMediaWindowPoll(IHS_SessionPacketsWindow *window, IHS_SessionFrame *frame) {
+    IHS_SessionPacketsWindowDiscard(window, DISCARD_DIFF);
+    return IHS_SessionPacketsWindowPoll(window, frame);
+}
+
 static void DataThreadWorker(IHS_SessionChannelData *channel) {
     const IHS_SessionChannelDataClass *cls = (const IHS_SessionChannelDataClass *) channel->base.cls;
     IHS_SessionFrame frame;
@@ -133,7 +141,7 @@ static void DataThreadWorker(IHS_SessionChannelData *channel) {
             IHS_SessionLog(channel->base.session, IHS_LogLevelDebug, channelName, "Discarded %u packets", discarded);
         }
         bool hasFrame;
-        while (!(hasFrame = IHS_SessionPacketsWindowPoll(channel->window, &frame))) {
+        while (!(hasFrame = LunarIHSMediaWindowPoll(channel->window, &frame))) {
             IHS_CondWait(channel->windowCond, channel->windowLock);
             if (channel->interrupted) {
                 break;
