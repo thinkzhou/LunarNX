@@ -23,6 +23,7 @@ public:
 private:
     void enterCapture(size_t index);
     void finishCapture();
+    void cancelCapture();
     void refreshRows();
     bool hasConflict(size_t index) const;
 

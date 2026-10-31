@@ -115,7 +115,9 @@ brls::View* ButtonMappingActivity::createContentView() {
         : kXboxLabels;
     for (size_t i = 0; i < row_count; ++i) {
         auto* row = new brls::DetailCell();
-        row->setText(brls::getStr(labels[i]));
+        row->setText(brls::getStr(profile_ == input::ButtonMappingProfile::Steam &&
+            i == static_cast<size_t>(input::RemoteButton::Guide)
+                ? "lunarnx/steam_ui/menu_button" : labels[i]));
         row->setFocusable(true);
         row->registerClickAction([this, i](brls::View*) -> bool {
             enterCapture(i);
@@ -131,11 +133,14 @@ brls::View* ButtonMappingActivity::createContentView() {
     styleSecondaryButton(reset);
     reset->setMarginTop(24);
     reset->registerClickAction([this](brls::View*) -> bool {
-        mapping_ = input::defaultButtonMapping(profile_);
-        if (input::saveButtonMapping(profile_, mapping_)) {
+        const auto candidate = input::defaultButtonMapping(profile_);
+        if (input::saveButtonMapping(profile_, candidate)) {
+            mapping_ = candidate;
             refreshRows();
             brls::Application::notify(
                 brls::getStr("lunarnx/button_mapping/reset_done"));
+        } else {
+            brls::Application::notify(brls::getStr("lunarnx/button_mapping/save_failed"));
         }
         return true;
     });
@@ -169,13 +174,17 @@ brls::View* ButtonMappingActivity::createContentView() {
         brls::getStr("lunarnx/button_mapping/capture_hint"), 14);
     capture_hint->setHorizontalAlign(brls::HorizontalAlign::CENTER);
     capture_hint->setMarginTop(20);
+    capture_hint->setSingleLine(false);
+    capture_hint->setIsWrapping(true);
     capture_content_->addView(capture_hint);
 
     refreshRows();
     return makeAppFrame(brls::getStr(
         profile_ == input::ButtonMappingProfile::PlayStation
             ? "lunarnx/button_mapping/ps_title"
-            : "lunarnx/button_mapping/xbox_title"), root);
+            : profile_ == input::ButtonMappingProfile::Steam
+                ? "lunarnx/steam_ui/mapping_title"
+                : "lunarnx/button_mapping/xbox_title"), root);
 }
 
 void ButtonMappingActivity::enterCapture(size_t index) {
@@ -199,6 +208,11 @@ void ButtonMappingActivity::pollCaptureInput() {
     if (input::isCaptureButtonPressed()) {
         buttons |= input::kButtonMappingCapture;
     }
+    const uint64_t cancel_chord = HidNpadButton_Minus | HidNpadButton_Plus;
+    if (!waiting_for_release_ && (buttons & cancel_chord) == cancel_chord) {
+        cancelCapture();
+        return;
+    }
     if (waiting_for_release_) {
         if (buttons == 0) {
             waiting_for_release_ = false;
@@ -219,6 +233,16 @@ void ButtonMappingActivity::pollCaptureInput() {
     }
 }
 
+void ButtonMappingActivity::cancelCapture() {
+    capturing_ = false;
+    peak_buttons_ = 0;
+    saw_button_ = false;
+    release_frames_ = 0;
+    capture_content_->setVisibility(brls::Visibility::GONE);
+    mapping_content_->setVisibility(brls::Visibility::VISIBLE);
+    if (capture_index_ < rows_.size()) brls::Application::giveFocus(rows_[capture_index_]);
+}
+
 void ButtonMappingActivity::finishCapture() {
     const uint64_t quick_menu = HidNpadButton_Minus | HidNpadButton_Plus;
     if ((peak_buttons_ & quick_menu) == quick_menu) {
@@ -229,8 +253,13 @@ void ButtonMappingActivity::finishCapture() {
             brls::getStr("lunarnx/button_mapping/reserved_chord"));
         return;
     }
-    mapping_[capture_index_] = peak_buttons_;
-    input::saveButtonMapping(profile_, mapping_);
+    auto candidate = mapping_;
+    candidate[capture_index_] = peak_buttons_;
+    if (!input::saveButtonMapping(profile_, candidate)) {
+        brls::Application::notify(brls::getStr("lunarnx/button_mapping/save_failed"));
+    } else {
+        mapping_ = candidate;
+    }
     capturing_ = false;
     capture_content_->setVisibility(brls::Visibility::GONE);
     mapping_content_->setVisibility(brls::Visibility::VISIBLE);

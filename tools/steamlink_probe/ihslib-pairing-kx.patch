@@ -1,0 +1,401 @@
+diff --git a/src/base.c b/src/base.c
+index 850a021..d72b495 100644
+--- a/src/base.c
++++ b/src/base.c
+@@ -36,6 +36,8 @@
+ 
+ static void BaseWorker(IHS_Base *base);
+ 
++static void BaseUpdateSecretKey(IHS_Base *base, const uint8_t *secretKey);
++
+ static bool initialized;
+ 
+ void IHS_Init() {
+@@ -57,10 +59,30 @@ void IHS_BaseInit(IHS_Base *base, const IHS_ClientConfig *config, IHS_BaseReceiv
+     base->callbacks.received = recvCb;
+ 
+     base->deviceId = config->deviceId;
+-    memcpy(base->secretKey, config->secretKey, 32);
+     strncpy(base->deviceName, config->deviceName ? config->deviceName : "IHSLib", sizeof(base->deviceName) - 1);
+     base->deviceName[sizeof(base->deviceName) - 1] = '\0';
++    BaseUpdateSecretKey(base, config->secretKey);
++}
++
++void IHS_BaseSetSecretKey(IHS_Base *base, const uint8_t *secretKey) {
++    assert(base != NULL);
++    IHS_BaseLock(base);
++    BaseUpdateSecretKey(base, secretKey);
++    IHS_BaseUnlock(base);
++}
+ 
++void IHS_BaseGetSecretKey(IHS_Base *base, uint8_t *secretKey) {
++    assert(base != NULL);
++    IHS_BaseLock(base);
++    memcpy(secretKey, base->secretKey, sizeof(base->secretKey));
++    IHS_BaseUnlock(base);
++}
++
++/**
++ * The device token, SymmetricEncrypt(u64le device ID), is derived from the secret key.
++ */
++static void BaseUpdateSecretKey(IHS_Base *base, const uint8_t *secretKey) {
++    memcpy(base->secretKey, secretKey, sizeof(base->secretKey));
+     uint8_t in[8];
+     size_t deviceTokenLen = sizeof(base->deviceToken);
+     IHS_WriteUInt64LE(in, base->deviceId);
+diff --git a/src/base.h b/src/base.h
+index 3a25b46..396304f 100644
+--- a/src/base.h
++++ b/src/base.h
+@@ -78,6 +78,13 @@ void IHS_BaseInit(IHS_Base *base, const IHS_ClientConfig *config, IHS_BaseReceiv
+ 
+ void IHS_BaseSetLogFunction(IHS_Base *base, IHS_LogFunction *logFunction);
+ 
++/**
++ * Replace the 32 byte secret key, and the device token derived from it.
++ */
++void IHS_BaseSetSecretKey(IHS_Base *base, const uint8_t *secretKey);
++
++void IHS_BaseGetSecretKey(IHS_Base *base, uint8_t *secretKey);
++
+ void IHS_BaseSetRunCallbacks(IHS_Base *base, const IHS_BaseRunCallbacks *callbacks, void *context);
+ 
+ void IHS_BaseLog(IHS_Base *base, IHS_LogLevel level, const char *tag,
+@@ -106,4 +113,4 @@ bool IHS_BaseSend(IHS_Base *base, IHS_SocketAddress address, const IHS_Buffer *d
+ 
+ void IHS_BaseLock(IHS_Base *base);
+ 
+-void IHS_BaseUnlock(IHS_Base *base);
+\ No newline at end of file
++void IHS_BaseUnlock(IHS_Base *base);
+diff --git a/src/crypto.h b/src/crypto.h
+index 97bf0c5..67aad8d 100644
+--- a/src/crypto.h
++++ b/src/crypto.h
+@@ -46,4 +46,24 @@ int IHS_CryptoSymmetricDecryptWithIV(const uint8_t *in, size_t inLen, const uint
+ int IHS_CryptoRSAEncrypt(const uint8_t *in, size_t inLen, const uint8_t *key, size_t keyLen, uint8_t *out,
+                          size_t *outLen);
+ 
+-uint32_t IHS_CryptoRandomUInt32();
+\ No newline at end of file
++uint32_t IHS_CryptoRandomUInt32();
++
++#define IHS_CRYPTO_SHA256_SIZE 32
++#define IHS_CRYPTO_X25519_KEY_SIZE 32
++
++int IHS_CryptoRandomBytes(uint8_t *out, size_t len);
++
++int IHS_CryptoSHA256(const uint8_t *in, size_t inLen, uint8_t out[IHS_CRYPTO_SHA256_SIZE]);
++
++/**
++ * Derive the X25519 (RFC 7748) public key of a private key made of 32 random bytes.
++ */
++int IHS_CryptoX25519PublicKey(const uint8_t privateKey[IHS_CRYPTO_X25519_KEY_SIZE],
++                              uint8_t publicKey[IHS_CRYPTO_X25519_KEY_SIZE]);
++
++/**
++ * Steam's CCrypto::PerformKeyExchange: SHA-256 of the X25519 shared secret.
++ */
++int IHS_CryptoKeyExchange(const uint8_t privateKey[IHS_CRYPTO_X25519_KEY_SIZE],
++                          const uint8_t peerPublicKey[IHS_CRYPTO_X25519_KEY_SIZE],
++                          uint8_t secret[IHS_CRYPTO_SHA256_SIZE]);
+diff --git a/src/crypto/impl_mbedtls.c b/src/crypto/impl_mbedtls.c
+index a63b953..44a388c 100644
+--- a/src/crypto/impl_mbedtls.c
++++ b/src/crypto/impl_mbedtls.c
+@@ -33,6 +33,9 @@
+ #include <mbedtls/pk.h>
+ #include <mbedtls/ctr_drbg.h>
+ #include <mbedtls/entropy.h>
++#include <mbedtls/ecp.h>
++#include <mbedtls/sha256.h>
++#include <mbedtls/platform_util.h>
+ 
+ #define MIN(a, b) ((a) < (b) ? (a) : (b))
+ 
+@@ -246,4 +249,112 @@ uint32_t IHS_CryptoRandomUInt32() {
+     uint32_t ret;
+     IHS_ReadUInt32LE(out, &ret);
+     return ret;
+-}
+\ No newline at end of file
++}
++
++int IHS_CryptoRandomBytes(uint8_t *out, size_t len) {
++    mbedtls_ctr_drbg_context ctr_drbg;
++    mbedtls_ctr_drbg_init(&ctr_drbg);
++    mbedtls_entropy_context entropy;
++    mbedtls_entropy_init(&entropy);
++    int ret = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
++                                    (const unsigned char *) "@IHSlib@", 8);
++    if (ret == 0) {
++        ret = mbedtls_ctr_drbg_random(&ctr_drbg, out, len);
++    }
++    mbedtls_ctr_drbg_free(&ctr_drbg);
++    mbedtls_entropy_free(&entropy);
++    return ret;
++}
++
++int IHS_CryptoSHA256(const uint8_t *in, size_t inLen, uint8_t out[IHS_CRYPTO_SHA256_SIZE]) {
++#if MBEDTLS_VERSION_NUMBER >= 0x03000000
++    return mbedtls_sha256(in, inLen, out, 0);
++#else
++    return mbedtls_sha256_ret(in, inLen, out, 0);
++#endif
++}
++
++/**
++ * X25519 through mbedTLS' ECP module, which uses little endian X-only coordinates for Montgomery curves just like
++ * RFC 7748. peerPublicKey == NULL multiplies the base point, i.e. derives the public key.
++ */
++static int CryptoX25519(const uint8_t privateKey[IHS_CRYPTO_X25519_KEY_SIZE],
++                        const uint8_t peerPublicKey[IHS_CRYPTO_X25519_KEY_SIZE],
++                        uint8_t out[IHS_CRYPTO_X25519_KEY_SIZE]) {
++    mbedtls_ecp_group grp;
++    mbedtls_mpi d;
++    mbedtls_ecp_point peer, result;
++    mbedtls_ctr_drbg_context ctr_drbg;
++    mbedtls_entropy_context entropy;
++    mbedtls_ecp_group_init(&grp);
++    mbedtls_mpi_init(&d);
++    mbedtls_ecp_point_init(&peer);
++    mbedtls_ecp_point_init(&result);
++    mbedtls_ctr_drbg_init(&ctr_drbg);
++    mbedtls_entropy_init(&entropy);
++
++    uint8_t scalar[IHS_CRYPTO_X25519_KEY_SIZE];
++    memcpy(scalar, privateKey, sizeof(scalar));
++    scalar[0] &= 248;
++    scalar[31] &= 127;
++    scalar[31] |= 64;
++
++    int ret;
++    size_t len = 0;
++    if ((ret = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
++                                     (const unsigned char *) "@IHSlib@", 8)) != 0) {
++        goto exit;
++    }
++    if ((ret = mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_CURVE25519)) != 0) {
++        goto exit;
++    }
++    if ((ret = mbedtls_mpi_read_binary_le(&d, scalar, sizeof(scalar))) != 0) {
++        goto exit;
++    }
++    if (peerPublicKey != NULL &&
++        (ret = mbedtls_ecp_point_read_binary(&grp, &peer, peerPublicKey, IHS_CRYPTO_X25519_KEY_SIZE)) != 0) {
++        goto exit;
++    }
++    if ((ret = mbedtls_ecp_mul(&grp, &result, &d, peerPublicKey != NULL ? &peer : &grp.G,
++                               mbedtls_ctr_drbg_random, &ctr_drbg)) != 0) {
++        goto exit;
++    }
++    if ((ret = mbedtls_ecp_point_write_binary(&grp, &result, MBEDTLS_ECP_PF_UNCOMPRESSED, &len, out,
++                                              IHS_CRYPTO_X25519_KEY_SIZE)) != 0) {
++        goto exit;
++    }
++    // A low order peer key yields all zeros, reject it like RFC 7748 suggests.
++    uint8_t acc = 0;
++    for (size_t i = 0; i < IHS_CRYPTO_X25519_KEY_SIZE; i++) {
++        acc |= out[i];
++    }
++    if (len != IHS_CRYPTO_X25519_KEY_SIZE || acc == 0) {
++        ret = MBEDTLS_ERR_ECP_INVALID_KEY;
++    }
++    exit:
++    mbedtls_platform_zeroize(scalar, sizeof(scalar));
++    mbedtls_ctr_drbg_free(&ctr_drbg);
++    mbedtls_entropy_free(&entropy);
++    mbedtls_ecp_point_free(&result);
++    mbedtls_ecp_point_free(&peer);
++    mbedtls_mpi_free(&d);
++    mbedtls_ecp_group_free(&grp);
++    return ret;
++}
++
++int IHS_CryptoX25519PublicKey(const uint8_t privateKey[IHS_CRYPTO_X25519_KEY_SIZE],
++                              uint8_t publicKey[IHS_CRYPTO_X25519_KEY_SIZE]) {
++    return CryptoX25519(privateKey, NULL, publicKey);
++}
++
++int IHS_CryptoKeyExchange(const uint8_t privateKey[IHS_CRYPTO_X25519_KEY_SIZE],
++                          const uint8_t peerPublicKey[IHS_CRYPTO_X25519_KEY_SIZE],
++                          uint8_t secret[IHS_CRYPTO_SHA256_SIZE]) {
++    uint8_t shared[IHS_CRYPTO_X25519_KEY_SIZE];
++    int ret = CryptoX25519(privateKey, peerPublicKey, shared);
++    if (ret == 0) {
++        ret = IHS_CryptoSHA256(shared, sizeof(shared), secret);
++    }
++    mbedtls_platform_zeroize(shared, sizeof(shared));
++    return ret;
++}
+diff --git a/src/client/authorization_kx.c b/src/client/authorization_kx.c
+new file mode 100644
+index 0000000..a86fef1
+--- /dev/null
++++ b/src/client/authorization_kx.c
+@@ -0,0 +1,88 @@
++/*
++ *  _____  _   _  _____  _  _  _
++ * |_   _|| | | |/  ___|| |(_)| |     Steam
++ *   | |  | |_| |\ `--. | | _ | |__     In-Home
++ *   | |  |  _  | `--. \| || || '_ \      Streaming
++ *  _| |_ | | | |/\__/ /| || || |_) |       Library
++ *  \___/ \_| |_/\____/ |_||_||_.__/
++ *
++ * Copyright (c) 2026 Simone Caronni <https://github.com/scaronni>.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 3 of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this program. If not, see <http://www.gnu.org/licenses/>.
++ *
++ */
++
++#include "authorization_kx.h"
++#include "endianness.h"
++
++#include <string.h>
++
++bool IHS_AuthorizationKeyExchangeInit(IHS_AuthorizationKeyExchange *kx, const char *pin) {
++    memset(kx, 0, sizeof(*kx));
++    if (IHS_CryptoRandomBytes(kx->privateKey, sizeof(kx->privateKey)) != 0) {
++        return false;
++    }
++    if (IHS_CryptoX25519PublicKey(kx->privateKey, kx->publicKey) != 0) {
++        return false;
++    }
++    return IHS_CryptoSHA256((const uint8_t *) pin, strlen(pin), kx->pinHash) == 0;
++}
++
++void IHS_AuthorizationKeyExchangeMaskedKey(const IHS_AuthorizationKeyExchange *kx,
++                                           uint8_t out[IHS_CRYPTO_X25519_KEY_SIZE]) {
++    for (size_t i = 0; i < IHS_CRYPTO_X25519_KEY_SIZE; i++) {
++        out[i] = kx->publicKey[i] ^ kx->pinHash[i];
++    }
++}
++
++bool IHS_AuthorizationKeyExchangeComplete(const IHS_AuthorizationKeyExchange *kx,
++                                          const uint8_t *hostAuthKey, size_t hostAuthKeyLen,
++                                          const uint8_t *hostDeviceToken, size_t hostDeviceTokenLen,
++                                          uint64_t deviceId, uint8_t secretKey[IHS_CRYPTO_SHA256_SIZE]) {
++    if (hostAuthKey == NULL || hostAuthKeyLen != IHS_CRYPTO_X25519_KEY_SIZE || hostDeviceToken == NULL) {
++        return false;
++    }
++    uint8_t hostPublicKey[IHS_CRYPTO_X25519_KEY_SIZE];
++    for (size_t i = 0; i < IHS_CRYPTO_X25519_KEY_SIZE; i++) {
++        hostPublicKey[i] = hostAuthKey[i] ^ kx->pinHash[i];
++    }
++    uint8_t secret[IHS_CRYPTO_SHA256_SIZE];
++    if (IHS_CryptoKeyExchange(kx->privateKey, hostPublicKey, secret) != 0) {
++        return false;
++    }
++
++    // The host proves it derived the same secret by encrypting our device ID with it.
++    uint8_t token[64];
++    size_t tokenLen = sizeof(token);
++    bool ok = hostDeviceTokenLen <= sizeof(token) + IHS_CRYPTO_AES_BLOCK_SIZE &&
++              IHS_CryptoSymmetricDecrypt(hostDeviceToken, hostDeviceTokenLen, secret, sizeof(secret), token,
++                                         &tokenLen) == 0;
++    uint64_t tokenDeviceId = 0;
++    if (ok && tokenLen == 8) {
++        IHS_ReadUInt64LE(token, &tokenDeviceId);
++    }
++    ok = ok && tokenLen == 8 && tokenDeviceId == deviceId;
++    if (ok) {
++        memcpy(secretKey, secret, sizeof(secret));
++    }
++    memset(secret, 0, sizeof(secret));
++    return ok;
++}
++
++void IHS_AuthorizationKeyExchangeClear(IHS_AuthorizationKeyExchange *kx) {
++    volatile uint8_t *p = (volatile uint8_t *) kx;
++    for (size_t i = 0; i < sizeof(*kx); i++) {
++        p[i] = 0;
++    }
++}
+diff --git a/src/client/authorization_kx.h b/src/client/authorization_kx.h
+new file mode 100644
+index 0000000..584f8fc
+--- /dev/null
++++ b/src/client/authorization_kx.h
+@@ -0,0 +1,70 @@
++/*
++ *  _____  _   _  _____  _  _  _
++ * |_   _|| | | |/  ___|| |(_)| |     Steam
++ *   | |  | |_| |\ `--. | | _ | |__     In-Home
++ *   | |  |  _  | `--. \| || || '_ \      Streaming
++ *  _| |_ | | | |/\__/ /| || || |_) |       Library
++ *  \___/ \_| |_/\____/ |_||_||_.__/
++ *
++ * Copyright (c) 2026 Simone Caronni <https://github.com/scaronni>.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 3 of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this program. If not, see <http://www.gnu.org/licenses/>.
++ *
++ */
++
++#pragma once
++
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++
++#include "crypto.h"
++
++/**
++ * Device side of the PIN-masked key exchange current Steam uses to pair devices, as done by the official Steam Link
++ * client (reversed from Steam Link 1.3.32, the code logging "BHandleKeyExchangeAuthorization").
++ *
++ * The device sends its X25519 public key XOR SHA256(PIN) as auth_key in CMsgRemoteDeviceAuthorizationRequest. Once
++ * the user has typed the PIN, the host answers with its own public key masked the same way, plus device_token =
++ * SymmetricEncrypt(u64le device ID) under secret = SHA256(X25519(private key, peer public key)). The device checks
++ * the token, replies with CMsgRemoteDeviceAuthorizationConfirmed and from then on uses the secret as the secret key
++ * for that host. Hosts no longer complete a pairing with the key escrow ticket alone: they answer Failed.
++ */
++typedef struct IHS_AuthorizationKeyExchange {
++    uint8_t privateKey[IHS_CRYPTO_X25519_KEY_SIZE];
++    uint8_t publicKey[IHS_CRYPTO_X25519_KEY_SIZE];
++    uint8_t pinHash[IHS_CRYPTO_SHA256_SIZE];
++} IHS_AuthorizationKeyExchange;
++
++/**
++ * Generate a key pair for one authorization attempt.
++ */
++bool IHS_AuthorizationKeyExchangeInit(IHS_AuthorizationKeyExchange *kx, const char *pin);
++
++/**
++ * Our public key XOR SHA256(PIN), for CMsgRemoteDeviceAuthorizationRequest.auth_key.
++ */
++void IHS_AuthorizationKeyExchangeMaskedKey(const IHS_AuthorizationKeyExchange *kx,
++                                           uint8_t out[IHS_CRYPTO_X25519_KEY_SIZE]);
++
++/**
++ * Unmask the host's auth_key, derive the shared secret and check the host's device_token decrypts to our device ID.
++ * @return true and the new secret key on success
++ */
++bool IHS_AuthorizationKeyExchangeComplete(const IHS_AuthorizationKeyExchange *kx,
++                                          const uint8_t *hostAuthKey, size_t hostAuthKeyLen,
++                                          const uint8_t *hostDeviceToken, size_t hostDeviceTokenLen,
++                                          uint64_t deviceId, uint8_t secretKey[IHS_CRYPTO_SHA256_SIZE]);
++
++void IHS_AuthorizationKeyExchangeClear(IHS_AuthorizationKeyExchange *kx);
+

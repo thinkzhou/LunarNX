@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <chrono>
 
 #ifdef __SWITCH__
 #include <switch.h>
@@ -31,10 +32,6 @@ bool GamepadReader::initialize() {
 #ifdef __SWITCH__
     releaseCaptureButton();
     reloadButtonMapping();
-    if (mappingUsesCaptureButton(button_mapping_)) {
-        acquireCaptureButtonInput();
-        capture_button_acquired_ = true;
-    }
     initialized_ = false;
     delete static_cast<PadState*>(pad_state_);
     pad_state_ = nullptr;
@@ -59,6 +56,13 @@ bool GamepadReader::initialize() {
 void GamepadReader::reloadButtonMapping() {
 #ifdef __SWITCH__
     button_mapping_ = loadButtonMapping(mapping_profile_);
+    const bool needs_capture = mappingUsesCaptureButton(button_mapping_);
+    if (needs_capture && !capture_button_acquired_) {
+        acquireCaptureButtonInput();
+        capture_button_acquired_ = true;
+    } else if (!needs_capture) {
+        releaseCaptureButton();
+    }
 #endif
 }
 
@@ -81,9 +85,21 @@ GamepadState GamepadReader::read() {
         btns |= kButtonMappingCapture;
     }
 
+    uint64_t replayed_buttons = 0;
     const bool quick_menu_chord =
         (btns & HidNpadButton_Minus) && (btns & HidNpadButton_Plus);
-    if (quick_menu_chord) {
+    if (mapping_profile_ == ButtonMappingProfile::Steam) {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const auto menu_mask = HidNpadButton_Minus | HidNpadButton_Plus;
+        uint64_t mapped_chord = 0;
+        for (const auto mapping : button_mapping_) {
+            if ((mapping & menu_mask) && (mapping & (mapping - 1)) &&
+                (btns & mapping) == mapping) mapped_chord |= mapping;
+        }
+        btns = menu_chord_.update(btns, menu_mask, ms, mapped_chord);
+        replayed_buttons = menu_chord_.replayedButtons();
+    } else if (quick_menu_chord) {
         btns &= ~(HidNpadButton_Minus | HidNpadButton_Plus);
     }
 
@@ -94,10 +110,14 @@ GamepadState GamepadReader::read() {
             consumed |= mapping;
         }
     }
-    auto mapped = [this, btns, consumed](RemoteButton button) {
+    auto mapped = [this, btns, consumed, replayed_buttons](RemoteButton button) {
         const uint64_t mapping = button_mapping_[static_cast<size_t>(button)];
-        if (mapping == 0 || (btns & mapping) != mapping) return false;
+        if (mapping == 0) return false;
         const bool combo = (mapping & (mapping - 1)) != 0;
+        // Replayed taps are standalone actions from an earlier sample. Never
+        // combine them with today's physical keys or consume those keys.
+        if (!combo && (replayed_buttons & mapping)) return true;
+        if ((btns & mapping) != mapping) return false;
         return combo || (consumed & mapping) == 0;
     };
 

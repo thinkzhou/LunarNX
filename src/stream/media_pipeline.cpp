@@ -85,6 +85,8 @@ bool MediaPipeline::initialize(int width, int height, PerfStats* perf,
 
         const uint32_t generation = generation_.fetch_add(1) + 1;
         video_ready_notified_ = false;
+        successful_video_presents_ = 0;
+        successful_audio_outputs_ = 0;
         audio_latency_mode_.store(options.audio_latency_mode,
                                   std::memory_order_release);
         audio_start_gate_open_.store(
@@ -428,6 +430,22 @@ void MediaPipeline::prepareForNewVideoSource(const char* reason) {
         av_sync_->start();
     }
     beginHardVideoRecovery(reason ? reason : "new video source", true);
+}
+
+void MediaPipeline::prepareForNewAudioSource() {
+    {
+        std::lock_guard<std::recursive_mutex> lock(lifecycle_mutex_);
+        if (!running_.load()) return;
+        std::lock_guard<std::mutex> audio_lock(audio_queue_mutex_);
+        audio_source_epoch_.fetch_add(1, std::memory_order_acq_rel);
+        audio_source_reset_pending_.store(true, std::memory_order_release);
+        audio_queue_.clear();
+        decoded_audio_queue_.clear();
+        queued_audio_bytes_ = 0;
+        queued_decoded_audio_bytes_ = 0;
+        last_decoded_audio_end_ns_.store(0, std::memory_order_release);
+    }
+    audio_queue_cv_.notify_one();
 }
 
 void MediaPipeline::prepareForNewMediaSource(const char* reason) {
@@ -1575,6 +1593,7 @@ void MediaPipeline::handleVideoFrame(const VideoFrame& frame,
                 rendered ? 1 : 0);
         }
         if (rendered && perf) perf->recordFrame();
+        successful_video_presents_.store(video_renderer_->successfulPresentCount());
         // Software presentation publishes synchronously from render(). The
         // hardware path opens this gate from presentVideoFrame() only after a
         // frame has actually reached the display command stream.
@@ -1602,6 +1621,7 @@ void MediaPipeline::handleAudioFrame(const AudioFrame& frame,
         std::memory_order_release);
     if (!audio_player_ || !av_sync_) return;
     if (!audio_player_->play(frame)) return;
+    successful_audio_outputs_.fetch_add(1);
 
     const uint64_t playback_timestamp = estimateAudioPlaybackTimestamp(
         frame.timestamp,
@@ -1618,6 +1638,7 @@ bool MediaPipeline::submitDecodedAudio(const AudioFrame& frame,
         source_epoch != audio_source_epoch_.load(std::memory_order_acquire) ||
         !audio_player_ || !av_sync_) return false;
     if (!audio_player_->play(frame)) return false;
+    successful_audio_outputs_.fetch_add(1);
     if (auto* perf = perfStats()) perf->recordAudioFrame();
     const uint64_t playback_ts = estimateAudioPlaybackTimestamp(
         frame.timestamp, frame.sample_count, frame.sample_rate,
@@ -1645,6 +1666,7 @@ void MediaPipeline::presentVideoFrame() {
         video_renderer_->present();
         const uint64_t successful_present_after =
             video_renderer_->successfulPresentCount();
+        successful_video_presents_.store(successful_present_after);
         if (successful_present_after > successful_present_before) {
             openAudioStartupGateIfNeeded();
         }

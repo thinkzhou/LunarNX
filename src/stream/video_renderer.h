@@ -50,6 +50,7 @@ inline const char* renderFaultName(RenderFault fault) {
 ///   present() — called from borealis main thread, submits to deko3d queue
 class VideoRenderer {
 public:
+    static bool restartRequired();
     VideoRenderer();
     ~VideoRenderer();
 

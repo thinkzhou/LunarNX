@@ -1,0 +1,401 @@
+#ifdef __SWITCH__
+
+#include "steam_link_activity.h"
+
+#include "grid_navigation.h"
+#include "ui_style.h"
+#include "../diagnostics.h"
+#include "../platform/network_worker.h"
+#include "stream_view.h"
+#include "steam_settings_activity.h"
+
+#include <switch/kernel/random.h>
+
+#include <algorithm>
+#include <exception>
+
+namespace lunar::ui {
+namespace {
+
+} // namespace
+
+SteamLinkPairingActivity::SteamLinkPairingActivity(
+    std::shared_ptr<steamlink::SteamLinkClient> client,
+    steamlink::SteamLinkHost host)
+    : client_(std::move(client)), host_(std::move(host)) {}
+
+SteamLinkPairingActivity::~SteamLinkPairingActivity() {
+    alive_->store(false);
+    if (pending_runtime_) pending_runtime_->requestStop();
+    if (client_ && authorizing_) client_->cancelAuthorization();
+}
+
+brls::View* SteamLinkPairingActivity::createContentView() {
+    const auto& p = uiPalette();
+    auto* root = new brls::Box(brls::Axis::COLUMN);
+    root->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
+    root->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
+    root->setPadding(30, 70, 24, 70);
+    root->setBackgroundColor(p.background);
+    root->setAlignItems(brls::AlignItems::CENTER);
+    root->setJustifyContent(brls::JustifyContent::CENTER);
+    root->registerAction(brls::getStr("lunarnx/common/cancel"),
+        brls::ControllerButton::BUTTON_B, [](brls::View*) -> bool {
+            brls::Application::popActivity(brls::TransitionAnimation::NONE);
+            return true;
+        });
+
+    auto* card = makeUiCard(brls::Axis::COLUMN);
+    card->setWidth(760);
+    card->setHeight(550);
+    card->setPadding(24, 36, 24, 36);
+    card->setAlignItems(brls::AlignItems::CENTER);
+
+    auto* details = new brls::Box(brls::Axis::COLUMN);
+    details->setWidth(680);
+    details->setHeight(500);
+    details->setJustifyContent(brls::JustifyContent::CENTER);
+    details->setAlignItems(brls::AlignItems::CENTER);
+    auto* title = new brls::Label();
+    title->setText(host_.hostname.empty() ? host_.address : host_.hostname);
+    title->setFontSize(26);
+    title->setTextColor(p.text);
+    title->setHeight(52);
+    details->addView(title);
+    auto* address = makeMutedLabel(host_.address + ":" + std::to_string(host_.port), 14);
+    address->setHeight(36);
+    details->addView(address);
+    pin_display_ = new brls::Label();
+    pin_display_->setFontSize(28);
+    pin_display_->setTextColor(p.text);
+    pin_display_->setWidth(560);
+    pin_display_->setHeight(68);
+    pin_display_->setMarginTop(18);
+    pin_display_->setBackgroundColor(p.surface_alt);
+    pin_display_->setBorderThickness(1);
+    pin_display_->setBorderColor(p.border);
+    pin_display_->setHorizontalAlign(brls::HorizontalAlign::CENTER);
+    pin_display_->setVerticalAlign(brls::VerticalAlign::CENTER);
+    details->addView(pin_display_);
+    status_ = new brls::Label();
+    status_->setText(brls::getStr("lunarnx/steam_link/pin_help"));
+    status_->setFontSize(14);
+    status_->setTextColor(p.text_muted);
+    status_->setWidth(560);
+    status_->setHeight(72);
+    status_->setIsWrapping(true);
+    status_->setVerticalAlign(brls::VerticalAlign::CENTER);
+    details->addView(status_);
+
+    security_pin_input_ = new brls::InputCell();
+    security_pin_input_->setWidth(560);
+    security_pin_input_->setHeight(58);
+    security_pin_input_->setMarginTop(10);
+    security_pin_input_->init(
+        brls::getStr("lunarnx/steam_ui/security_pin"),
+        "",
+        [this](std::string text) { security_pin_ = std::move(text); },
+        brls::getStr("lunarnx/steam_ui/security_help"),
+        brls::getStr("lunarnx/steam_ui/security_example"), 15, 0);
+    details->addView(security_pin_input_);
+
+    stream_button_ = new brls::Button();
+    stream_button_->setWidth(300);
+    stream_button_->setHeight(54);
+    stream_button_->setMarginTop(12);
+    stream_button_->setText(brls::getStr("lunarnx/steam_ui/start"));
+    stream_button_->setFocusable(false);
+    stylePrimaryButton(stream_button_);
+    stream_button_->registerClickAction([this](brls::View*) -> bool {
+        if (client_->isAuthorized(host_.client_id)) startStream();
+        else startAuthorization();
+        return true;
+    });
+    details->addView(stream_button_);
+    card->addView(details);
+    root->addView(card);
+    return root;
+}
+
+void SteamLinkPairingActivity::onContentAvailable() {
+    if (client_->isAuthorized(host_.client_id)) {
+        pin_display_->setText(brls::getStr("lunarnx/steam_ui/paired"));
+        status_->setText(brls::getStr("lunarnx/steam_link/pair_success"));
+        stream_button_->setFocusable(true);
+        return;
+    }
+    startAuthorization();
+}
+
+void SteamLinkPairingActivity::startAuthorization() {
+    if (authorizing_ || starting_stream_ || !client_) return;
+    uint32_t random_value = 0;
+    randomGet(&random_value, sizeof(random_value));
+    char pin[5]{};
+    std::snprintf(pin, sizeof(pin), "%04u", random_value % 10000);
+    pairing_pin_ = pin;
+    pin_display_->setText(pairing_pin_);
+    stream_button_->setFocusable(false);
+    stream_button_->setText(brls::getStr("lunarnx/steam_ui/retry_pair"));
+    authorizing_ = true;
+    status_->setText(brls::getStr("lunarnx/steam_link/pin_help") + "\n" +
+        brls::getStr("lunarnx/steam_link/pairing"));
+    auto alive = alive_;
+    if (!client_->authorize(host_, pairing_pin_, [this, alive](bool success, const std::string& error) {
+        brls::sync([this, alive, success, error]() {
+            if (!alive->load()) return;
+            authorizing_ = false;
+            if (success) {
+                status_->setText(brls::getStr("lunarnx/steam_link/pair_success"));
+                if (stream_button_) {
+                    stream_button_->setText(brls::getStr("lunarnx/steam_ui/start"));
+                    stream_button_->setFocusable(true);
+                }
+                lunar::persistentEventLog("steam-link-ui", "pair success host=%s",
+                                          host_.address.c_str());
+            } else {
+                status_->setText(error.empty()
+                    ? brls::getStr("lunarnx/steam_link/pair_failed") : error);
+                stream_button_->setFocusable(true);
+            }
+        });
+    })) {
+        authorizing_ = false;
+        status_->setText(client_->lastError());
+        stream_button_->setFocusable(true);
+    }
+}
+
+void SteamLinkPairingActivity::startStream() {
+    if (starting_stream_ || authorizing_ || !client_ || !client_->isAuthorized(host_.client_id)) {
+        return;
+    }
+    starting_stream_ = true;
+    if (stream_button_) stream_button_->setFocusable(false);
+    if (security_pin_input_) security_pin_input_->setFocusable(false);
+    if (status_) status_->setText(brls::getStr("lunarnx/steam_ui/requesting"));
+    auto runtime = std::make_shared<steamlink::SteamLinkStreamController>(
+        client_, host_, security_pin_, 1280, 720);
+    const auto settings = loadSteamInputSettings();
+    runtime->configurePointer(settings.touch, settings.gyro);
+    pending_runtime_ = runtime;
+    auto alive = alive_;
+    if (!lunar::platform::startNetworkWorker("steam-link-stream",
+            [this, alive, runtime]() {
+                bool ok = false;
+                std::string error;
+                try {
+                    ok = runtime->startStream();
+                    if (!ok) error = runtime->lastError();
+                } catch (const std::exception& e) {
+                    error = std::string("Steam stream exception: ") + e.what();
+                    lunar::persistentEventLog("steam-link-ui", "stream exception detail=%s", e.what());
+                } catch (...) {
+                    error = "Unexpected Steam stream exception";
+                    lunar::persistentEventLog("steam-link-ui", "stream unknown exception");
+                }
+                if (!ok) runtime->stopStream(false); // Drain partial startup on the worker.
+                brls::sync([this, alive, runtime, ok, error]() {
+                    if (!alive->load()) {
+                        if (ok) lunar::platform::startNetworkWorker(
+                            "steam-link-orphan-stop", [runtime]() { runtime->stopStream(false); });
+                        return;
+                    }
+                    starting_stream_ = false;
+                    pending_runtime_.reset();
+                    if (!ok) {
+                        if (status_) status_->setText(brls::getStr("lunarnx/steam_ui/stream_failed") +
+                            (error.empty() ? "" : "\n" + error));
+                        if (stream_button_) {
+                            stream_button_->setText(brls::getStr(client_->isAuthorized(host_.client_id)
+                                ? "lunarnx/steam_ui/start" : "lunarnx/steam_ui/retry_pair"));
+                            stream_button_->setFocusable(true);
+                        }
+                        if (security_pin_input_) security_pin_input_->setFocusable(true);
+                        return;
+                    }
+                    lunar::diagnosticLog("steam-link-ui", "stream runtime ready; opening StreamView");
+                    brls::Application::popActivity(brls::TransitionAnimation::NONE);
+                    brls::Application::pushActivity(
+                        new StreamView(runtime), brls::TransitionAnimation::NONE);
+                });
+            })) {
+        starting_stream_ = false;
+        if (stream_button_) stream_button_->setFocusable(true);
+        if (security_pin_input_) security_pin_input_->setFocusable(true);
+        if (status_) status_->setText(brls::getStr("lunarnx/steam_ui/worker_failed"));
+    }
+}
+
+SteamLinkActivity::SteamLinkActivity()
+    : client_(std::make_shared<steamlink::SteamLinkClient>()) {}
+
+SteamLinkActivity::~SteamLinkActivity() {
+    alive_->store(false);
+    if (client_) client_->stopDiscovery();
+}
+
+brls::View* SteamLinkActivity::createContentView() {
+    const auto& p = uiPalette();
+    auto* root = new brls::Box(brls::Axis::COLUMN);
+    root->setWidth(brls::Application::ORIGINAL_WINDOW_WIDTH);
+    root->setHeight(brls::Application::ORIGINAL_WINDOW_HEIGHT);
+    root->setPadding(30, 60, 24, 60);
+    root->setBackgroundColor(p.background);
+    root->setAlignItems(brls::AlignItems::CENTER);
+    root->registerAction(brls::getStr("lunarnx/common/cancel"),
+        brls::ControllerButton::BUTTON_B, [](brls::View*) -> bool {
+            brls::Application::popActivity(brls::TransitionAnimation::NONE);
+            return true;
+        });
+    auto* heading = makePageHeading(brls::getStr("lunarnx/steam_link/title"));
+    root->addView(heading);
+    auto* subtitle = makeMutedLabel(brls::getStr("lunarnx/steam_link/subtitle"), 14);
+    subtitle->setWidth(920);
+    subtitle->setHeight(42);
+    subtitle->setIsWrapping(true);
+    root->addView(subtitle);
+    auto* toolbar = new brls::Box(brls::Axis::ROW);
+    toolbar->setWidth(920);
+    toolbar->setHeight(62);
+    toolbar->setAlignItems(brls::AlignItems::CENTER);
+    status_ = new brls::Label();
+    status_->setText(brls::getStr("lunarnx/steam_link/discovering"));
+    status_->setTextColor(p.text_muted);
+    status_->setGrow(1.0f);
+    status_->setFontSize(14);
+    status_->setHeight(58);
+    status_->setIsWrapping(true);
+    toolbar->addView(status_);
+    auto* settings = new brls::Button();
+    settings->setText(brls::getStr("lunarnx/common/settings"));
+    settings->setWidth(160); settings->setHeight(50); settings->setMarginRight(16);
+    styleSecondaryButton(settings);
+    settings->registerClickAction([](brls::View*) {
+        brls::Application::pushActivity(new SteamSettingsActivity(loadSteamInputSettings()),
+            brls::TransitionAnimation::NONE); return true;
+    });
+    toolbar->addView(settings);
+    refresh_button_ = new brls::Button();
+    refresh_button_->setText(brls::getStr("lunarnx/steam_link/refresh"));
+    refresh_button_->setWidth(160);
+    refresh_button_->setHeight(50);
+    styleSecondaryButton(refresh_button_);
+    refresh_button_->registerClickAction([this](brls::View*) -> bool {
+        startDiscovery();
+        return true;
+    });
+    toolbar->addView(refresh_button_);
+    root->addView(toolbar);
+    auto* manual = new brls::InputCell();
+    manual->setWidth(920);
+    manual->setHeight(58);
+    manual->init(brls::getStr("lunarnx/steam_ui/manual_address"), "",
+        [this](std::string address) {
+            if (address.empty()) { client_->discoverAddress({}); return; }
+            if (!client_->discoverAddress(address)) {
+                brls::Application::notify(client_->lastError());
+                return;
+            }
+            brls::Application::notify(brls::getStr("lunarnx/steam_ui/manual_search"));
+        }, brls::getStr("lunarnx/steam_ui/manual_help"), "192.168.1.10", 15, 0);
+    root->addView(manual);
+    auto* hosts_scroll = new brls::ScrollingFrame();
+    hosts_scroll->setWidth(920);
+    hosts_scroll->setGrow(1.0f);
+    hosts_scroll->setScrollingBehavior(brls::ScrollingBehavior::CENTERED);
+    host_list_ = new brls::Box(brls::Axis::COLUMN);
+    host_list_->setWidth(920);
+    host_list_->setAlignItems(brls::AlignItems::CENTER);
+    hosts_scroll->setContentView(host_list_);
+    root->addView(hosts_scroll);
+    return root;
+}
+
+void SteamLinkActivity::onContentAvailable() {
+    startDiscovery();
+}
+
+void SteamLinkActivity::startDiscovery() {
+    if (!client_) return;
+    if (refresh_button_) refresh_button_->setFocusable(false);
+    if (status_) status_->setText(brls::getStr("lunarnx/steam_link/discovering"));
+    auto alive = alive_;
+    if (!client_->startDiscovery([this, alive](const std::vector<steamlink::SteamLinkHost>& hosts) {
+        brls::sync([this, alive, hosts]() {
+            if (!alive->load()) return;
+            rebuildHosts(hosts);
+        });
+    })) {
+        if (status_) status_->setText(client_->lastError());
+        if (refresh_button_) refresh_button_->setFocusable(true);
+    }
+}
+
+void SteamLinkActivity::onPause() { paused_ = true; }
+void SteamLinkActivity::onResume() {
+    paused_ = false;
+    // Borealis restores the focus stack after onResume returns.
+    auto alive = alive_;
+    brls::sync([this, alive]() {
+        if (alive->load() && !paused_) rebuildHosts(latest_hosts_);
+    });
+}
+
+void SteamLinkActivity::rebuildHosts(
+    const std::vector<steamlink::SteamLinkHost>& hosts) {
+    latest_hosts_ = hosts;
+    // The activity stack may still hold a pointer to a selected host button.
+    // Never delete that button while a child activity owns the screen.
+    if (!host_list_ || paused_) return;
+    if (refresh_button_) refresh_button_->setFocusable(true);
+    for (auto it = host_rows_.begin(); it != host_rows_.end();) {
+        const bool exists = std::any_of(hosts.begin(), hosts.end(), [&](const auto& host) {
+            return host.client_id == it->first;
+        });
+        if (exists) { ++it; continue; }
+        if (brls::Application::getCurrentFocus() == it->second.button)
+            brls::Application::giveFocus(refresh_button_);
+        host_list_->removeView(it->second.button);
+        it = host_rows_.erase(it);
+    }
+    if (!hosts.empty() && empty_label_) {
+        host_list_->removeView(empty_label_);
+        empty_label_ = nullptr;
+    }
+    for (const auto& host : hosts) {
+        auto it = host_rows_.find(host.client_id);
+        if (it == host_rows_.end()) {
+            auto* card = new brls::Button();
+            card->setWidth(920);
+            card->setHeight(78);
+            card->setMarginBottom(10);
+            styleSecondaryButton(card);
+            auto current = std::make_shared<steamlink::SteamLinkHost>(host);
+            card->registerClickAction([this, current](brls::View*) -> bool {
+                brls::Application::pushActivity(
+                    new SteamLinkPairingActivity(client_, *current),
+                    brls::TransitionAnimation::NONE);
+                return true;
+            });
+            host_list_->addView(card);
+            it = host_rows_.emplace(host.client_id, HostRow{card, current}).first;
+        }
+        *it->second.host = host;
+        auto text = (host.hostname.empty() ? host.address : host.hostname) +
+            "  " + host.address + ":" + std::to_string(host.port);
+        if (client_->isAuthorized(host.client_id))
+            text += "  [" + brls::getStr("lunarnx/steam_ui/paired") + "]";
+        if (it->second.button->getText() != text) it->second.button->setText(text);
+    }
+    if (hosts.empty() && !empty_label_) {
+        empty_label_ = makeMutedLabel(brls::getStr("lunarnx/steam_link/no_hosts"), 16);
+        host_list_->addView(empty_label_);
+    }
+    if (status_) status_->setText(brls::getStr(hosts.empty()
+        ? "lunarnx/steam_ui/search_help" : "lunarnx/steam_ui/select_host"));
+    if (refresh_button_) refresh_button_->setFocusable(true);
+}
+
+} // namespace lunar::ui
+#endif
