@@ -27,6 +27,14 @@
 #include <unistd.h>
 
 static int nxlink_sock = -1;
+#include <fcntl.h>
+#include <string.h>
+
+#define SWITCH_RUNNING_MARKER "sdmc:/switch/LunarNX/.running"
+#define SWITCH_CRASH_LOG "sdmc:/switch/LunarNX/crash.log"
+
+extern char __start__;
+
 static bool socket_initialized = false;
 static bool romfs_initialized = false;
 static bool hidsys_initialized = false;
@@ -77,6 +85,80 @@ static void switchEarlyLog(const char* format, ...)
     fclose(log);
 }
 
+static size_t crashAppendStr(char* buf, size_t pos, size_t cap, const char* s)
+{
+    while (*s && pos + 1 < cap)
+        buf[pos++] = *s++;
+    return pos;
+}
+
+static size_t crashAppendHex(char* buf, size_t pos, size_t cap, u64 value)
+{
+    static const char digits[] = "0123456789abcdef";
+    pos = crashAppendStr(buf, pos, cap, "0x");
+    for (int shift = 60; shift >= 0; shift -= 4)
+    {
+        if (pos + 1 >= cap)
+            break;
+        buf[pos++] = digits[(value >> shift) & 0xf];
+    }
+    return pos;
+}
+
+// Runs on libnx's exception stack after a fatal CPU fault. It avoids stdio and
+// heap allocation because the fault may have happened while holding the malloc
+// lock. Subtract code_base from pc/lr and feed the result to addr2line against
+// the matching LunarNX.elf to find the faulting function.
+void __libnx_exception_handler(ThreadExceptionDump* ctx)
+{
+    char line[512];
+    size_t pos = 0;
+    const size_t cap = sizeof(line);
+
+    pos = crashAppendStr(line, pos, cap, "[exception] desc=");
+    pos = crashAppendHex(line, pos, cap, ctx->error_desc);
+    pos = crashAppendStr(line, pos, cap, " code_base=");
+    pos = crashAppendHex(line, pos, cap, (u64)(uintptr_t)&__start__);
+    pos = crashAppendStr(line, pos, cap, " pc=");
+    pos = crashAppendHex(line, pos, cap, ctx->pc.x);
+    pos = crashAppendStr(line, pos, cap, " lr=");
+    pos = crashAppendHex(line, pos, cap, ctx->lr.x);
+    pos = crashAppendStr(line, pos, cap, " sp=");
+    pos = crashAppendHex(line, pos, cap, ctx->sp.x);
+    pos = crashAppendStr(line, pos, cap, " fp=");
+    pos = crashAppendHex(line, pos, cap, ctx->fp.x);
+    pos = crashAppendStr(line, pos, cap, " far=");
+    pos = crashAppendHex(line, pos, cap, ctx->far.x);
+    pos = crashAppendStr(line, pos, cap, " esr=");
+    pos = crashAppendHex(line, pos, cap, ctx->esr);
+    pos = crashAppendStr(line, pos, cap, "\n");
+
+    int fd = open(SWITCH_CRASH_LOG, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (fd >= 0)
+    {
+        write(fd, line, pos);
+        close(fd);
+    }
+}
+
+static void switchMarkRunStart(void)
+{
+    switchEnsureLogDirectory();
+
+    struct stat st;
+    if (stat(SWITCH_RUNNING_MARKER, &st) == 0)
+        switchEarlyLog("previous run ended abnormally (no clean exit marker); see crash.log");
+
+    int fd = open(SWITCH_RUNNING_MARKER, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd >= 0)
+        close(fd);
+}
+
+static void switchMarkCleanExit(void)
+{
+    remove(SWITCH_RUNNING_MARKER);
+}
+
 static bool logInitResult(const char* name, Result rc)
 {
     switchEarlyLog("%s rc=0x%08x", name, rc);
@@ -86,6 +168,7 @@ static bool logInitResult(const char* name, Result rc)
 void userAppInit()
 {
     printf("userAppInit\n");
+    switchMarkRunStart();
     switchEarlyLog("userAppInit begin");
     appletLockExit();
     switchEarlyLog("appletLockExit done");
@@ -187,5 +270,6 @@ void userAppExit()
         socketExit();
 
     appletUnlockExit();
+    switchMarkCleanExit();
     switchEarlyLog("userAppExit done");
 }

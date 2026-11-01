@@ -123,6 +123,7 @@ public:
                 entries_.resize(kDropDiagnosticQueueCapacity);
             }
             stopping_ = false;
+            if (worker_.joinable()) worker_.join();
             worker_ = std::thread([this]() { run(); });
             running_ = true;
         } catch (...) {
