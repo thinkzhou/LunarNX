@@ -65,7 +65,7 @@ C_SRCS   = lib/cJSON.c lib/stubs/chiaki_holepunch_stubs.c \
            lib/libpeer/src/sdp.c lib/libpeer/src/socket.c lib/libpeer/src/stun.c \
            lib/libpeer/src/ssl_transport.c lib/libpeer/src/utils.c
 
-CXX_SRCS = src/platform/desktop_main.cpp lib/qrcodegen/qrcodegen.cpp \
+CXX_SRCS = src/webrtc/libdatachannel_peer.cpp src/webrtc/webrtc_backend.cpp src/platform/desktop_main.cpp lib/qrcodegen/qrcodegen.cpp \
            src/app/ice_candidate_processor.cpp \
            src/app/stream_controller.cpp \
            src/app/web_rtc_transport.cpp \
@@ -96,6 +96,7 @@ CXX_SRCS = src/platform/desktop_main.cpp lib/qrcodegen/qrcodegen.cpp \
 
 C_OBJS   = $(C_SRCS:%.c=$(BUILD)/%.o)
 CXX_OBJS = $(CXX_SRCS:%.cpp=$(BUILD)/%.o)
+RTC_BACKEND_OBJS = $(BUILD)/src/webrtc/libdatachannel_peer.o $(BUILD)/src/webrtc/webrtc_backend.o
 
 XCLOUD_HANDSHAKE_PROBE_OBJS = $(BUILD)/src/platform/desktop_xcloud_handshake_probe.o \
                     $(BUILD)/src/auth/auth_manager.o $(BUILD)/src/auth/token_store.o \
@@ -105,6 +106,7 @@ XCLOUD_HANDSHAKE_PROBE_OBJS = $(BUILD)/src/platform/desktop_xcloud_handshake_pro
                     $(BUILD)/src/app/xbox_session_client.o \
                     $(BUILD)/src/app/ice_candidate_processor.o \
                     $(BUILD)/src/webrtc/peer_manager.o \
+	$(RTC_BACKEND_OBJS) \
 	                    $(BUILD)/src/input/xinput_encoder.o \
 	                    $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
                     $(BUILD)/src/webrtc/xbox_input_feedback.o \
@@ -174,6 +176,7 @@ VIDEO_JITTER_TEST_OBJS = $(BUILD)/tests/video_rtp_jitter_buffer_test.o \
 
 OUTBOUND_QUEUE_TEST_OBJS = $(BUILD)/tests/peer_manager_outbound_queue_test.o \
 	                          $(BUILD)/src/webrtc/peer_manager.o \
+	$(RTC_BACKEND_OBJS) \
 	                          $(BUILD)/src/input/xinput_encoder.o \
 	                          $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
 	                          $(BUILD)/src/webrtc/xbox_input_feedback.o \
@@ -181,6 +184,7 @@ OUTBOUND_QUEUE_TEST_OBJS = $(BUILD)/tests/peer_manager_outbound_queue_test.o \
 
 STREAM_RESILIENCE_TEST_OBJS = $(BUILD)/tests/stream_resilience_scenarios_test.o \
 	                             $(BUILD)/src/webrtc/peer_manager.o \
+	$(RTC_BACKEND_OBJS) \
 	                             $(BUILD)/src/input/xinput_encoder.o \
 	                             $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
 	                             $(BUILD)/src/webrtc/xbox_input_feedback.o \
@@ -242,6 +246,7 @@ SDP_PROBE_OBJS = $(BUILD)/src/platform/desktop_sdp_probe.o \
 	                 $(BUILD)/src/api/xbox_api_client.o $(BUILD)/src/api/http_client.o \
 	                 $(BUILD)/src/app/ice_candidate_processor.o \
 	                 $(BUILD)/src/webrtc/peer_manager.o \
+	$(RTC_BACKEND_OBJS) \
 	                 $(BUILD)/src/input/xinput_encoder.o \
 	                 $(BUILD)/src/webrtc/video_rtp_jitter_buffer.o \
 	                 $(BUILD)/src/webrtc/xbox_input_feedback.o \
@@ -487,3 +492,36 @@ $(BUILD)/xcloud_stream: $(XCLOUD_STREAM_OBJS)
 
 DEP_FILES := $(shell find $(BUILD) -type f -name '*.d' 2>/dev/null)
 -include $(DEP_FILES)
+
+# Optional native build for the same experimental transport (no Switch artifacts).
+EXPERIMENTAL_WEBRTC ?= 0
+RTC_NATIVE = build/libdatachannel-sdk/native
+ifeq ($(EXPERIMENTAL_WEBRTC),1)
+COMMON_DEFINES += -DLUNARNX_ENABLE_LIBDATACHANNEL=1 -DRTC_ENABLE_MEDIA=1 -DRTC_ENABLE_WEBSOCKET=0 -DRTC_STATIC
+COMMON_INCLUDES += -Ibuild/libdatachannel-sdk/source/libdatachannel/include
+RTC_NATIVE_LIBS = $(RTC_NATIVE)/dependency/libdatachannel-static.a \
+    $(RTC_NATIVE)/dependency/deps/libjuice/libjuice-static.a \
+    $(RTC_NATIVE)/dependency/deps/usrsctp/usrsctplib/libusrsctp.a \
+    $(RTC_NATIVE)/liblunar_rtc_background.a
+LDFLAGS += $(RTC_NATIVE_LIBS)
+WEBRTC_TEST_LDFLAGS += $(RTC_NATIVE_LIBS)
+$(TARGET): $(RTC_NATIVE)/ready.stamp
+$(CXX_OBJS) $(BUILD)/src/webrtc/libdatachannel_peer.o: | $(RTC_NATIVE)/ready.stamp
+$(RTC_NATIVE)/ready.stamp: tools/libdatachannel_switch/prepare.py tools/libdatachannel_switch/build.sh \
+    tools/libdatachannel_switch/CMakeLists.txt $(wildcard tools/libdatachannel_switch/compat/* tools/libdatachannel_switch/compat/*/*)
+	bash tools/libdatachannel_switch/build.sh native
+endif
+
+.PHONY: webrtc_backend_tests
+webrtc_backend_tests: $(BUILD)/tests/webrtc_backend_config_test.o $(BUILD)/src/webrtc/webrtc_backend.o $(BUILD)/lib/cJSON.o
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/webrtc_backend_config_test $^
+	./$(BUILD)/webrtc_backend_config_test $(BUILD)/webrtc-config-test
+
+.PHONY: webrtc_backend_mock_probe
+.PHONY: webrtc_event_wait_tests
+webrtc_event_wait_tests: $(filter-out $(BUILD)/src/platform/desktop_main.o,$(CXX_OBJS)) $(C_OBJS) $(BUILD)/tests/webrtc_event_wait_probe.o
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/webrtc_event_wait_probe $^ $(LDFLAGS)
+	./$(BUILD)/webrtc_event_wait_probe
+
+webrtc_backend_mock_probe: $(filter-out $(BUILD)/src/platform/desktop_main.o,$(CXX_OBJS)) $(C_OBJS) $(BUILD)/tests/webrtc_backend_lifecycle_probe.o
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/webrtc_backend_lifecycle_probe $^ $(LDFLAGS)

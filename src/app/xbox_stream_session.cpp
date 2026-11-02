@@ -2102,6 +2102,15 @@ void XboxStreamSession::runLoop(StreamProfile profile,
             if (!sleepUnlessCancelled(std::chrono::milliseconds(100), callbacks)) break;
         } else {
             const auto loop_done = std::chrono::steady_clock::now();
+            // Async backends notify on queued work; retain the 2ms deadline
+            // for input delivery, timers and cancellation when media is idle.
+            // Anchor to this iteration's start so early wakeups cannot push
+            // deadlines into the future, and processing time does not add to
+            // the idle input-service interval. Legacy keeps its cadence.
+            if (transport_.waitForEventsUntil(loop_started + kNetworkPumpInterval)) {
+                next_network_tick = std::chrono::steady_clock::now();
+                continue;
+            }
             next_network_tick += kNetworkPumpInterval;
             if (next_network_tick < loop_done) next_network_tick = loop_done;
             if (!sleepUntilCancelled(next_network_tick, callbacks)) break;

@@ -1131,7 +1131,7 @@ bool StreamController::startStreamWithProfile(
     setState(StreamState::Connecting, "");
 
     transport_ = std::make_unique<WebRtcTransport>(
-        std::make_unique<webrtc::PeerManager>());
+        std::make_unique<webrtc::PeerManager>(webrtc::loadWebRtcBackend()));
     channels_ = std::make_unique<XboxChannelManager>(*transport_);
     session_client_ = std::make_unique<XboxSessionClient>(api);
     stream_session_ = std::make_unique<XboxStreamSession>(

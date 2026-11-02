@@ -117,6 +117,12 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 
+    if (mock_url && mock_url[0]) {
+        const auto& stats = ctrl.getPerfStats();
+        printf("MOCK_METRICS video_frames=%u audio_frames=%u input_packets=%u\n",
+               stats.video_frames.load(), stats.audio_frames.load(),
+               stats.input_packets.load());
+    }
     printf("\nShutting down...\n");
     ctrl.stopStream();
     printf("Done.\n");

@@ -8,6 +8,10 @@ license; the LunarNX MIT license does not replace those terms.
 
 | Component | Project | License family |
 | --- | --- | --- |
+| libdatachannel (optional experimental Xbox backend) | <https://github.com/paullouisageneau/libdatachannel> | MPL-2.0 |
+| libjuice (experimental ICE backend) | <https://github.com/paullouisageneau/libjuice> | MPL-2.0 |
+| plog (experimental backend logging) | <https://github.com/SergiusTheBest/plog> | MIT |
+| usrsctp (shared Switch SCTP stack; native experiment uses its pinned copy) | <https://github.com/sctplab/usrsctp> | BSD-3-Clause |
 | libpeer | <https://github.com/sepfy/libpeer> | MIT |
 | Borealis (XITRIX fork) | <https://github.com/XITRIX/borealis> | MIT |
 | FFmpeg with Nintendo Switch NVDEC patches | <https://github.com/FFmpeg/FFmpeg> and <https://github.com/xfangfang/wiliwili> | LGPL/GPL, depending on configuration |
@@ -30,6 +34,32 @@ license; the LunarNX MIT license does not replace those terms.
 The exact source revisions for Borealis and legacy libpeer are pinned in
 `scripts/setup_dependencies.sh`. The FFmpeg revision, downloaded patches, and
 checksums are pinned in `tools/ffmpeg_switch_build/build_in_docker.sh`.
+
+## Experimental WebRTC source and notices
+
+The experimental backend uses libdatachannel
+`9e6a13abbb6846c003d817d0387b6706466e2b03`, libjuice
+`b509b6c1f90e4a1d4753e6bde62ffbeb4d10c6bb`, and plog
+`94899e0b926ac1b0f4750bfbd495167b4a6ae9ef`. Native experiments use usrsctp
+`fec583d54493f879d2ae44a743423bf8a04371ab`; Switch reuses the existing legacy
+libpeer SCTP dependency and its tracked Switch adaptations.
+
+Horizon adaptations to the MPL-licensed dependency files come from
+[YOUYOU-Remote-ns at d9b640f](https://github.com/doke69/YOUYOU-Remote-ns/tree/d9b640f320227dcd3857c6ad2947234d39a0a2b3/scripts/dependency-overrides).
+Their original per-file copyright/license notices are retained. LunarNX's
+preparation script removes application-only diagnostics, redirects cleanup
+thread ownership, and isolates colliding private libjuice symbols. No UU
+service protocol, authentication material or UI is included.
+
+Exact archive hashes and reconstruction steps are in
+`tools/libdatachannel_switch/prepare.py` and its SDK README in the
+[LunarNX source repository](https://github.com/thinkzhou/LunarNX). Applicable
+license copies are `LICENSES/libdatachannel-libjuice-MPL-2.0.txt`,
+`LICENSES/plog-MIT.txt` (Sergey Podobry), and
+`LICENSES/usrsctp-BSD-3-Clause.txt` (Randall Stewart and Michael Tuexen).
+These texts, source references and the hash-locked reconstruction script are
+included in the downloadable build package. Original dependency source files
+and notices remain obtainable through the revision-pinned public archives.
 
 ## Binary distribution warning
 

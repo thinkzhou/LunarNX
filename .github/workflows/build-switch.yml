@@ -155,6 +155,7 @@ jobs:
           cp build/switch/LunarNX.nro "$artifact_dir/"
           cp LICENSE THIRD_PARTY_NOTICES.md "$artifact_dir/"
           cp LICENSES/AGPL-3.0.txt "$artifact_dir/licenses/"
+          bash tools/libdatachannel_switch/package_licenses.sh "$artifact_dir"
           cd "$artifact_dir"
           sha256sum LunarNX.nro > SHA256SUMS
 

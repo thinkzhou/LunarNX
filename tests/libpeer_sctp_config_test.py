@@ -105,8 +105,12 @@ def main():
     require("drop RTP while media disabled" not in peer_connection and
             "!pc->media_enabled || budget <= 0" in peer_connection,
             "Completed-state loop should retain startup RTP until media decoding is enabled")
+    bounded_receive_loop = (
+        "while (packets_processed < PEER_CONNECTION_MAX_PACKETS_PER_LOOP)" in peer_connection or
+        "while (packets_processed < (int)pc->config.max_packets_per_loop)" in peer_connection
+    )
     require("PEER_CONNECTION_MAX_PACKETS_PER_LOOP" in peer_connection and
-            "while (packets_processed < PEER_CONNECTION_MAX_PACKETS_PER_LOOP)" in peer_connection,
+            bounded_receive_loop,
             "WebRTC completed-state loop should drain multiple UDP packets so RTP cannot starve DTLS/SCTP data")
     require("loop_work = packets_processed + rtp_decoded_packets" in peer_connection and
             "return loop_work;" in peer_connection,

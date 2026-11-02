@@ -188,6 +188,11 @@
   "retry_detail": "{0}\nPress Play to retry."
  },
  "settings": {
+  "webrtc_section": "Connection backend",
+  "webrtc_detail": "Xbox and xCloud only. Disconnect before switching; applies to the next connection. PlayStation continues to use Chiaki.",
+  "webrtc_backend": "WebRTC backend",
+  "webrtc_libpeer": "libpeer (default)",
+  "webrtc_libdatachannel": "libdatachannel (experimental)",
   "back_action": "Back",
   "title": "Settings",
   "intro_title": "Tune LunarNX for your next session",

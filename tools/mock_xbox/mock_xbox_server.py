@@ -896,6 +896,13 @@ async def create_webrtc_answer(session: Session) -> str:
 
     # --- Create answer ---
     answer = await pc.createAnswer()
+    # Set the real DTLS role before aiortc installs its local description.
+    # Rewriting only the returned SDP leaves aiortc active while the client
+    # correctly follows the advertised passive answer, so both send ClientHello.
+    answer = RTCSessionDescription(
+        sdp=re.sub(r"a=setup:(?:active|actpass)", "a=setup:passive", answer.sdp),
+        type="answer",
+    )
     await pc.setLocalDescription(answer)
 
     sdp = pc.localDescription.sdp

@@ -283,6 +283,9 @@ bool WebRtcTransport::isConnected() const {
     return peer_ && peer_->isConnected();
 }
 
+bool WebRtcTransport::waitForEventsUntil(std::chrono::steady_clock::time_point deadline) {
+    return peer_ && peer_->waitForEventsUntil(deadline);
+}
 void WebRtcTransport::processEvents() {
     if (peer_) {
         peer_->processEvents();

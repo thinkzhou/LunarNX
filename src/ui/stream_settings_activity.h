@@ -4,6 +4,7 @@
 #include <borealis.hpp>
 
 #include "../app/stream_controller.h"
+#include "../webrtc/webrtc_backend.h"
 
 #include <functional>
 #include <memory>
@@ -14,6 +15,7 @@ struct StreamSettingsSnapshot {
     int width = 1280;
     int height = 720;
     int bitrate_kbps = 10000;
+    webrtc::WebRtcBackend xbox_webrtc_backend = webrtc::WebRtcBackend::Libpeer;
     std::string preferred_game_language = "auto";
     stream::VideoBackend video_backend = stream::VideoBackend::HardwareZeroCopy;
     stream::PostProcessMode post_process_mode = stream::PostProcessMode::Off;

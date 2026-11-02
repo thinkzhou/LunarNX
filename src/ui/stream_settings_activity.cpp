@@ -272,6 +272,9 @@ StreamSettingsSnapshot loadStreamSettings() {
     const cJSON* backend = cJSON_GetObjectItemCaseSensitive(root, "video_backend");
     settings.video_backend = parseVideoBackend(
         cJSON_IsString(backend) ? backend->valuestring : nullptr);
+    const cJSON* transport = cJSON_GetObjectItemCaseSensitive(root, "xbox_webrtc_backend");
+    settings.xbox_webrtc_backend = webrtc::parseWebRtcBackend(
+        cJSON_IsString(transport) ? transport->valuestring : nullptr);
     const cJSON* post = cJSON_GetObjectItemCaseSensitive(root, "post_process_mode");
     settings.post_process_mode = parsePostProcess(
         cJSON_IsString(post) ? post->valuestring : nullptr);
@@ -301,6 +304,9 @@ bool saveStreamSettings(const StreamSettingsSnapshot& settings) {
     cJSON_DeleteItemFromObject(root, "video_backend");
     cJSON_AddStringToObject(root, "video_backend",
                             videoBackendConfigValue(settings.video_backend));
+    cJSON_DeleteItemFromObject(root, "xbox_webrtc_backend");
+    cJSON_AddStringToObject(root, "xbox_webrtc_backend",
+        webrtc::webRtcBackendName(settings.xbox_webrtc_backend));
     cJSON_DeleteItemFromObject(root, "post_process_mode");
     cJSON_AddStringToObject(root, "post_process_mode",
                             postProcessConfigValue(settings.post_process_mode));
@@ -475,6 +481,24 @@ brls::View* StreamSettingsActivity::createContentView() {
     }
 
     if (scope_ == StreamSettingsScope::Xbox) {
+#if LUNARNX_ENABLE_LIBDATACHANNEL
+    root->addView(makeSectionHeader(
+        brls::getStr("lunarnx/settings/webrtc_section"),
+        brls::getStr("lunarnx/settings/webrtc_detail")));
+    auto* transport_card = makeUiCard();
+    transport_card->setPadding(4, 8, 4, 8);
+    auto* transport = new brls::SelectorCell();
+    transport->init(brls::getStr("lunarnx/settings/webrtc_backend"),
+        {brls::getStr("lunarnx/settings/webrtc_libpeer"),
+         brls::getStr("lunarnx/settings/webrtc_libdatachannel")},
+        settings_.xbox_webrtc_backend == webrtc::WebRtcBackend::Libdatachannel ? 1 : 0,
+        [this](int selected) {
+            settings_.xbox_webrtc_backend = selected == 1
+                ? webrtc::WebRtcBackend::Libdatachannel : webrtc::WebRtcBackend::Libpeer;
+        });
+    transport_card->addView(transport);
+    root->addView(transport_card);
+#endif
     root->addView(makeSectionHeader(
         brls::getStr("lunarnx/settings/controller_section"),
         brls::getStr("lunarnx/settings/controller_section_detail")));
