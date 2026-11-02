@@ -1,6 +1,7 @@
 #pragma once
 #include <peer_connection.h>
 #include <memory>
+#include <chrono>
 #include <string>
 
 namespace lunar::webrtc {
@@ -24,6 +25,9 @@ public:
     int sendFeedback(uint8_t fraction, uint32_t lost, uint32_t highest, uint32_t bitrate);
     void setMediaEnabled(bool enabled);
     int loop();
+    // Owner-thread only, between loop() calls. Pending gated media is ignored;
+    // cancellation/timer service is bounded by the caller's deadline.
+    void waitForEventsUntil(std::chrono::steady_clock::time_point deadline);
     PeerConnectionMediaStats stats() const;
     void close();
 private:

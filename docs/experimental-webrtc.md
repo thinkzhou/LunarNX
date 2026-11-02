@@ -48,6 +48,15 @@ its asynchronous callbacks onto the existing stream owner thread. Its incoming
 media queue is bounded at 4 MiB / 4096 packets and preserves the startup gate.
 It uses the same four Xbox DCEP channel labels, protocols and even stream IDs.
 
+Incoming libdatachannel events wake the existing stream owner through a
+condition variable. Network threads only enqueue; jitter, media and channel
+callbacks still execute on the owner. Notifications are coalesced while work
+is already pending, and gated startup media does not keep the owner runnable.
+The normal 2-ms service deadline remains for input/timers and bounds idle
+cancellation waits; no high-frequency polling mode is enabled. Legacy libpeer
+keeps its existing polling path. See the
+[media-wakeup measurements](testing/webrtc-media-wakeup-validation.md).
+
 Switch builds reuse the existing mbedTLS, libSRTP and usrsctp libraries rather
 than linking duplicate crypto stacks. The additional dependencies and their
 Horizon adaptations are revision/hash pinned; see

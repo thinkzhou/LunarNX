@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <deque>
 #include <mutex>
+#include <condition_variable>
 #include <vector>
 #ifndef LUNARNX_ENABLE_LIBDATACHANNEL
 #define LUNARNX_ENABLE_LIBDATACHANNEL 0
@@ -38,15 +39,22 @@ struct Event {
 };
 struct Inbox {
     std::mutex mutex;
+    std::condition_variable ready;
     std::deque<Event> control, media;
     size_t media_bytes = 0;
     bool closing = false;
+    bool media_enabled = true;
     std::atomic<bool> failed{false};
     PeerConnectionMediaStats stats{};
+    void fail() {
+        { std::lock_guard<std::mutex> guard(mutex); failed = true; }
+        ready.notify_one();
+    }
     void push(Event event) noexcept {
         try {
-            std::lock_guard<std::mutex> guard(mutex);
+            std::unique_lock<std::mutex> guard(mutex);
             if (closing) return;
+            const bool had_work = !control.empty() || (media_enabled && !media.empty());
             const bool isMedia = event.kind == Event::Video || event.kind == Event::Audio;
             if (isMedia) {
                 ++stats.pump_socket_packets_total;
@@ -59,7 +67,10 @@ struct Inbox {
                 stats.rtp_queue_high_watermark = std::max(stats.rtp_queue_high_watermark, uint32_t(media.size()));
             } else if (control.size() < kMaxControlEvents) control.push_back(std::move(event));
             else failed = true;
-        } catch (...) { failed = true; }
+            const bool notify = !had_work && (!control.empty() || (media_enabled && !media.empty()) || failed);
+            guard.unlock();
+            if (notify) ready.notify_one();
+        } catch (...) { fail(); }
     }
 };
 }
@@ -120,7 +131,7 @@ bool LibdatachannelPeer::initialize(const PeerConfiguration& config,
             switch (state) {
                 case rtc::PeerConnection::State::Connected: e.state = PEER_CONNECTION_COMPLETED; break;
                 case rtc::PeerConnection::State::Disconnected: e.state = PEER_CONNECTION_DISCONNECTED; break;
-                case rtc::PeerConnection::State::Failed: e.state = PEER_CONNECTION_FAILED; inbox->failed = true; break;
+                case rtc::PeerConnection::State::Failed: e.state = PEER_CONNECTION_FAILED; inbox->fail(); break;
                 case rtc::PeerConnection::State::Closed: e.state = PEER_CONNECTION_CLOSED; break;
                 default: e.state = PEER_CONNECTION_CHECKING; break;
             }
@@ -160,14 +171,14 @@ bool LibdatachannelPeer::initialize(const PeerConfiguration& config,
             const std::string label = channel.label;
             dc->onClosed([inbox, label] {
                 lunar::persistentEventLog("libdatachannel", "channel closed label=%s", label.c_str());
-                inbox->failed = true;
+                inbox->fail();
             });
             dc->onError([inbox, label](std::string error) {
                 lunar::persistentEventLog("libdatachannel", "channel error label=%s bytes=%zu", label.c_str(), error.size());
 #ifndef __SWITCH__
                 if (std::getenv("LUNARNX_RTC_DEBUG")) std::fprintf(stderr, "[rtc] channel %s: %s\n", label.c_str(), error.c_str());
 #endif
-                inbox->failed = true;
+                inbox->fail();
             });
             p.channels[index++] = std::move(dc);
         }
@@ -178,15 +189,15 @@ bool LibdatachannelPeer::initialize(const PeerConfiguration& config,
 }
 std::string LibdatachannelPeer::createOffer() {
     try { impl_->pc->setLocalDescription(rtc::Description::Type::Offer); return std::string(*impl_->pc->localDescription()); }
-    catch (const std::exception& error) { lunar::diagnosticLog("libdatachannel", "offer failed: %s", error.what()); impl_->inbox->failed = true; return {}; }
+    catch (const std::exception& error) { lunar::diagnosticLog("libdatachannel", "offer failed: %s", error.what()); impl_->inbox->fail(); return {}; }
 }
 void LibdatachannelPeer::setRemoteAnswer(const std::string& sdp) {
     try { impl_->pc->setRemoteDescription(rtc::Description(sdp, "answer")); }
-    catch (const std::exception& error) { lunar::diagnosticLog("libdatachannel", "answer rejected: %s", error.what()); impl_->inbox->failed = true; }
+    catch (const std::exception& error) { lunar::diagnosticLog("libdatachannel", "answer rejected: %s", error.what()); impl_->inbox->fail(); }
 }
 void LibdatachannelPeer::addIceCandidate(const std::string& candidate) {
     try { if (candidate.find("candidate:") != std::string::npos) impl_->pc->addRemoteCandidate(rtc::Candidate(candidate, "0")); }
-    catch (...) { impl_->inbox->failed = true; }
+    catch (...) { impl_->inbox->fail(); }
 }
 bool LibdatachannelPeer::channelsReady() const {
     if (impl_->inbox->failed) return false;
@@ -205,7 +216,7 @@ int LibdatachannelPeer::send(uint16_t sid, const uint8_t* data, size_t size, boo
             else dc->send(std::string(reinterpret_cast<const char*>(data), size));
             return 0;
         }
-    } catch (...) { impl_->inbox->failed = true; }
+    } catch (...) { impl_->inbox->fail(); }
     return -1;
 }
 int LibdatachannelPeer::sendNack(uint16_t pid, uint16_t blp) {
@@ -235,7 +246,22 @@ int LibdatachannelPeer::sendFeedback(uint8_t fraction, uint32_t lost, uint32_t h
     packet[69] = uint8_t(exponent << 2 | (bitrate >> 16)); packet[70] = bitrate >> 8; packet[71] = bitrate;
     put32(packet + 72, impl_->video_ssrc); return impl_->rtcp(packet, sizeof(packet));
 }
-void LibdatachannelPeer::setMediaEnabled(bool enabled) { impl_->media_enabled = enabled; }
+void LibdatachannelPeer::setMediaEnabled(bool enabled) {
+    impl_->media_enabled = enabled;
+    auto& inbox = *impl_->inbox;
+    { std::lock_guard<std::mutex> lock(inbox.mutex); inbox.media_enabled = enabled; }
+    inbox.ready.notify_one();
+}
+void LibdatachannelPeer::waitForEventsUntil(Clock::time_point deadline) {
+    auto& inbox = *impl_->inbox;
+    std::unique_lock<std::mutex> lock(inbox.mutex);
+    // Inspect queued work under the producer's mutex, including work that
+    // arrived before this wait. Gated startup media must not cause a busy loop.
+    inbox.ready.wait_until(lock, deadline, [&] {
+        return inbox.closing || (inbox.failed && !impl_->failure_reported) ||
+            !inbox.control.empty() || (inbox.media_enabled && !inbox.media.empty());
+    });
+}
 int LibdatachannelPeer::loop() {
     auto& p = *impl_; int work = 0;
     if (p.inbox->failed && !p.failure_reported) {
@@ -320,6 +346,7 @@ void LibdatachannelPeer::close() {
     if (!impl_) return;
     auto& p = *impl_;
     { std::lock_guard<std::mutex> guard(p.inbox->mutex); p.inbox->closing = true; p.inbox->control.clear(); p.inbox->media.clear(); p.inbox->media_bytes = 0; }
+    p.inbox->ready.notify_all();
     if (!p.rtc_started) return;
     for (auto& dc : p.channels) { if (dc) dc->resetCallbacks(); dc.reset(); }
     if (p.video) p.video->resetCallbacks();
@@ -347,6 +374,7 @@ int LibdatachannelPeer::requestKeyframe() { return -1; }
 int LibdatachannelPeer::sendFeedback(uint8_t, uint32_t, uint32_t, uint32_t) { return -1; }
 void LibdatachannelPeer::setMediaEnabled(bool) {}
 int LibdatachannelPeer::loop() { return 0; }
+void LibdatachannelPeer::waitForEventsUntil(std::chrono::steady_clock::time_point) {}
 PeerConnectionMediaStats LibdatachannelPeer::stats() const { return {}; }
 void LibdatachannelPeer::close() {}
 }

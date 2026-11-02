@@ -1427,6 +1427,11 @@ PeerLatencyWindow PeerManager::takeLatencyWindow() {
     return window;
 }
 
+bool PeerManager::waitForEventsUntil(std::chrono::steady_clock::time_point deadline) {
+    if (!alternate_) return false;
+    alternate_->waitForEventsUntil(deadline);
+    return true;
+}
 void PeerManager::processEvents() {
     if (pc_ || alternate_) {
         const auto pump_started = std::chrono::steady_clock::now();

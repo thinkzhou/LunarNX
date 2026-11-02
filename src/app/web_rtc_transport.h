@@ -50,6 +50,7 @@ public:
     webrtc::PeerLatencyWindow takeLatencyWindow();
     bool isConnected() const;
     void processEvents();
+    bool waitForEventsUntil(std::chrono::steady_clock::time_point deadline);
     void disconnect();
 
 private:

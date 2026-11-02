@@ -153,6 +153,8 @@ public:
     // Connection
     bool isConnected() const;
     void processEvents();
+    // Returns false for the legacy polling backend. Call only from its owner.
+    bool waitForEventsUntil(std::chrono::steady_clock::time_point deadline);
     void disconnect();
 
 private:

@@ -518,5 +518,10 @@ webrtc_backend_tests: $(BUILD)/tests/webrtc_backend_config_test.o $(BUILD)/src/w
 	./$(BUILD)/webrtc_backend_config_test $(BUILD)/webrtc-config-test
 
 .PHONY: webrtc_backend_mock_probe
+.PHONY: webrtc_event_wait_tests
+webrtc_event_wait_tests: $(filter-out $(BUILD)/src/platform/desktop_main.o,$(CXX_OBJS)) $(C_OBJS) $(BUILD)/tests/webrtc_event_wait_probe.o
+	$(CXX) $(CXXFLAGS) -o $(BUILD)/webrtc_event_wait_probe $^ $(LDFLAGS)
+	./$(BUILD)/webrtc_event_wait_probe
+
 webrtc_backend_mock_probe: $(filter-out $(BUILD)/src/platform/desktop_main.o,$(CXX_OBJS)) $(C_OBJS) $(BUILD)/tests/webrtc_backend_lifecycle_probe.o
 	$(CXX) $(CXXFLAGS) -o $(BUILD)/webrtc_backend_lifecycle_probe $^ $(LDFLAGS)
